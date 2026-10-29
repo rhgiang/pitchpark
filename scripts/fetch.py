@@ -31,7 +31,7 @@ def main():
                  .agg(n=("pitch_type", "size"),
                       mph=("release_speed", "mean"),
                       rpm=("release_spin_rate", "mean"),
-                      axis=("spin_axis", "mean"))
+                      spin_axis=("spin_axis", "mean"))
                  .sort_values("n", ascending=False).round(1))
     print(summary.to_string())
 
