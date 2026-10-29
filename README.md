@@ -19,13 +19,27 @@ pytest -q                                            # physics sanity checks
 python scripts/fetch.py --name "Tarik Skubal" --start 2025-04-01 --end 2025-09-30
 
 # 2. Validate the physics against them
-python scripts/validate.py data/669373_2025-04-01_2025-09-30.csv
+python scripts/validate.py data/raw/669373_2025-04-01_2025-09-30.csv
 ```
 
-`scripts/validate.py` prints a table and writes `results/summary.csv` and
-`results/report.png`. No network? `python -m pitchsim.synthetic` makes a fake pitcher
+`scripts/validate.py` prints a table and writes `results/m1/<pitcher>/summary.csv` and
+`report.png`. No network? `python -m pitchsim.synthetic` makes a fake pitcher
 with known physics so you can run the pipeline anyway (calibration should
 recover Cd = 0.35 and roughly the spin efficiencies listed in `src/pitchsim/synthetic.py`).
+
+## M1 results
+
+Three real pitchers, regular season only. The write-up is in [`results/M1.md`](results/M1.md).
+To reproduce it:
+
+```bash
+python scripts/fetch.py --name "Shohei Ohtani" --start 2025-03-01 --end 2025-11-30
+python scripts/fetch.py --name "Chris Sale" --start 2026-03-01 --end 2026-11-30
+python scripts/fetch.py --name "Jacob Misiorowski" --start 2026-03-01 --end 2026-11-30
+python scripts/validate.py data/raw/660271_2025-03-01_2025-11-30.csv
+python scripts/validate.py data/raw/519242_2026-03-01_2026-11-30.csv
+python scripts/validate.py data/raw/694819_2026-03-01_2026-11-30.csv
+```
 
 ## Files
 
