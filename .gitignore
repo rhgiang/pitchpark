@@ -1,0 +1,7 @@
+data/
+results/*
+!results/*.md
+*.zip
+__pycache__/
+.venv/
+*.egg-info/
