@@ -56,6 +56,22 @@ def initial_state(df: pd.DataFrame):
     return pos0, vel0
 
 
+def release_state(df: pd.DataFrame):
+    """Position and velocity at the release point for each pitch (N x 3 arrays).
+
+    Statcast's constant-acceleration fit is anchored at y = 50 ft but is valid
+    over the whole flight, so evaluating it at release_pos_y (t_rel < 0) gives
+    the release velocity: v = v0 + a * t_rel. The position is release_pos_*
+    by construction (initial_state derived its y = 50 position from it), so
+    matching it is not independent evidence.
+    """
+    t_rel = _time_to_y(df["release_pos_y"].to_numpy(), df["vy0"].to_numpy(), df["ay"].to_numpy())
+    vel = np.stack([df[v].to_numpy() + df[a].to_numpy() * t_rel
+                    for v, a in (("vx0", "ax"), ("vy0", "ay"), ("vz0", "az"))], axis=1)
+    pos = df[["release_pos_x", "release_pos_y", "release_pos_z"]].to_numpy()
+    return pos, vel
+
+
 def fit_plate_crossing(df: pd.DataFrame):
     """Where Statcast's own constant-acceleration fit crosses the plate.
 
