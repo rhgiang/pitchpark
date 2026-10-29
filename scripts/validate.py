@@ -9,6 +9,8 @@ What it does:
                    plate_x/plate_z. If it doesn't, we're reading coordinates wrong.
   1. Convention  - Statcast's spin_axis should point the same way as the
                    observed (non-gravity) acceleration. Checks our sign convention.
+                   Also prints the signed offset per pitch type (and writes
+                   <out>/spin_axis_offset.csv).
   2. Baseline    - simulate every pitch from its state at y = 50 ft using
                    default Cd / spin efficiency; measure plate-location error.
   3. Calibrated  - fit Cd and spin efficiency per pitch type on 70% of pitches,
@@ -76,7 +78,15 @@ def main():
     # 1. convention check
     dang = angle_diff(observed_break_direction_deg(df), df["spin_axis"].to_numpy())
     print(f"[1] spin_axis vs observed break direction: median |diff| "
-          f"{np.median(np.abs(dang)):.1f} deg (small = sign convention correct)\n")
+          f"{np.median(np.abs(dang)):.1f} deg (small = sign convention correct)")
+    # Per pitch type, signed: a consistent offset means movement doesn't go where
+    # spin_axis points (the seam-shifted-wake signal, if spin_axis is measured).
+    offset = (pd.DataFrame({"pitch_type": df["pitch_type"].to_numpy(), "d": dang})
+                .groupby("pitch_type")["d"]
+                .agg(n="size", median_deg="median", std_deg="std").round(1))
+    print("    per pitch type, signed (observed break - spin_axis):")
+    print(offset.to_string(), "\n")
+    offset.to_csv(out / "spin_axis_offset.csv")
 
     const = np.full(len(df), air_density(70.0, 0.0))
     variants = {"y50+const": ("y50", const), "release+const": ("release", const)}

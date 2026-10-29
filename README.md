@@ -69,9 +69,9 @@ python scripts/validate.py data/raw/694819_2026-03-01_2026-11-30.csv
 1. **We start at y = 50 ft, not at release.** Next: start at the release point,
    so the simulator covers the first ~4 ft too, then generate pitches from
    release conditions alone.
-2. **spin_axis in public Statcast is inferred from movement**, so it partly
-   bakes the answer into the input. True "from scratch" prediction would use the
-   *observed* spin axis; the gap between the two is the seam-shifted-wake signal.
+2. **Whether public `spin_axis` is measured (Hawk-Eye) or inferred from movement is
+   unresolved.** M1 results suggest measured (see `results/M1.md`). If measured, the per-pitch
+   gap between spin_axis and movement direction is the seam-shifted-wake signal.
 3. **The constant-acceleration fit is itself an approximation.** On synthetic data
    it costs ~0.2–0.5 in and pulls fitted spin efficiencies slightly low, so treat
    anything under about half an inch as the noise floor.
