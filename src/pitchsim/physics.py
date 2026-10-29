@@ -40,6 +40,9 @@ def air_density(temp_f: float = 70.0, elevation_ft: float = 0.0,
 
     Sea level, 70F -> ~0.0748. Coors Field (5,200 ft) is ~17% thinner,
     which is why breaking balls break less in Denver.
+
+    Pressure from the standard-atmosphere barometric formula (ICAO / US Standard
+    Atmosphere 1976, troposphere): p = 101325 (1 - 2.25577e-5 h)^5.25588, h in m.
     """
     temp_c = (temp_f - 32) * 5 / 9
     temp_k = temp_c + 273.15

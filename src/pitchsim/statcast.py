@@ -5,8 +5,9 @@ Statcast describes each pitch with a 9-parameter constant-acceleration fit,
 defined at y = 50 ft:
     vx0, vy0, vz0   velocity at y = 50 ft (ft/s)
     ax, ay, az      constant acceleration over the whole flight (ft/s^2)
-plus release_pos_x/y/z, plate_x/plate_z (at the front of home plate),
-release_spin_rate (rpm) and spin_axis (deg, inferred from movement).
+plus release_pos_x/y/z, plate_x/plate_z (front of home plate in 2025, mid-plate
+at y ~ 0.708 ft in 2026), release_spin_rate (rpm) and spin_axis (deg; whether
+it is measured or inferred from movement is unresolved, see results/M1.md).
 
 The x/z position at y = 50 ft is not in the CSV, so we recover it by running
 the fit backwards from the release point.
@@ -44,7 +45,7 @@ def _time_to_y(y_target, vy0, ay):
     return (-vy0 - np.sqrt(disc)) / ay
 
 
-def initial_state(df: pd.DataFrame):
+def initial_state(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     """Position and velocity at y = 50 ft for each pitch (N x 3 arrays)."""
     vx0, vy0, vz0 = df["vx0"].to_numpy(), df["vy0"].to_numpy(), df["vz0"].to_numpy()
     ax, ay, az = df["ax"].to_numpy(), df["ay"].to_numpy(), df["az"].to_numpy()
@@ -56,7 +57,7 @@ def initial_state(df: pd.DataFrame):
     return pos0, vel0
 
 
-def release_state(df: pd.DataFrame):
+def release_state(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     """Position and velocity at the release point for each pitch (N x 3 arrays).
 
     Statcast's constant-acceleration fit is anchored at y = 50 ft but is valid
@@ -75,8 +76,9 @@ def release_state(df: pd.DataFrame):
 def fit_plate_crossing(df: pd.DataFrame):
     """Where Statcast's own constant-acceleration fit crosses the plate.
 
-    Should reproduce plate_x / plate_z almost exactly; it's a check that we
-    are reading the data and coordinates correctly.
+    Should reproduce plate_x / plate_z almost exactly when Statcast reports them at
+    the front of the plate (2025). 2026 CSVs report them at y ~ 0.708 ft instead, so
+    validation scores against this crossing rather than plate_x / plate_z.
     """
     pos0, vel0 = initial_state(df)
     acc = df[["ax", "ay", "az"]].to_numpy()

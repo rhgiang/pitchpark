@@ -46,7 +46,7 @@ python scripts/validate.py data/raw/694819_2026-03-01_2026-11-30.csv
 | File | What it does |
 |---|---|
 | `src/pitchsim/physics.py` | Gravity + drag + Magnus force, RK4 integration. `simulate` (one pitch, full path) and `simulate_batch` (thousands at once, for fitting). Air density from temperature/elevation. |
-| `src/pitchsim/statcast.py` | Turns Statcast's 9-parameter fit into a starting position/velocity at y = 50 ft. |
+| `src/pitchsim/statcast.py` | Turns Statcast's 9-parameter fit into a starting position/velocity at release (`release_state`) or y = 50 ft (`initial_state`), and gives the fit's own plate crossing. |
 | `scripts/fetch.py` | Downloads a pitcher's pitches with `pybaseball`. |
 | `scripts/validate.py` | The experiment: data check → convention check → default physics → calibrated physics → bias. |
 | `src/pitchsim/synthetic.py` | Fake pitcher with known physics, for testing without the internet. |
@@ -54,7 +54,10 @@ python scripts/validate.py data/raw/694819_2026-03-01_2026-11-30.csv
 
 ## How to read the output
 
-- **[0] fit vs plate** should be near 0 inches. If not, coordinates are being read wrong.
+- **[0] fit vs plate** should be near 0 inches. If not, either coordinates are being read wrong
+  or Statcast reports plate_x/z at a different y. 2026 data reports them mid-plate
+  (y = 0.708 ft, also printed), not the front edge. Scoring uses the fit's own crossing,
+  so results don't depend on it.
 - **[1] spin_axis vs break direction** should be a few degrees. Confirms the spin sign convention.
 - **baseline_err_in** — median miss at the plate using textbook constants.
 - **cd, spin_eff** — fitted per pitch type. Spin efficiency is the share of spin that
@@ -62,25 +65,25 @@ python scripts/validate.py data/raw/694819_2026-03-01_2026-11-30.csv
   gyro-heavy sliders and cutters.
 - **calibrated_err_in** — median miss on *held-out* pitches. This is your headline number.
 - **bias_x_in / bias_z_in** — average signed miss. A consistent miss in one
-  direction is movement spin can't explain. That's where step 3 (seam-shifted wake) starts.
+  direction is movement spin can't explain. That's where M3 (seam-shifted wake) starts.
 
 ## Honest limitations (= the roadmap)
 
-1. **We start at y = 50 ft, not at release.** Next: start at the release point,
-   so the simulator covers the first ~4 ft too, then generate pitches from
-   release conditions alone.
+1. **The release start is anchored on Statcast's fit.** The simulator now starts at the
+   release point, but the release position is `release_pos_*` and the velocity is the fit
+   extrapolated back. That is not an independent measurement of release.
 2. **Whether public `spin_axis` is measured (Hawk-Eye) or inferred from movement is
    unresolved.** M1 results suggest measured (see `results/M1.md`). If measured, the per-pitch
    gap between spin_axis and movement direction is the seam-shifted-wake signal.
 3. **The constant-acceleration fit is itself an approximation.** On synthetic data
    it costs ~0.2–0.5 in and pulls fitted spin efficiencies slightly low, so treat
    anything under about half an inch as the noise floor.
-4. **Air density is one value per run.** Real games vary (Coors Field, cold April
-   nights). Statcast rows include the venue and date; joining weather would help.
+4. **Air density is per game, but only from elevation and temperature.** No humidity,
+   wind or pressure, and roofed games use the reported (indoor) temperature.
 5. **Cd is constant.** In reality it depends on speed and spin.
 
 ## References
 
 - Alan Nathan's baseball physics site and trajectory calculator (the standard model used here).
 - Baseball Savant's CSV documentation for column definitions.
-- Barton Smith / Driveline research on seam-shifted wake, for step 3.
+- Barton Smith / Driveline research on seam-shifted wake, for M3.
