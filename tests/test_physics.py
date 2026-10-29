@@ -54,3 +54,13 @@ def test_batch_matches_single():
     pos, _, t = simulate_batch(RELEASE[None], v[None], [2200], [220], 0.33, 0.9)
     assert np.allclose(pos[0], single["pos"][-1], atol=1e-6)
     assert abs(t[0] - single["t"][-1]) < 1e-6
+
+
+def test_batch_per_pitch_density():
+    v = 80 * MPH * np.array([0.0, -1.0, 0.0])
+    sea, coors = air_density(70, 0), air_density(70, 5200)
+    pos, _, _ = simulate_batch(np.stack([RELEASE, RELEASE]), np.stack([v, v]),
+                               [2600, 2600], [0, 0], 0.33, 0.9, rho=np.array([sea, coors]))
+    for i, rho in enumerate([sea, coors]):
+        one = simulate(RELEASE, v, 2600, 0, PhysicsParams(cd=0.33, spin_efficiency=0.9, rho=rho))
+        assert np.allclose(pos[i], one["pos"][-1], atol=1e-6)

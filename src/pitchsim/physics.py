@@ -138,11 +138,13 @@ def simulate(pos0, vel0, spin_rpm: float, spin_axis_deg: float,
 
 
 def simulate_batch(pos0, vel0, spin_rpm, spin_axis_deg, cd, spin_efficiency,
-                   rho: float | None = None, y_stop: float = FRONT_OF_PLATE_Y,
-                   dt: float = 1e-3):
+                   rho: float | np.ndarray | None = None,
+                   y_stop: float = FRONT_OF_PLATE_Y, dt: float = 1e-3):
     """Vectorized version of `simulate` for many pitches at once.
 
-    All array arguments have length N (cd / spin_efficiency may be scalars).
+    All array arguments have length N (cd / spin_efficiency / rho may be scalars).
+    rho can vary per pitch: each game's ballpark and temperature set its own air
+    density (Coors Field air is ~17% thinner than sea level).
     Returns (pos_at_plate (N x 3), vel_at_plate (N x 3), flight_time (N,)).
     Used for validation and for fitting Cd / spin efficiency, where we need
     thousands of simulations per optimizer step.
@@ -155,7 +157,7 @@ def simulate_batch(pos0, vel0, spin_rpm, spin_axis_deg, cd, spin_efficiency,
     cd = np.broadcast_to(np.asarray(cd, dtype=float), (n,))
     eff = np.broadcast_to(np.asarray(spin_efficiency, dtype=float), (n,))
     rho = air_density() if rho is None else rho
-    k = rho * BALL_AREA_FT2 / (2 * BALL_MASS_LB)
+    k = np.broadcast_to(np.asarray(rho, dtype=float) * BALL_AREA_FT2 / (2 * BALL_MASS_LB), (n,))
 
     mx, mz = np.sin(axis), -np.cos(axis)
     w_hat = np.stack([-mz, np.zeros(n), mx], axis=1)
@@ -168,8 +170,8 @@ def simulate_batch(pos0, vel0, spin_rpm, spin_axis_deg, cd, spin_efficiency,
         s = BALL_RADIUS_FT * w_active[m][:, None] / speed
         cl = lift_coefficient(s)
         v_hat = v / speed
-        return (gvec - k * cd[m][:, None] * speed * v
-                + k * cl * speed ** 2 * np.cross(w_hat[m], v_hat))
+        return (gvec - k[m][:, None] * cd[m][:, None] * speed * v
+                + k[m][:, None] * cl * speed ** 2 * np.cross(w_hat[m], v_hat))
 
     out_pos = np.full((n, 3), np.nan)
     out_vel = np.full((n, 3), np.nan)
