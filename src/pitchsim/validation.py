@@ -12,7 +12,10 @@ from pitchsim.physics import PhysicsParams, simulate_batch
 from pitchsim.statcast import fit_plate_crossing, initial_state, release_state
 
 FT_PER_S_TO_MPH = 0.681818
+# Fewer pitches than this and a 2-parameter fit (plus a 30% held-out slice) is mostly noise.
 MIN_PITCHES = 30
+# Speed cap: every optimizer step re-simulates all training pitches, and Cd / efficiency
+# stop moving well before 400 pitches.
 MAX_TRAIN = 400
 
 
@@ -30,34 +33,56 @@ def split_by_game(df: pd.DataFrame, train_frac: float = 0.7,
     return df[in_train], df[~in_train]
 
 
-def run_sim(df, cd, eff, start):
-    """Simulate each row to the plate; df must have a 'rho' column (lb/ft^3)."""
+def run_sim(df: pd.DataFrame, cd: float, eff: float,
+            start: Literal["y50", "release"]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Simulate each row to the front of the plate from the y = 50 ft or release state.
+
+    df must have a 'rho' column (lb/ft^3). Returns (pos, vel, flight time) like simulate_batch.
+    """
     pos0, vel0 = release_state(df) if start == "release" else initial_state(df)
     return simulate_batch(pos0, vel0, df["release_spin_rate"].to_numpy(),
                           df["spin_axis"].to_numpy(), cd, eff, rho=df["rho"].to_numpy())
 
 
-def residuals(df, fit_vel, cd, eff, start):
+def residuals(df: pd.DataFrame, fit_pos: np.ndarray, fit_vel: np.ndarray, cd: float,
+              eff: float, start: Literal["y50", "release"]
+              ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Simulated minus Statcast-fit plate crossing: dx, dz (inches) and speed (mph).
+
+    The target is the fit's own crossing at FRONT_OF_PLATE_Y (from fit_plate_crossing),
+    not plate_x / plate_z. Statcast has changed where it reports plate_x / plate_z:
+    in our 2026 downloads it matches the fit at y ~ 0.71 ft, not 17/12 ft, and scoring a
+    17/12 simulation against it adds a built-in ~1 in error. The fit crossing is the same
+    in every season. validate.py's check [0] still compares the two, as an alarm.
+    """
     pos, vel, _ = run_sim(df, cd, eff, start)
-    dx = (pos[:, 0] - df["plate_x"].to_numpy()) * 12
-    dz = (pos[:, 2] - df["plate_z"].to_numpy()) * 12
+    dx = (pos[:, 0] - fit_pos[:, 0]) * 12
+    dz = (pos[:, 2] - fit_pos[:, 2]) * 12
     dv = (np.linalg.norm(vel, axis=1) - np.linalg.norm(fit_vel, axis=1)) * FT_PER_S_TO_MPH
     return dx, dz, dv
 
 
-def calibrate(train, start):
-    _, fit_vel, _ = fit_plate_crossing(train)
+def calibrate(train: pd.DataFrame, start: Literal["y50", "release"]) -> np.ndarray:
+    """Least-squares fit of [Cd, spin efficiency] on training pitches."""
+    fit_pos, fit_vel, _ = fit_plate_crossing(train)
 
     def resid(params):
-        dx, dz, dv = residuals(train, fit_vel, params[0], params[1], start)
-        return np.concatenate([dx, dz, dv])   # inches and mph, roughly comparable
+        dx, dz, dv = residuals(train, fit_pos, fit_vel, params[0], params[1], start)
+        # 1 in of miss weighs the same as 1 mph of speed error: both are about the size of
+        # a typical residual, so neither term drowns the other.
+        return np.concatenate([dx, dz, dv])
 
+    # Bounds: Cd 0.15-0.6 brackets every published baseball drag value with room to spare.
+    # Efficiency 0.2-1.0: 1.0 is all spin transverse, and 0.2 keeps gyro-heavy pitches from
+    # collapsing to zero spin. On real data 0.20 is hit (4 of 15 types), so for those the
+    # optimizer wanted <= 0.20.
     res = least_squares(resid, x0=[0.33, 0.9], bounds=([0.15, 0.2], [0.6, 1.0]),
                         diff_step=1e-3)
     return res.x
 
 
-def angle_diff(a, b):
+def angle_diff(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Signed difference a - b in degrees, wrapped to [-180, 180)."""
     return (a - b + 180) % 360 - 180
 
 
@@ -82,12 +107,12 @@ def evaluate(df: pd.DataFrame, start: Literal["y50", "release"],
             continue
         if len(train) > MAX_TRAIN:
             train = train.sample(MAX_TRAIN, random_state=0)
-        _, test_fit_vel, _ = fit_plate_crossing(test)
+        test_pos, test_vel, _ = fit_plate_crossing(test)
 
         d = PhysicsParams()
-        bx, bz, bv = residuals(test, test_fit_vel, d.cd, d.spin_efficiency, start)
+        bx, bz, bv = residuals(test, test_pos, test_vel, d.cd, d.spin_efficiency, start)
         cd, eff = calibrate(train, start)
-        cx, cz, cv = residuals(test, test_fit_vel, cd, eff, start)
+        cx, cz, cv = residuals(test, test_pos, test_vel, cd, eff, start)
 
         rows.append({
             "pitch_type": ptype,

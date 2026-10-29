@@ -1,24 +1,31 @@
 """
-Step 1 validation: how well does our physics reproduce real MLB pitches?
+M1 validation: how well does our physics reproduce real MLB pitches?
 
-    python scripts/validate.py data/669373_2025-04-01_2025-09-30.csv
+    python scripts/validate.py data/raw/669373_2025-04-01_2025-09-30.csv
     python scripts/validate.py data/synthetic.csv --no-weather
 
 What it does:
   0. Data check  - Statcast's own constant-acceleration fit should land on
-                   plate_x/plate_z. If it doesn't, we're reading coordinates wrong.
+                   plate_x/plate_z at the front of the plate (17/12 ft). If it
+                   doesn't, either we're reading coordinates wrong or Statcast
+                   reports plate_x/z somewhere else: 2026 data matches at
+                   y = 0.708 ft (mid-plate), so that is printed too. Scoring
+                   uses the fit's own crossing, so it is unaffected either way.
   1. Convention  - Statcast's spin_axis should point the same way as the
                    observed (non-gravity) acceleration. Checks our sign convention.
                    Also prints the signed offset per pitch type (and writes
                    <out>/spin_axis_offset.csv).
-  2. Baseline    - simulate every pitch from its state at y = 50 ft using
-                   default Cd / spin efficiency; measure plate-location error.
-  3. Calibrated  - fit Cd and spin efficiency per pitch type on 70% of pitches,
-                   measure error on the held-out 30%.
+  2. Baseline    - simulate every pitch from its start state (y = 50 ft or the
+                   release point) using default Cd / spin efficiency; measure
+                   plate-location error.
+  3. Calibrated  - fit Cd and spin efficiency per pitch type on 70% of games,
+                   measure error on the held-out 30% of games.
   4. Bias        - the average signed miss per pitch type after calibration.
                    A consistent miss in one direction is movement that spin
-                   alone doesn't explain (e.g. seam-shifted wake) - step 3 of
-                   the roadmap.
+                   alone doesn't explain (e.g. seam-shifted wake) - M3.
+  5. Release     - why the release start scores worse: the fit's release speed
+                   vs Statcast's release_speed, and per pitch type the flight-time
+                   ratio (T_release / T_y50)^2 next to the observed error ratio.
 
 Runs four variants (start state y50 or release, constant or per-game air
 density). Outputs <out>/summary.csv and <out>/report.png (from release+game).
@@ -36,9 +43,9 @@ import pandas as pd
 
 from pitchsim.data import add_air_density, fetch_game_conditions
 from pitchsim.physics import PhysicsParams, air_density, simulate
-from pitchsim.statcast import (clean, fit_plate_crossing, fit_trajectory, release_state,
-                               observed_break_direction_deg)
-from pitchsim.validation import MIN_PITCHES, angle_diff, evaluate
+from pitchsim.statcast import (_time_to_y, clean, fit_plate_crossing, fit_trajectory,
+                               initial_state, observed_break_direction_deg, release_state)
+from pitchsim.validation import FT_PER_S_TO_MPH, MIN_PITCHES, angle_diff, evaluate
 
 RESULTS = Path(__file__).resolve().parents[1] / "results"
 
@@ -74,6 +81,14 @@ def main():
     fit_err = np.hypot(fpos[:, 0] - df["plate_x"], fpos[:, 2] - df["plate_z"]) * 12
     print(f"[0] Statcast fit vs reported plate location: median {np.median(fit_err):.2f} in "
           f"(should be ~0)")
+    # Statcast's 2026 CSVs report plate_x/z mid-plate rather than at the front edge.
+    pos0, vel0 = initial_state(df)
+    acc = df[["ax", "ay", "az"]].to_numpy()
+    t_mid = _time_to_y(0.708, vel0[:, 1], acc[:, 1])[:, None]
+    mid = pos0 + vel0 * t_mid + 0.5 * acc * t_mid ** 2
+    mid_err = np.hypot(mid[:, 0] - df["plate_x"], mid[:, 2] - df["plate_z"]) * 12
+    print(f"    same, with the fit evaluated at y = 0.708 ft (mid-plate): median "
+          f"{np.median(mid_err):.2f} in")
 
     # 1. convention check
     dang = angle_diff(observed_break_direction_deg(df), df["spin_axis"].to_numpy())
@@ -104,22 +119,37 @@ def main():
             print("no pitch type could be evaluated\n")
             continue
         summary = summary.sort_values("n", ascending=False)
-        show = summary[["pitch_name", "n", "n_train", "n_test", "mph", "rpm", "baseline_err_in", "cd", "spin_eff",
-                        "calibrated_err_in", "p90_err_in", "bias_x_in", "bias_z_in",
+        show = summary[["pitch_name", "n", "n_train", "n_test", "mph", "rpm",
+                        "baseline_err_in", "cd", "spin_eff", "calibrated_err_in", "p90_err_in", "bias_x_in", "bias_z_in",
                         "plate_speed_err_mph"]]
         print("Held-out (by game) plate-location error (inches), per pitch type:")
         print(show.round(2).to_string(index=False), "\n")
         tables.append(summary.assign(variant=label))
     if not tables:
-        raise SystemExit(f"No pitch type has {MIN_PITCHES}+ pitches in held-out games; "
-                         "use a longer date range.")
+        raise SystemExit(f"No pitch type has {MIN_PITCHES}+ pitches (or every type is "
+                         "missing from training or held-out games); use a longer date range.")
 
     all_rows = pd.concat(tables)
     cols = ["variant"] + [c for c in all_rows.columns if c != "variant"]
     all_rows[cols].round(3).to_csv(out / "summary.csv", index=False)
     print("bias_x/bias_z = average signed miss after calibration (x: + = catcher's right, "
           "z: + = too high).\nA large, consistent bias means movement the spin model "
-          "can't explain.")
+          "can't explain.\n")
+
+    # 5. release start: is the extrapolated release velocity real, and does the extra
+    # flight explain the extra error? A constant misdirected acceleration grows the miss
+    # as t^2, so release error / y50 error should be about (T_release / T_y50)^2.
+    _, rvel = release_state(df)
+    dv = np.linalg.norm(rvel, axis=1) * FT_PER_S_TO_MPH - df["release_speed"].to_numpy()
+    print(f"[5] |fit velocity at release| - Statcast release_speed: median {np.median(dv):+.2f} mph")
+    t_rel = _time_to_y(df["release_pos_y"].to_numpy(), vel0[:, 1], acc[:, 1])   # negative
+    t2 = pd.Series(((ftime - t_rel) / ftime) ** 2).groupby(df["pitch_type"].to_numpy()).median()
+    errs = all_rows.pivot(index="pitch_type", columns="variant", values="calibrated_err_in")
+    if {"y50+const", "release+const"} <= set(errs.columns):
+        ratio = pd.DataFrame({"t_ratio_sq": t2,
+                              "err_ratio": errs["release+const"] / errs["y50+const"]}).dropna()
+        print("    per pitch type: (T_release/T_y50)^2 vs calibrated error release+const / y50+const")
+        print(ratio.round(3).to_string(), "\n")
 
     # report from release+game (release+const when there is no weather data)
     report_label = "release+const" if args.no_weather else "release+game"
