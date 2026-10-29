@@ -65,6 +65,7 @@ def make(n=1500, seed=0):
         end = tr["pos"][-1]
         rows.append({
             "player_name": "Synthetic, Pitcher",
+            "game_pk": int(rng.integers(1, 41)),   # 40 fake games, for the by-game split
             "pitch_type": code, "pitch_name": name,
             "release_speed": speed * 0.681818,
             "release_pos_x": release[0], "release_pos_y": release[1],
