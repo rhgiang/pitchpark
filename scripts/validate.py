@@ -94,7 +94,7 @@ def main():
             print("no pitch type could be evaluated\n")
             continue
         summary = summary.sort_values("n", ascending=False)
-        show = summary[["pitch_name", "n", "mph", "rpm", "baseline_err_in", "cd", "spin_eff",
+        show = summary[["pitch_name", "n", "n_train", "n_test", "mph", "rpm", "baseline_err_in", "cd", "spin_eff",
                         "calibrated_err_in", "p90_err_in", "bias_x_in", "bias_z_in",
                         "plate_speed_err_mph"]]
         print("Held-out (by game) plate-location error (inches), per pitch type:")

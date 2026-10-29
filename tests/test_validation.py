@@ -29,6 +29,8 @@ def test_evaluate_recovers_true_cd_from_release(big):
     print(rows[["pitch_type", "cd", "calibrated_err_in"]])
     assert rows["cd"].between(0.33, 0.37).all()
     assert (rows["calibrated_err_in"] < 1.0).all()
+    assert (rows["n_test"] > 0).all()
+    assert (rows["n_train"] + rows["n_test"] <= rows["n"]).all()
 
 
 def test_evaluate_lists_rare_pitch_types_as_skipped(big):

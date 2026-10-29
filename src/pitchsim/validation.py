@@ -93,6 +93,8 @@ def evaluate(df: pd.DataFrame, start: Literal["y50", "release"],
             "pitch_type": ptype,
             "pitch_name": g["pitch_name"].iloc[0] if "pitch_name" in g else ptype,
             "n": len(g),
+            "n_train": len(train),   # after the MAX_TRAIN cap
+            "n_test": len(test),
             "mph": g["release_speed"].mean(),
             "rpm": g["release_spin_rate"].mean(),
             "baseline_err_in": np.median(np.hypot(bx, bz)),
