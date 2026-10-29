@@ -53,8 +53,8 @@ convention check → default physics → per-pitch-type calibration of Cd and sp
    limitation. Only new dependency allowed here: `requests` (pybaseball already pulls it in).
    Calibration and evaluation use each pitch's own air density.
 4. **Run on three real pitchers** with different arsenals: **Shohei Ohtani, Chris Sale,
-   Jacob Misiorowski**, seasons **2025 + 2026** (regular season, same window for all three)
-   *(Claude's call; Ryan moved on without objecting)*. Pitch types under the 30-pitch minimum
+   Jacob Misiorowski**, regular season only: **Ohtani 2025, Sale 2026, Misiorowski 2026**
+   (Ryan's choice). Pitch types under the 30-pitch minimum
    are listed as skipped, not silently dropped. Raw downloads cached in `data/raw/`. Each pitcher's outputs go to
    their own folder, e.g. `results/m1/<pitcher>/summary.csv` + `report.png`
    (the current script overwrites `results/summary.csv`; fix that).
