@@ -1,11 +1,13 @@
 """Tests for the fetch/cache/conditions layer.  No network."""
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from pitchsim.data import (VENUE_ELEVATION_FT, add_air_density, fetch_game_conditions,
-                           parse_game_feed)
+                           fetch_pitcher, lookup_id, parse_game_feed)
 from pitchsim.physics import air_density
 
 COORS = {"gamePk": 1, "gameData": {"venue": {"id": 19, "name": "Coors Field"},
@@ -46,3 +48,62 @@ def test_fetch_game_conditions_uses_cache(tmp_path, monkeypatch):
     pd.DataFrame([parse_game_feed(COORS)]).to_csv(cache, index=False)
     monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: pytest.fail("network hit"))
     assert fetch_game_conditions([1], cache).loc[0, "venue_id"] == 19
+
+
+def _feed(pk):
+    return {"gamePk": pk, "gameData": {"venue": {"id": 19, "name": "Coors Field"},
+                                       "weather": {"temp": "70"}}}
+
+
+class _Resp:
+    def __init__(self, feed):
+        self.feed = feed
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self, *a):
+        return json.dumps(self.feed).encode()
+
+
+def test_fetch_game_conditions_resumes_after_failure(tmp_path, monkeypatch):
+    cache = tmp_path / "gc.csv"
+
+    def flaky(url, timeout):
+        if "/10/" in url:
+            return _Resp(_feed(10))
+        raise OSError("timeout")
+
+    monkeypatch.setattr("urllib.request.urlopen", flaky)
+    with pytest.raises(OSError):
+        fetch_game_conditions([10, 20], cache)
+    assert pd.read_csv(cache)["game_pk"].tolist() == [10]
+
+    asked = []
+
+    def record(url, timeout):
+        asked.append(url)
+        return _Resp(_feed(20))
+
+    monkeypatch.setattr("urllib.request.urlopen", record)
+    out = fetch_game_conditions([10, 20], cache)
+    assert len(asked) == 1 and "/20/" in asked[0]
+    assert out["game_pk"].tolist() == [10, 20]
+
+
+def test_fetch_pitcher_empty_result_writes_nothing(tmp_path, monkeypatch):
+    monkeypatch.setattr("pitchsim.data.RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr("pybaseball.statcast_pitcher", lambda *a, **k: pd.DataFrame())
+    with pytest.raises(SystemExit):
+        fetch_pitcher(None, 1, "2025-04-01", "2025-04-02")
+    assert not list(tmp_path.rglob("*.csv"))
+
+
+def test_lookup_id_no_match(monkeypatch):
+    monkeypatch.setattr("pybaseball.playerid_lookup",
+                        lambda last, first: pd.DataFrame(columns=["key_mlbam"]))
+    with pytest.raises(SystemExit, match="No MLB player found"):
+        lookup_id("Nobody Here")

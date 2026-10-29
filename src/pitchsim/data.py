@@ -7,9 +7,9 @@ temperature comes from the MLB StatsAPI live game feed, not from Statcast.
 
 import json
 import urllib.request
+from collections.abc import Iterable
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from pitchsim.physics import air_density
@@ -56,7 +56,10 @@ VENUE_ELEVATION_FT = {
 
 
 def lookup_id(full_name: str) -> int:
+    """MLBAM id for a "First Last" name (most recent player if several match)."""
     from pybaseball import playerid_lookup  # slow import, only needed for name lookups
+    if " " not in full_name.strip():
+        raise SystemExit(f"Need a first and last name, got '{full_name}'")
     first, last = full_name.strip().split(" ", 1)
     res = playerid_lookup(last, first)
     res = res.dropna(subset=["key_mlbam"])
@@ -78,7 +81,8 @@ def fetch_pitcher(name: str | None, mlbam_id: int | None, start: str, end: str) 
         return path
     from pybaseball import statcast_pitcher
     df = statcast_pitcher(start, end, pid)
-    df = df[df["game_type"] == "R"]  # drop spring training / postseason
+    if not df.empty:
+        df = df[df["game_type"] == "R"]  # drop spring training / postseason
     if df.empty:
         raise SystemExit("No regular-season pitches returned; check the id and date range.")
     RAW_DIR.mkdir(parents=True, exist_ok=True)
@@ -87,6 +91,7 @@ def fetch_pitcher(name: str | None, mlbam_id: int | None, start: str, end: str) 
 
 
 def parse_game_feed(feed: dict) -> dict:
+    """game_pk, venue and temperature (nan if absent) from a StatsAPI live feed."""
     game = feed["gameData"]
     try:
         temp = float(game.get("weather", {}).get("temp"))
@@ -96,13 +101,15 @@ def parse_game_feed(feed: dict) -> dict:
             "venue_name": game["venue"]["name"], "temp_f": temp}
 
 
-def fetch_game_conditions(game_pks, cache_path: Path = RAW_DIR / "game_conditions.csv"):
+def fetch_game_conditions(game_pks: Iterable[int],
+                          cache_path: Path = RAW_DIR / "game_conditions.csv") -> pd.DataFrame:
     """Venue + temperature per game.  Only uncached games hit the network; each row is
     appended as it arrives, so a failure part-way keeps its progress (just rerun)."""
     pks = [int(p) for p in dict.fromkeys(game_pks)]
     cache_path = Path(cache_path)
     have = pd.read_csv(cache_path) if cache_path.exists() else pd.DataFrame()
-    todo = [p for p in pks if p not in set(have.get("game_pk", []))]
+    cached = set(have.get("game_pk", []))
+    todo = [p for p in pks if p not in cached]
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     for i, pk in enumerate(todo, 1):
         with urllib.request.urlopen(FEED_URL.format(pk=pk), timeout=30) as r:
