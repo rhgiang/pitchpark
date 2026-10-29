@@ -57,9 +57,9 @@ VENUE_ELEVATION_FT = {
 
 def lookup_id(full_name: str) -> int:
     """MLBAM id for a "First Last" name (most recent player if several match)."""
-    from pybaseball import playerid_lookup  # slow import, only needed for name lookups
     if " " not in full_name.strip():
         raise SystemExit(f"Need a first and last name, got '{full_name}'")
+    from pybaseball import playerid_lookup  # slow import, only needed for name lookups
     first, last = full_name.strip().split(" ", 1)
     res = playerid_lookup(last, first)
     res = res.dropna(subset=["key_mlbam"])
