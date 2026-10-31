@@ -1,8 +1,8 @@
 import numpy as np
 import pandas as pd
 
-from pitchsim.generative import (FEATURES, add_release_angles, circular_mean_deg,
-                                 fit_pitch_type, sample)
+from pitchsim.generative import (FEATURES, GRADED, add_release_angles, circular_mean_deg,
+                                 classifier_auc, fit_pitch_type, marginal_ks, sample)
 from pitchsim.synthetic import make
 
 
@@ -42,3 +42,27 @@ def test_release_angles_from_synthetic():
     """Synthetic pitcher: release angles are small, downward-ish."""
     df = add_release_angles(make(n=200, seed=0))
     assert df["release_angle_v_deg"].between(-10, 5).all()
+
+
+def _gauss(n, shift=0.0, seed=0):
+    """Synthetic 8-D sample; shift moves release_speed by `shift` mph."""
+    rng = np.random.default_rng(seed)
+    df = pd.DataFrame(rng.normal(0, 1, (n, 8)), columns=FEATURES)
+    df["release_speed"] += 95 + shift; df["spin_axis"] = (200 + 5 * df["spin_axis"]) % 360
+    return df
+
+
+def test_auc_near_half_for_same_distribution():
+    real = _gauss(300)
+    auc, lo, hi = classifier_auc(real, [_gauss(300, seed=s) for s in range(1, 4)], GRADED, 200)
+    assert auc < 0.6 and lo < 0.5 < hi
+
+
+def test_auc_high_for_shifted_distribution():
+    auc, _, _ = classifier_auc(_gauss(300), [_gauss(300, shift=2, seed=1)], GRADED, 200)
+    assert auc > 0.8
+
+
+def test_marginal_ks_flags_shifted_feature_only():
+    ks = marginal_ks(_gauss(500), _gauss(500, shift=2, seed=1), 200).set_index("feature")
+    assert ks.loc["release_speed", "flagged"] and not ks.loc["release_spin_rate", "flagged"]

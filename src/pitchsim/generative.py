@@ -10,7 +10,11 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from scipy.stats import ks_2samp
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.metrics import roc_auc_score
 from sklearn.mixture import GaussianMixture
+from sklearn.model_selection import StratifiedKFold, cross_val_predict
 
 from pitchsim.statcast import release_state
 
@@ -28,6 +32,10 @@ MIN_TEST = 30
 # A mixture needs enough data per component to be worth its extra parameters.
 MIN_MIXTURE = 100
 MAX_COMPONENTS = 4
+# Number of generated sets averaged in the classifier test, and the AUC counted as a pass.
+N_DRAWS = 10
+PASS_AUC = 0.55
+N_BOOT = 200
 
 
 def add_release_angles(df: pd.DataFrame) -> pd.DataFrame:
@@ -92,3 +100,72 @@ def sample(model: PitchTypeModel, n: int, seed: int) -> pd.DataFrame:
     out = pd.DataFrame(g.sample(n)[0], columns=FEATURES)
     out["spin_axis"] = out["spin_axis"] % 360
     return out
+
+
+def _design(df: pd.DataFrame, cols: list[str]) -> np.ndarray:
+    """Feature matrix with spin_axis replaced by sin and cos of the angle.
+
+    Raw axis jumps from 360 to 0, so a classifier could "detect" fakes by that
+    artificial gap; sin/cos puts 359 and 1 next to each other.
+    """
+    parts = []
+    for c in cols:
+        if c == "spin_axis":
+            r = np.radians(df[c].to_numpy(dtype=float))
+            parts += [np.sin(r), np.cos(r)]
+        else:
+            parts.append(df[c].to_numpy(dtype=float))
+    return np.column_stack(parts)
+
+
+def classifier_auc(real: pd.DataFrame, generated: list[pd.DataFrame], cols: list[str],
+                   center: float, seed: int = 0) -> tuple[float, float, float]:
+    """Classifier two-sample test: can a model tell real (0) from generated (1)?
+
+    Returns (mean AUC, mean 2.5% bound, mean 97.5% bound) over the generated sets;
+    AUC near 0.5 means indistinguishable. Each set should be the same size as `real`.
+    `center` is unused here (sin/cos needs no unwrapping); it is kept so the signature
+    matches marginal_ks.
+
+    Why a nonlinear classifier: a fitted Gaussian matches means and linear correlations
+    by construction, so logistic regression would pass it trivially. Gradient boosting
+    can find what is left (curved or clumped structure). Out-of-fold predictions keep
+    the classifier from scoring itself on pitches it trained on.
+    Why average several sets: one draw of a few dozen pitches gives a noisy AUC.
+    Ref: Lopez-Paz & Oquab, "Revisiting Classifier Two-Sample Tests" (ICLR 2017).
+    """
+    rng = np.random.default_rng(seed)
+    Xr = _design(real, cols)
+    aucs, los, his = [], [], []
+    for gen in generated:
+        X = np.vstack([Xr, _design(gen, cols)])
+        y = np.r_[np.zeros(len(Xr)), np.ones(len(gen))].astype(int)
+        p = cross_val_predict(HistGradientBoostingClassifier(random_state=seed), X, y,
+                              cv=StratifiedKFold(5, shuffle=True, random_state=seed),
+                              method="predict_proba")[:, 1]
+        aucs.append(roc_auc_score(y, p))
+        # Bootstrap the predictions to see how much the AUC could move by chance.
+        boot = []
+        for _ in range(N_BOOT):
+            i = rng.integers(0, len(y), len(y))
+            if len(np.unique(y[i])) == 2:
+                boot.append(roc_auc_score(y[i], p[i]))
+        los.append(np.percentile(boot, 2.5)); his.append(np.percentile(boot, 97.5))
+    return float(np.mean(aucs)), float(np.mean(los)), float(np.mean(his))
+
+
+def marginal_ks(real: pd.DataFrame, generated: pd.DataFrame, center: float) -> pd.DataFrame:
+    """Per-feature two-sample KS test of GRADED columns; flagged when p < 0.01.
+
+    Spin axis is unwrapped around `center` first so a cluster straddling 0/360
+    is not read as two distant groups.
+    """
+    rows = []
+    for c in GRADED:
+        a, b = real[c].to_numpy(dtype=float), generated[c].to_numpy(dtype=float)
+        if c == "spin_axis":
+            a, b = unwrap_deg(a, center), unwrap_deg(b, center)
+        r = ks_2samp(a, b)
+        rows.append({"feature": c, "ks_stat": r.statistic, "p_value": r.pvalue,
+                     "flagged": bool(r.pvalue < 0.01)})
+    return pd.DataFrame(rows)
