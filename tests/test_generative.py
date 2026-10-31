@@ -73,7 +73,10 @@ def test_marginal_ks_flags_shifted_feature_only():
 
 def test_evaluate_pitcher_on_synthetic():
     """Synthetic pitcher, real-data path. Model is exact-ish, so most types pass."""
-    df = make(n=1500, seed=0)
+    from pitchsim.generative import round_like_statcast
+    # Synthetic "real" pitches are continuous; round them like Statcast, since evaluation
+    # rounds the generated side and would otherwise tell them apart on decimals.
+    df = round_like_statcast(make(n=1500, seed=0))
     summary, ks, skipped, clouds, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
     g = summary[summary.model == "gaussian"]
     assert (g.auc < 0.65).all() and set(g.pitch_type) == {"FF", "SL", "CH", "CU"}
@@ -138,3 +141,16 @@ def test_context_gain_drops_missing_rows():
     df.loc[1400:1404, "n_thruorder_pitcher"] = np.nan
     r = context_gain(df.iloc[:1400], df.iloc[1400:])
     assert r["n_dropped"] == 5 and r["n_test"] == 595
+
+
+def test_round_like_statcast():
+    """Synthetic: rounding precision per column, and 359.6 deg wraps to 0, not 360."""
+    from pitchsim.generative import round_like_statcast
+    g = pd.DataFrame({"release_pos_x": [-1.2349], "release_pos_z": [5.678], "release_extension": [6.349],
+                      "release_speed": [95.26], "release_spin_rate": [2400.6], "spin_axis": [359.6],
+                      "vrel": [1.23456]})
+    r = round_like_statcast(g)
+    assert r.loc[0, "release_pos_x"] == -1.23 and r.loc[0, "release_pos_z"] == 5.68
+    assert r.loc[0, "release_extension"] == 6.3 and r.loc[0, "release_speed"] == 95.3
+    assert r.loc[0, "release_spin_rate"] == 2401 and r.loc[0, "spin_axis"] == 0
+    assert r.loc[0, "vrel"] == 1.23456 and g.loc[0, "spin_axis"] == 359.6  # others and input untouched

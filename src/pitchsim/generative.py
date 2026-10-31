@@ -28,6 +28,21 @@ GRADED = ["release_pos_x", "release_pos_z", "release_extension",
 ANGLES = ["release_angle_v_deg", "release_angle_h_deg"]
 FEATURES = GRADED + ANGLES
 
+# Statcast publishes these columns rounded; the generator makes continuous values. A classifier
+# can tell real from generated on the decimals alone (Misiorowski FF: AUC 0.997 unrounded). So
+# the evaluation rounds generated pitches like the measurement does; the generator is unchanged.
+STATCAST_DECIMALS = {"release_pos_x": 2, "release_pos_z": 2, "release_extension": 1,
+                     "release_speed": 1, "release_spin_rate": 0, "spin_axis": 0}
+
+
+def round_like_statcast(gen: pd.DataFrame) -> pd.DataFrame:
+    """Copy of gen with the graded columns rounded to Statcast's precision (axis stays in [0, 360))."""
+    out = gen.copy()
+    for c, d in STATCAST_DECIMALS.items():
+        out[c] = out[c].round(d)
+    out["spin_axis"] = out["spin_axis"] % 360  # 359.6 rounds to 360 -> 0
+    return out
+
 # Too few pitches and an 8-D covariance (36 parameters) is mostly noise.
 MIN_TRAIN = 30
 MIN_TEST = 30
@@ -333,7 +348,8 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
             auc = (np.nan,) * 3
             auc8 = np.nan
             if len(test) >= 10:
-                draws = [sample(m, len(test), seed + k) for k in range(1, N_DRAWS + 1)]
+                draws = [round_like_statcast(sample(m, len(test), seed + k))
+                         for k in range(1, N_DRAWS + 1)]
                 auc = classifier_auc(test, draws, GRADED, m.axis_center_deg, seed)
                 auc8 = classifier_auc(test, draws, FEATURES, m.axis_center_deg, seed)[0]
             rows.append({"pitch_type": ptype, "model": name, "n_train": m.n_train,
@@ -341,7 +357,7 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
                          "auc": auc[0], "auc_lo": auc[1], "auc_hi": auc[2], "auc8": auc8,
                          "graded": graded,
                          "pass": bool(auc[0] <= PASS_AUC) if graded else pd.NA})
-            gen_ks = sample(m, 1000, seed)  # large draw so the generated side isn't noisy
+            gen_ks = round_like_statcast(sample(m, 1000, seed))  # large draw so the generated side isn't noisy
             ks_rows.append(marginal_ks(test, gen_ks, m.axis_center_deg)
                            .assign(pitch_type=ptype, model=name))
 
