@@ -4,7 +4,7 @@ M2: fit and score the per-pitcher generative model.
     python scripts/train_generative.py data/raw/<pitcher>.csv
     python scripts/train_generative.py data/synthetic.csv --no-weather
 
-Writes <out>/summary.csv, ks.csv, skipped.txt and one <pitch_type>.png per pitch type
+Writes <out>/summary.csv, ks.csv, context.csv, skipped.txt and one <pitch_type>.png per pitch type
 (real held-out vs generated). Default <out> is results/m2/<pitcher>.
 """
 
@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from pitchsim.data import add_air_density, fetch_game_conditions
-from pitchsim.generative import circular_mean_deg, evaluate_pitcher, unwrap_deg
+from pitchsim.generative import circular_mean_deg, evaluate_pitcher, pitch_count_in_game, unwrap_deg
 from pitchsim.physics import air_density
 from pitchsim.statcast import clean
 
@@ -37,6 +37,9 @@ def main():
     args = ap.parse_args()
 
     raw = pd.read_csv(args.csv)
+    # Count on the full CSV (all pitch types) before clean() drops rows.
+    if {"game_pk", "at_bat_number", "pitch_number"} <= set(raw):
+        raw["pitch_count"] = pitch_count_in_game(raw)
     df = clean(raw)
     name = raw["player_name"].iloc[0] if "player_name" in raw else "pitcher"
     print(f"{name}: {len(df):,} usable pitches (of {len(raw):,})\n")
@@ -56,13 +59,14 @@ def main():
     else:
         rho = add_air_density(df, fetch_game_conditions(df["game_pk"].unique()))["rho"]
 
-    summary, ks, skipped, clouds = evaluate_pitcher(df, rho.to_numpy())
+    summary, ks, skipped, clouds, context = evaluate_pitcher(df, rho.to_numpy())
 
     (out / "skipped.txt").write_text("".join(s + "\n" for s in skipped))
     for s in skipped:
         print(f"skipped {s}")
     summary.round(3).to_csv(out / "summary.csv", index=False)
     ks.round(4).to_csv(out / "ks.csv", index=False)
+    context.round(4).to_csv(out / "context.csv", index=False)
 
     if summary.empty:
         print("no pitch type could be evaluated")
@@ -70,7 +74,7 @@ def main():
     print(summary.round(3).to_string(index=False), "\n")
     for ptype, c in clouds.items():
         make_plot(name, ptype, summary[summary["pitch_type"] == ptype], c, out)
-    print(f"Saved summary.csv, ks.csv, skipped.txt and {len(clouds)} plot(s) to {out}")
+    print(f"Saved summary.csv, ks.csv, context.csv, skipped.txt and {len(clouds)} plot(s) to {out}")
 
 
 def style(ax):

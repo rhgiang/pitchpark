@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from scipy.stats import ks_2samp
+from scipy.stats import ks_2samp, multivariate_normal
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import roc_auc_score
 from sklearn.mixture import GaussianMixture
@@ -200,17 +200,102 @@ def generated_release_state(gen: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     speed = gen["release_speed"].to_numpy() / FT_PER_S_TO_MPH
     return pos, speed[:, None] * d / np.linalg.norm(d, axis=1, keepdims=True)
 
+# Context that can shift the cloud: fatigue, times through the order, count.
+CONTEXT = ["pitch_count", "n_thruorder_pitcher", "balls", "strikes"]
+
+
+def pitch_count_in_game(df: pd.DataFrame) -> pd.Series:
+    """1-based pitch number within each game, ordered by at_bat_number then pitch_number.
+
+    Run on the full CSV (all pitch types, before filtering): fatigue depends on every pitch
+    thrown, not just those of one type. Aligned to df.index.
+    """
+    order = df.sort_values(["game_pk", "at_bat_number", "pitch_number"])
+    return (order.groupby("game_pk").cumcount() + 1).reindex(df.index)
+
+
+@dataclass
+class ContextModel:
+    coef: np.ndarray  # (1 + len(CONTEXT), len(GRADED)); first row is the intercept
+    cov: np.ndarray   # shared residual covariance of GRADED
+    axis_center_deg: float
+
+
+def _graded_matrix(df: pd.DataFrame, center: float) -> np.ndarray:
+    """GRADED columns as floats, spin axis unwrapped around center."""
+    Y = df[GRADED].to_numpy(dtype=float).copy()
+    i = GRADED.index("spin_axis")
+    Y[:, i] = unwrap_deg(Y[:, i], center)
+    return Y
+
+
+def _context_design(df: pd.DataFrame) -> np.ndarray:
+    return np.column_stack([np.ones(len(df)), df[CONTEXT].to_numpy(dtype=float)])
+
+
+def fit_context(train: pd.DataFrame) -> ContextModel:
+    """Least-squares fit of GRADED on CONTEXT: mean = [1, context] @ coef, shared covariance.
+
+    Linear-in-context with one shared covariance is the simplest model where context shifts
+    the cloud: multivariate linear regression with Gaussian residuals. Only GRADED is modelled;
+    the release angles encode aim, which depends on count and is M6's job.
+    The covariance divides by n (maximum likelihood), so it is like-for-like with the
+    intercept-only baseline in context_gain.
+    """
+    center = circular_mean_deg(train["spin_axis"].to_numpy())
+    X, Y = _context_design(train), _graded_matrix(train, center)
+    coef = np.linalg.lstsq(X, Y, rcond=None)[0]
+    resid = Y - X @ coef
+    return ContextModel(coef, resid.T @ resid / len(Y), center)
+
+
+def sample_context(model: ContextModel, context: pd.DataFrame, seed: int) -> pd.DataFrame:
+    """One draw of GRADED per context row; spin_axis wrapped back to [0, 360)."""
+    rng = np.random.default_rng(seed)
+    mean = _context_design(context) @ model.coef
+    out = pd.DataFrame(mean + rng.multivariate_normal(np.zeros(len(GRADED)), model.cov,
+                                                      len(context)), columns=GRADED)
+    out["spin_axis"] = out["spin_axis"] % 360
+    return out
+
+
+def context_gain(train: pd.DataFrame, test: pd.DataFrame) -> dict:
+    """Held-out mean log-likelihood per pitch of the context model vs an intercept-only one.
+
+    Log-likelihood scores the whole distribution (mean and spread), not just the mean.
+    Rows missing any CONTEXT value are dropped from both sets; n_dropped counts test rows.
+    Below MIN_TRAIN usable training rows the log-likelihoods are NaN.
+    """
+    tr, te = train.dropna(subset=CONTEXT), test.dropna(subset=CONTEXT)
+    r = {"n_train": len(tr), "n_test": len(te), "n_dropped": len(test) - len(te),
+         "ll_base": np.nan, "ll_context": np.nan}
+    if len(tr) < MIN_TRAIN or len(te) == 0:
+        return r
+    m = fit_context(tr)
+    Yte = _graded_matrix(te, m.axis_center_deg)
+    base = fit_context(tr.assign(**{c: 0.0 for c in CONTEXT}))  # zero columns -> intercept only
+    # lstsq gives the min-norm solution, so the zeroed columns get coef 0: a pure mean fit.
+    Xb = _context_design(te.assign(**{c: 0.0 for c in CONTEXT}))
+    r["ll_base"] = float(multivariate_normal(np.zeros(len(GRADED)), base.cov).logpdf(
+        Yte - Xb @ base.coef).mean())
+    r["ll_context"] = float(multivariate_normal(np.zeros(len(GRADED)), m.cov).logpdf(
+        Yte - _context_design(te) @ m.coef).mean())
+    return r
+
 
 def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
-                     ) -> tuple[pd.DataFrame, pd.DataFrame, list[str], dict]:
+                     ) -> tuple[pd.DataFrame, pd.DataFrame, list[str], dict, pd.DataFrame]:
     """Score the generative model on held-out games, per pitch type and per model.
 
-    rho is air density (lb/ft^3) per row of df. Returns (summary, ks, skipped, clouds):
+    rho is air density (lb/ft^3) per row of df. Returns (summary, ks, skipped, clouds, context):
     summary has one row per pitch type x model ("gaussian", "mixture") with the classifier
     AUC on GRADED features (auc, bounds) and on all FEATURES (auc8); ks has the marginal KS
     rows; clouds[pitch_type] holds held-out pitches, 1,000 generated ones, and break (in)
     from three sources: Statcast's fit (a), the M1 simulation of the real release states (b),
     and the M1 simulation of generated release states (c).
+
+    context has one row per fitted pitch type (see context_gain; ll_gain = ll_context - ll_base);
+    it is empty, with one skipped note, if a CONTEXT source column is missing.
 
     Movement is not graded here: its error belongs to M1 / M3 (physics). Comparing (b) with
     (c) isolates M2's error, because both go through the same simulator and calibration.
@@ -222,9 +307,15 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
         if k:
             skipped.append(f"dropped {k} rows with missing {c}")
     df = df.dropna(subset=FEATURES)
+    if "pitch_count" not in df and {"game_pk", "at_bat_number", "pitch_number"} <= set(df):
+        # Fallback only: counted on the filtered frame, so it undercounts. The CLI counts on the raw CSV.
+        df = df.assign(pitch_count=pitch_count_in_game(df))
+    missing = [c for c in CONTEXT if c not in df]
+    if missing:
+        skipped.append(f"context: missing columns {missing}")
     train_all, test_all = split_by_game(df)
 
-    rows, ks_rows, clouds = [], [], {}
+    rows, ks_rows, clouds, ctx_rows = [], [], {}, []
     for ptype, g in df.groupby("pitch_type"):
         train = train_all[train_all["pitch_type"] == ptype]
         test = test_all[test_all["pitch_type"] == ptype]
@@ -254,6 +345,9 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
             ks_rows.append(marginal_ks(test, gen_ks, m.axis_center_deg)
                            .assign(pitch_type=ptype, model=name))
 
+        if not missing:
+            ctx_rows.append({"pitch_type": ptype, **context_gain(train, test)})
+
         # Movement clouds. Calibrate once per type, on the same capped train as M1.
         cal = train.sample(MAX_TRAIN, random_state=seed) if len(train) > MAX_TRAIN else train
         cd, eff = calibrate(cal, "release")
@@ -276,4 +370,7 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
 
     summary = pd.DataFrame(rows)
     ks = pd.concat(ks_rows, ignore_index=True) if ks_rows else pd.DataFrame()
-    return summary, ks, skipped, clouds
+    context = pd.DataFrame(ctx_rows, columns=["pitch_type", "n_train", "n_test", "n_dropped",
+                                              "ll_base", "ll_context"])
+    context["ll_gain"] = context["ll_context"] - context["ll_base"]
+    return summary, ks, skipped, clouds, context

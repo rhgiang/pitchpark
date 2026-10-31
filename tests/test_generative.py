@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from pitchsim.generative import (FEATURES, GRADED, add_release_angles, circular_mean_deg,
+from pitchsim.generative import (FEATURES, context_gain, pitch_count_in_game, GRADED, add_release_angles, circular_mean_deg,
                                  classifier_auc, evaluate_pitcher, fit_pitch_type, marginal_ks,
                                  movement_in, sample)
 from pitchsim.physics import G, air_density
@@ -74,7 +74,7 @@ def test_marginal_ks_flags_shifted_feature_only():
 def test_evaluate_pitcher_on_synthetic():
     """Synthetic pitcher, real-data path. Model is exact-ish, so most types pass."""
     df = make(n=1500, seed=0)
-    summary, ks, skipped, clouds = evaluate_pitcher(df, np.full(len(df), air_density()))
+    summary, ks, skipped, clouds, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
     g = summary[summary.model == "gaussian"]
     assert (g.auc < 0.65).all() and set(g.pitch_type) == {"FF", "SL", "CH", "CU"}
 
@@ -86,7 +86,7 @@ def test_thin_types_skipped_or_ungraded():
     df = df.drop(cu[20:])                            # 20 CU total -> < 30 train
     ch = df.index[df.pitch_type == "CH"]
     df = df.drop(ch[70:])                            # ~70 CH -> < 30 held-out
-    summary, _, skipped, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
+    summary, _, skipped, _, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
     assert any(s.startswith("CU") for s in skipped)
     ch_rows = summary[summary.pitch_type == "CH"]
     assert (~ch_rows.graded).all() and ch_rows["pass"].isna().all()
@@ -95,7 +95,7 @@ def test_thin_types_skipped_or_ungraded():
 
 def test_nan_extension_rows_dropped():
     df = make(n=1500, seed=0); df.loc[:9, "release_extension"] = np.nan
-    _, _, skipped, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
+    _, _, skipped, _, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
     assert any("10" in s and "release_extension" in s for s in skipped)
 
 
@@ -108,3 +108,33 @@ def test_movement_formula_matches_statcast_fit():
     hb, vb = movement_in(v_rel, v_plate, t)
     assert np.allclose(hb, 0.5 * df.ax * t ** 2 * 12)
     assert np.allclose(vb, 0.5 * (df.az + G) * t ** 2 * 12)
+
+
+def test_pitch_count_in_game_orders_within_game():
+    df = pd.DataFrame({"game_pk": [2, 1, 1, 2, 1], "at_bat_number": [1, 2, 1, 1, 1],
+                       "pitch_number": [1, 1, 2, 2, 1]})
+    assert pitch_count_in_game(df).tolist() == [1, 3, 2, 2, 1]
+
+
+def _fatigue_frame(n=2000):
+    """Synthetic: velocity drops 0.03 mph per pitch thrown."""
+    rng = np.random.default_rng(0)
+    df = pd.DataFrame(rng.normal(0, 1, (n, 6)), columns=GRADED)
+    df["spin_axis"] = (200 + 5 * df["spin_axis"]) % 360
+    df["pitch_count"] = rng.integers(1, 110, n); df["n_thruorder_pitcher"] = 1 + df.pitch_count // 35
+    df["balls"] = rng.integers(0, 4, n); df["strikes"] = rng.integers(0, 3, n)
+    df["release_speed"] += 97 - 0.03 * df["pitch_count"]
+    return df
+
+
+def test_context_gain_detects_fatigue():
+    df = _fatigue_frame()
+    r = context_gain(df.iloc[:1400], df.iloc[1400:])
+    assert r["ll_context"] > r["ll_base"]
+
+
+def test_context_gain_drops_missing_rows():
+    df = _fatigue_frame().astype({"n_thruorder_pitcher": float})
+    df.loc[1400:1404, "n_thruorder_pitcher"] = np.nan
+    r = context_gain(df.iloc[:1400], df.iloc[1400:])
+    assert r["n_dropped"] == 5 and r["n_test"] == 595
