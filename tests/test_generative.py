@@ -2,7 +2,10 @@ import numpy as np
 import pandas as pd
 
 from pitchsim.generative import (FEATURES, GRADED, add_release_angles, circular_mean_deg,
-                                 classifier_auc, fit_pitch_type, marginal_ks, sample)
+                                 classifier_auc, evaluate_pitcher, fit_pitch_type, marginal_ks,
+                                 movement_in, sample)
+from pitchsim.physics import G, air_density
+from pitchsim.statcast import _time_to_y, fit_plate_crossing, release_state
 from pitchsim.synthetic import make
 
 
@@ -66,3 +69,42 @@ def test_auc_high_for_shifted_distribution():
 def test_marginal_ks_flags_shifted_feature_only():
     ks = marginal_ks(_gauss(500), _gauss(500, shift=2, seed=1), 200).set_index("feature")
     assert ks.loc["release_speed", "flagged"] and not ks.loc["release_spin_rate", "flagged"]
+
+
+def test_evaluate_pitcher_on_synthetic():
+    """Synthetic pitcher, real-data path. Model is exact-ish, so most types pass."""
+    df = make(n=1500, seed=0)
+    summary, ks, skipped, clouds = evaluate_pitcher(df, np.full(len(df), air_density()))
+    g = summary[summary.model == "gaussian"]
+    assert (g.auc < 0.65).all() and set(g.pitch_type) == {"FF", "SL", "CH", "CU"}
+
+
+def test_thin_types_skipped_or_ungraded():
+    """Synthetic: trimmed arsenal."""
+    df = make(n=1500, seed=0)
+    cu = df.index[df.pitch_type == "CU"]
+    df = df.drop(cu[20:])                            # 20 CU total -> < 30 train
+    ch = df.index[df.pitch_type == "CH"]
+    df = df.drop(ch[70:])                            # ~70 CH -> < 30 held-out
+    summary, _, skipped, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
+    assert any(s.startswith("CU") for s in skipped)
+    ch_rows = summary[summary.pitch_type == "CH"]
+    assert (~ch_rows.graded).all() and ch_rows["pass"].isna().all()
+    assert (ch_rows.n_components == 1).all()
+
+
+def test_nan_extension_rows_dropped():
+    df = make(n=1500, seed=0); df.loc[:9, "release_extension"] = np.nan
+    _, _, skipped, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
+    assert any("10" in s and "release_extension" in s for s in skipped)
+
+
+def test_movement_formula_matches_statcast_fit():
+    """For a constant-acceleration path the formula returns 0.5*a*t^2 exactly."""
+    df = make(n=50, seed=0)
+    _, v_rel = release_state(df); _, v_plate, t_plate = fit_plate_crossing(df)
+    t_rel = _time_to_y(df.release_pos_y.to_numpy(), df.vy0.to_numpy(), df.ay.to_numpy())
+    t = t_plate - t_rel
+    hb, vb = movement_in(v_rel, v_plate, t)
+    assert np.allclose(hb, 0.5 * df.ax * t ** 2 * 12)
+    assert np.allclose(vb, 0.5 * (df.az + G) * t ** 2 * 12)

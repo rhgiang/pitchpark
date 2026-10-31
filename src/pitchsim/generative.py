@@ -16,7 +16,9 @@ from sklearn.metrics import roc_auc_score
 from sklearn.mixture import GaussianMixture
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
 
-from pitchsim.statcast import release_state
+from pitchsim.physics import G, simulate_batch
+from pitchsim.statcast import _time_to_y, fit_plate_crossing, release_state
+from pitchsim.validation import FT_PER_S_TO_MPH, MAX_TRAIN, calibrate, split_by_game
 
 # Features scored against real pitches.
 GRADED = ["release_pos_x", "release_pos_z", "release_extension",
@@ -169,3 +171,109 @@ def marginal_ks(real: pd.DataFrame, generated: pd.DataFrame, center: float) -> p
         rows.append({"feature": c, "ks_stat": r.statistic, "p_value": r.pvalue,
                      "flagged": bool(r.pvalue < 0.01)})
     return pd.DataFrame(rows)
+
+
+def movement_in(vel_release: np.ndarray, vel_plate: np.ndarray,
+                t: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Horizontal and vertical break (inches) from release and plate velocities (ft/s), t in s.
+
+    The average non-gravity acceleration over the flight is (v_plate - v_release) / t, with
+    gravity added back to z. Break is 0.5 * a * t^2: how far that acceleration alone moves the
+    ball. One formula for every cloud, so differences between clouds are not formula artefacts.
+    """
+    a = (vel_plate - vel_release) / t[:, None]
+    a_z = a[:, 2] + G
+    return 0.5 * a[:, 0] * t ** 2 * 12, 0.5 * a_z * t ** 2 * 12
+
+
+def generated_release_state(gen: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Release position (ft) and velocity (ft/s) of generated pitches (inverse of the angles).
+
+    The angles satisfy vx / -vy = tan(h) and vz / -vy = tan(v), so the direction is
+    (tan h, -1, tan v); its length is set by release_speed.
+    """
+    pos = np.column_stack([gen["release_pos_x"], 60.5 - gen["release_extension"],
+                           gen["release_pos_z"]])
+    d = np.column_stack([np.tan(np.radians(gen["release_angle_h_deg"])),
+                         -np.ones(len(gen)),
+                         np.tan(np.radians(gen["release_angle_v_deg"]))])
+    speed = gen["release_speed"].to_numpy() / FT_PER_S_TO_MPH
+    return pos, speed[:, None] * d / np.linalg.norm(d, axis=1, keepdims=True)
+
+
+def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
+                     ) -> tuple[pd.DataFrame, pd.DataFrame, list[str], dict]:
+    """Score the generative model on held-out games, per pitch type and per model.
+
+    rho is air density (lb/ft^3) per row of df. Returns (summary, ks, skipped, clouds):
+    summary has one row per pitch type x model ("gaussian", "mixture") with the classifier
+    AUC on GRADED features (auc, bounds) and on all FEATURES (auc8); ks has the marginal KS
+    rows; clouds[pitch_type] holds held-out pitches, 1,000 generated ones, and break (in)
+    from three sources: Statcast's fit (a), the M1 simulation of the real release states (b),
+    and the M1 simulation of generated release states (c).
+
+    Movement is not graded here: its error belongs to M1 / M3 (physics). Comparing (b) with
+    (c) isolates M2's error, because both go through the same simulator and calibration.
+    """
+    df = add_release_angles(df.assign(rho=np.asarray(rho))).reset_index(drop=True)
+    skipped = []
+    for c in FEATURES:
+        k = int(df[c].isna().sum())
+        if k:
+            skipped.append(f"dropped {k} rows with missing {c}")
+    df = df.dropna(subset=FEATURES)
+    train_all, test_all = split_by_game(df)
+
+    rows, ks_rows, clouds = [], [], {}
+    for ptype, g in df.groupby("pitch_type"):
+        train = train_all[train_all["pitch_type"] == ptype]
+        test = test_all[test_all["pitch_type"] == ptype]
+        if len(train) < MIN_TRAIN:
+            skipped.append(f"{ptype} (n={len(g)}): fewer than {MIN_TRAIN} training pitches")
+            continue
+        if len(test) == 0:
+            skipped.append(f"{ptype} (n={len(g)}): no pitches in held-out games")
+            continue
+        graded = len(test) >= MIN_TEST
+        models = {"gaussian": fit_pitch_type(train, False, seed),
+                  "mixture": fit_pitch_type(train, True, seed)}
+        for name, m in models.items():
+            # Classifier needs a few pitches per class for 5 folds; below 10 report NaN.
+            auc = (np.nan,) * 3
+            auc8 = np.nan
+            if len(test) >= 10:
+                draws = [sample(m, len(test), seed + k) for k in range(1, N_DRAWS + 1)]
+                auc = classifier_auc(test, draws, GRADED, m.axis_center_deg, seed)
+                auc8 = classifier_auc(test, draws, FEATURES, m.axis_center_deg, seed)[0]
+            rows.append({"pitch_type": ptype, "model": name, "n_train": m.n_train,
+                         "n_test": len(test), "n_components": m.gmm.n_components,
+                         "auc": auc[0], "auc_lo": auc[1], "auc_hi": auc[2], "auc8": auc8,
+                         "graded": graded,
+                         "pass": bool(auc[0] <= PASS_AUC) if graded else pd.NA})
+            gen_ks = sample(m, 1000, seed)  # large draw so the generated side isn't noisy
+            ks_rows.append(marginal_ks(test, gen_ks, m.axis_center_deg)
+                           .assign(pitch_type=ptype, model=name))
+
+        # Movement clouds. Calibrate once per type, on the same capped train as M1.
+        cal = train.sample(MAX_TRAIN, random_state=seed) if len(train) > MAX_TRAIN else train
+        cd, eff = calibrate(cal, "release")
+        _, v_s, t_s = fit_plate_crossing(test)
+        pos_r, v_rel = release_state(test)
+        t_flight = t_s - _time_to_y(test["release_pos_y"].to_numpy(), test["vy0"].to_numpy(),
+                                    test["ay"].to_numpy())
+        _, vp_r, t_r = simulate_batch(pos_r, v_rel, test["release_spin_rate"].to_numpy(),
+                                      test["spin_axis"].to_numpy(), cd, eff,
+                                      rho=test["rho"].to_numpy())
+        gen = sample(models["mixture"], 1000, seed)
+        pos_g, v_g = generated_release_state(gen)
+        _, vp_g, t_g = simulate_batch(pos_g, v_g, gen["release_spin_rate"].to_numpy(),
+                                      gen["spin_axis"].to_numpy(), cd, eff,
+                                      rho=float(train["rho"].median()))
+        clouds[ptype] = {"real": test, "generated": gen,
+                         "move_statcast": movement_in(v_rel, v_s, t_flight),
+                         "move_real_m1": movement_in(v_rel, vp_r, t_r),
+                         "move_gen_m1": movement_in(v_g, vp_g, t_g)}
+
+    summary = pd.DataFrame(rows)
+    ks = pd.concat(ks_rows, ignore_index=True) if ks_rows else pd.DataFrame()
+    return summary, ks, skipped, clouds
