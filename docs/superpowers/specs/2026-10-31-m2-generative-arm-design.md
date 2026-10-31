@@ -83,6 +83,12 @@ context and a seed, returns a DataFrame with the 8 columns (Statcast names for t
   A nonlinear classifier, because a logistic regression can only see mean/linear
   differences, which a fitted Gaussian matches by construction. Spin axis enters as
   sin/cos so the classifier doesn't see a fake jump at 0/360.
+  **Rounded like Statcast** (Ryan, 2026-10-31): before any comparison with real pitches
+  (AUC and KS), generated values are rounded to Statcast's reporting precision:
+  `release_pos_x/z` 0.01 ft, `release_extension` 0.1 ft, `release_speed` 0.1 mph,
+  `release_spin_rate` 1 rpm, `spin_axis` 1°. Otherwise the classifier wins on decimals
+  alone (Misiorowski FF: 0.997 unrounded vs ~0.66 rounded). The generator itself stays
+  unrounded. The derived release angles are continuous on both sides and stay unrounded.
   *(Claude's call)* To steady the number, draw 10 independent generated sets of size
   n_heldout and average the AUC over them.
   **Pass: mean AUC ≤ 0.55 (point estimate)** *(Claude's call)*. Report the AUC with a
