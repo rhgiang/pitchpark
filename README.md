@@ -45,8 +45,9 @@ python scripts/validate.py data/raw/694819_2026-03-01_2026-11-30.csv
 
 A per-pitcher generative model of how a pitch leaves the hand (release point, extension,
 velocity, spin rate, spin axis), scored by a classifier that tries to tell real held-out pitches
-from generated ones. On the same three pitchers, 1 of 9 graded pitch types passes (AUC <= 0.55);
-the rest fail, most near 0.95 or higher. Possible causes and the numbers are in
+from generated ones (generated values are rounded like Statcast's first, or the classifier wins
+on decimals alone). On the same three pitchers, 1 of 9 graded pitch types passes (AUC <= 0.55);
+the other 8 fail at 0.63 to 0.73 (Gaussian). The cause of the remaining gap is open. The numbers are in
 [`results/M2.md`](results/M2.md). To reproduce it (cached CSVs from the M1 step):
 
 ```bash
