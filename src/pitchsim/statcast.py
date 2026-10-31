@@ -6,8 +6,8 @@ defined at y = 50 ft:
     vx0, vy0, vz0   velocity at y = 50 ft (ft/s)
     ax, ay, az      constant acceleration over the whole flight (ft/s^2)
 plus release_pos_x/y/z, plate_x/plate_z (front of home plate in 2025, mid-plate
-at y ~ 0.708 ft in 2026), release_spin_rate (rpm) and spin_axis (deg; whether
-it is measured or inferred from movement is unresolved, see results/M1.md).
+at y ~ 0.708 ft in 2026), release_spin_rate (rpm) and spin_axis (deg,
+Hawk-Eye measured, see CLAUDE.md).
 
 The x/z position at y = 50 ft is not in the CSV, so we recover it by running
 the fit backwards from the release point.

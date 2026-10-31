@@ -41,6 +41,22 @@ python scripts/validate.py data/raw/519242_2026-03-01_2026-11-30.csv
 python scripts/validate.py data/raw/694819_2026-03-01_2026-11-30.csv
 ```
 
+## M2 results
+
+A per-pitcher generative model of how a pitch leaves the hand (release point, extension,
+velocity, spin rate, spin axis), scored by a classifier that tries to tell real held-out pitches
+from generated ones. On the same three pitchers, 1 of 9 graded pitch types passes (AUC <= 0.55);
+the rest fail, most near 0.95 or higher. Possible causes and the numbers are in
+[`results/M2.md`](results/M2.md). To reproduce it (cached CSVs from the M1 step):
+
+```bash
+python scripts/train_generative.py data/raw/660271_2025-03-01_2025-11-30.csv
+python scripts/train_generative.py data/raw/519242_2026-03-01_2026-11-30.csv
+python scripts/train_generative.py data/raw/694819_2026-03-01_2026-11-30.csv
+```
+
+This writes `results/m2/<pitcher>/` (summary, KS and context CSVs, one PNG per pitch type).
+
 ## Files
 
 | File | What it does |
@@ -72,9 +88,10 @@ python scripts/validate.py data/raw/694819_2026-03-01_2026-11-30.csv
 1. **The release start is anchored on Statcast's fit.** The simulator now starts at the
    release point, but the release position is `release_pos_*` and the velocity is the fit
    extrapolated back. That is not an independent measurement of release.
-2. **Whether public `spin_axis` is measured (Hawk-Eye) or inferred from movement is
-   unresolved.** M1 results suggest measured (see `results/M1.md`). If measured, the per-pitch
-   gap between spin_axis and movement direction is the seam-shifted-wake signal.
+2. **Public `spin_axis` is Hawk-Eye-measured, not inferred from movement.** Confirmed 2026-10-30
+   against Savant's spin-direction leaderboard: within ~7° of "measured", 4–33° off "inferred",
+   across 15 pitch types (see `CLAUDE.md`). Its gap to the movement-implied axis is the
+   seam-shifted-wake signal, M3's job.
 3. **The constant-acceleration fit is itself an approximation.** On synthetic data
    it costs ~0.2–0.5 in and pulls fitted spin efficiencies slightly low, so treat
    anything under about half an inch as the noise floor.
