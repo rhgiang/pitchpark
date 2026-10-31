@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from pitchsim.data import add_air_density, fetch_game_conditions
-from pitchsim.generative import evaluate_pitcher
+from pitchsim.generative import circular_mean_deg, evaluate_pitcher, unwrap_deg
 from pitchsim.physics import air_density
 from pitchsim.statcast import clean
 
@@ -105,10 +105,16 @@ def make_plot(name, ptype, summ, c, out):
         style(ax)
     for ax, col, xl in [(ax_axis, "spin_axis", "spin axis (deg)"),
                         (ax_ext, "release_extension", "extension (ft)")]:
-        both = pd.concat([real[col], gen[col]])
-        bins = pd.cut(both, 25, retbins=True)[1]
-        ax.hist(gen[col], bins=bins, density=True, color=ORANGE, alpha=0.5, label="generated")
-        ax.hist(real[col], bins=bins, density=True, color=BLUE, alpha=0.5, label="real held-out")
+        r, g = real[col].to_numpy(), gen[col].to_numpy()
+        if col == "spin_axis":
+            # Circular: unwrap both samples about one shared center so a 350-20 deg
+            # pitch is one bump, not two spikes at opposite ends.
+            ctr = circular_mean_deg(pd.concat([real[col], gen[col]]))
+            r, g = unwrap_deg(r, ctr), unwrap_deg(g, ctr)
+            xl = f"spin axis (deg, centered on {ctr:.0f}; mod 360)"
+        bins = pd.cut(pd.Series([*r, *g]), 25, retbins=True)[1]
+        ax.hist(g, bins=bins, density=True, color=ORANGE, alpha=0.5, label="generated")
+        ax.hist(r, bins=bins, density=True, color=BLUE, alpha=0.5, label="real held-out")
         ax.set_xlabel(xl); ax.set_ylabel("density")
         ax.set_title(xl.split(" (")[0], loc="left", fontsize=11, color=INK)
         style(ax)
@@ -121,7 +127,9 @@ def make_plot(name, ptype, summ, c, out):
     ax_mov.set_title("movement — not graded until M3", loc="left", fontsize=11, color=INK)
     style(ax_mov)
     for ax in (ax_rel, ax_axis, ax_mov):
-        ax.legend(frameon=False, fontsize=8)
+        leg = ax.legend(fontsize=8, frameon=True, framealpha=1, facecolor="white", edgecolor=GRID)  # opaque: data points showed through the markers
+        for h in leg.legend_handles:   # scatter alpha is baked into the handle; match the cloud colour
+            h.set_alpha(1)
 
     bits = []
     for _, r in summ.iterrows():
