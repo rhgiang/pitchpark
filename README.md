@@ -47,7 +47,10 @@ A per-pitcher generative model of how a pitch leaves the hand (release point, ex
 velocity, spin rate, spin axis), scored by a classifier that tries to tell real held-out pitches
 from generated ones (generated values are rounded like Statcast's first, or the classifier wins
 on decimals alone). On the same three pitchers, 1 of 9 graded pitch types passes (AUC <= 0.55);
-the other 8 fail at 0.63 to 0.73 (Gaussian). The cause of the remaining gap is open. The numbers are in
+the other 8 fail at 0.63 to 0.73 (Gaussian). A real-vs-real floor (real training-game pitches
+vs real held-out ones, same test) is 0.60 to 0.68 in 8 of those 9 rows, and the Gaussian is within
+0.05 of it in 8 of 9; only Misiorowski's slider (0.729 vs floor 0.599) is clearly above it. So
+most of the gap looks like game-to-game drift (suggested, not proven). The numbers are in
 [`results/M2.md`](results/M2.md). To reproduce it (cached CSVs from the M1 step):
 
 ```bash
