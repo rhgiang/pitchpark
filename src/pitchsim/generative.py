@@ -136,13 +136,13 @@ def _design(df: pd.DataFrame, cols: list[str]) -> np.ndarray:
 
 
 def classifier_auc(real: pd.DataFrame, generated: list[pd.DataFrame], cols: list[str],
-                   center: float, seed: int = 0) -> tuple[float, float, float]:
+                   seed: int = 0) -> tuple[float, float, float]:
     """Classifier two-sample test: can a model tell real (0) from generated (1)?
 
     Returns (mean AUC, mean 2.5% bound, mean 97.5% bound) over the generated sets;
     AUC near 0.5 means indistinguishable. Each set should be the same size as `real`.
-    `center` is unused here (sin/cos needs no unwrapping); it is kept so the signature
-    matches marginal_ks.
+    The bounds bootstrap one CV run's out-of-fold predictions per generated set, then average
+    the per-set percentiles: they describe a single draw's AUC, not the uncertainty of the mean.
 
     Why a nonlinear classifier: a fitted Gaussian matches means and linear correlations
     by construction, so logistic regression would pass it trivially. Gradient boosting
@@ -304,7 +304,8 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
 
     rho is air density (lb/ft^3) per row of df. Returns (summary, ks, skipped, clouds, context):
     summary has one row per pitch type x model ("gaussian", "mixture") with the classifier
-    AUC on GRADED features (auc, bounds) and on all FEATURES (auc8); ks has the marginal KS
+    AUC on GRADED features (auc, bounds), the real-vs-real floor (auc_floor, bounds) and the
+    AUC on all FEATURES (auc8); ks has the marginal KS
     rows; clouds[pitch_type] holds held-out pitches, 1,000 generated ones, and break (in)
     from three sources: Statcast's fit (a), the M1 simulation of the real release states (b),
     and the M1 simulation of generated release states (c).
@@ -341,6 +342,13 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
             skipped.append(f"{ptype} (n={len(g)}): no pitches in held-out games")
             continue
         graded = len(test) >= MIN_TEST
+        # Real-vs-real floor: the AUC a perfect model of the training games would get, because
+        # held-out games drift from training games. Real rows are already Statcast-rounded.
+        floor = (np.nan,) * 3
+        if len(test) >= 10:
+            floor_sets = [train.sample(len(test), replace=len(train) < len(test), random_state=seed + k)
+                          for k in range(1, N_DRAWS + 1)]
+            floor = classifier_auc(test, floor_sets, GRADED, seed)
         models = {"gaussian": fit_pitch_type(train, False, seed),
                   "mixture": fit_pitch_type(train, True, seed)}
         for name, m in models.items():
@@ -350,11 +358,12 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
             if len(test) >= 10:
                 draws = [round_like_statcast(sample(m, len(test), seed + k))
                          for k in range(1, N_DRAWS + 1)]
-                auc = classifier_auc(test, draws, GRADED, m.axis_center_deg, seed)
-                auc8 = classifier_auc(test, draws, FEATURES, m.axis_center_deg, seed)[0]
+                auc = classifier_auc(test, draws, GRADED, seed)
+                auc8 = classifier_auc(test, draws, FEATURES, seed)[0]
             rows.append({"pitch_type": ptype, "model": name, "n_train": m.n_train,
                          "n_test": len(test), "n_components": m.gmm.n_components,
                          "auc": auc[0], "auc_lo": auc[1], "auc_hi": auc[2], "auc8": auc8,
+                         "auc_floor": floor[0], "auc_floor_lo": floor[1], "auc_floor_hi": floor[2],
                          "graded": graded,
                          "pass": bool(auc[0] <= PASS_AUC) if graded else pd.NA})
             gen_ks = round_like_statcast(sample(m, 1000, seed))  # large draw so the generated side isn't noisy
@@ -378,7 +387,7 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
         pos_g, v_g = generated_release_state(gen)
         _, vp_g, t_g = simulate_batch(pos_g, v_g, gen["release_spin_rate"].to_numpy(),
                                       gen["spin_axis"].to_numpy(), cd, eff,
-                                      rho=float(train["rho"].median()))
+                                      rho=float(train["rho"].median()))  # real flights use per-game rho; fine while movement is ungraded
         clouds[ptype] = {"real": test, "generated": gen,
                          "move_statcast": movement_in(v_rel, v_s, t_flight),
                          "move_real_m1": movement_in(v_rel, vp_r, t_r),

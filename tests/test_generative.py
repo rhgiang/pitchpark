@@ -1,9 +1,10 @@
 import numpy as np
 import pandas as pd
 
-from pitchsim.generative import (FEATURES, context_gain, pitch_count_in_game, GRADED, add_release_angles, circular_mean_deg,
-                                 classifier_auc, evaluate_pitcher, fit_pitch_type, marginal_ks,
-                                 movement_in, sample)
+from pitchsim.generative import (FEATURES, GRADED, add_release_angles, circular_mean_deg,
+                                 classifier_auc, context_gain, evaluate_pitcher, fit_context,
+                                 fit_pitch_type, marginal_ks, movement_in, pitch_count_in_game,
+                                 round_like_statcast, sample, sample_context)
 from pitchsim.physics import G, air_density
 from pitchsim.statcast import _time_to_y, fit_plate_crossing, release_state
 from pitchsim.synthetic import make
@@ -57,12 +58,12 @@ def _gauss(n, shift=0.0, seed=0):
 
 def test_auc_near_half_for_same_distribution():
     real = _gauss(300)
-    auc, lo, hi = classifier_auc(real, [_gauss(300, seed=s) for s in range(1, 4)], GRADED, 200)
+    auc, lo, hi = classifier_auc(real, [_gauss(300, seed=s) for s in range(1, 4)], GRADED)
     assert auc < 0.6 and lo < 0.5 < hi
 
 
 def test_auc_high_for_shifted_distribution():
-    auc, _, _ = classifier_auc(_gauss(300), [_gauss(300, shift=2, seed=1)], GRADED, 200)
+    auc, _, _ = classifier_auc(_gauss(300), [_gauss(300, shift=2, seed=1)], GRADED)
     assert auc > 0.8
 
 
@@ -72,14 +73,17 @@ def test_marginal_ks_flags_shifted_feature_only():
 
 
 def test_evaluate_pitcher_on_synthetic():
-    """Synthetic pitcher, real-data path. Model is exact-ish, so most types pass."""
-    from pitchsim.generative import round_like_statcast
+    """Synthetic pitcher, real-data path. Model is exact-ish, so every type is below AUC 0.65."""
     # Synthetic "real" pitches are continuous; round them like Statcast, since evaluation
     # rounds the generated side and would otherwise tell them apart on decimals.
     df = round_like_statcast(make(n=1500, seed=0))
     summary, ks, skipped, clouds, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
     g = summary[summary.model == "gaussian"]
     assert (g.auc < 0.65).all() and set(g.pitch_type) == {"FF", "SL", "CH", "CU"}
+    # real-vs-real floor: present, a probability, and the same on both model rows of a type
+    graded = summary[summary.graded]
+    assert graded.auc_floor.between(0, 1).all()
+    assert (graded.groupby("pitch_type").auc_floor.nunique() == 1).all()
 
 
 def test_thin_types_skipped_or_ungraded():
@@ -145,7 +149,6 @@ def test_context_gain_drops_missing_rows():
 
 def test_round_like_statcast():
     """Synthetic: rounding precision per column, and 359.6 deg wraps to 0, not 360."""
-    from pitchsim.generative import round_like_statcast
     g = pd.DataFrame({"release_pos_x": [-1.2349], "release_pos_z": [5.678], "release_extension": [6.349],
                       "release_speed": [95.26], "release_spin_rate": [2400.6], "spin_axis": [359.6],
                       "vrel": [1.23456]})
@@ -154,3 +157,11 @@ def test_round_like_statcast():
     assert r.loc[0, "release_extension"] == 6.3 and r.loc[0, "release_speed"] == 95.3
     assert r.loc[0, "release_spin_rate"] == 2401 and r.loc[0, "spin_axis"] == 0
     assert r.loc[0, "vrel"] == 1.23456 and g.loc[0, "spin_axis"] == 359.6  # others and input untouched
+
+
+def test_sample_context_one_row_per_context_and_axis_wrapped():
+    """Synthetic: fatigue frame; one draw per context row, axis wrapped into [0, 360)."""
+    df = _fatigue_frame(500)
+    df["spin_axis"] = (358 + 5 * np.random.default_rng(1).normal(size=len(df))) % 360  # straddles 0
+    out = sample_context(fit_context(df), df.iloc[:77], seed=0)
+    assert len(out) == 77 and out["spin_axis"].between(0, 360, inclusive="left").all()
