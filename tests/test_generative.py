@@ -3,8 +3,9 @@ import pandas as pd
 
 from pitchsim.generative import (FEATURES, GRADED, add_release_angles, circular_mean_deg,
                                  classifier_auc, context_gain, evaluate_pitcher, fit_context,
-                                 fit_pitch_type, marginal_ks, movement_in, pitch_count_in_game,
-                                 round_like_statcast, sample, sample_context)
+                                 fit_pitch_type, marginal_ks, movement_in, paired_margin,
+                                 physical_diff, pitch_count_in_game, round_like_statcast, sample,
+                                 sample_context)
 from pitchsim.physics import G, air_density
 from pitchsim.statcast import _time_to_y, fit_plate_crossing, release_state
 from pitchsim.synthetic import make
@@ -58,12 +59,13 @@ def _gauss(n, shift=0.0, seed=0):
 
 def test_auc_near_half_for_same_distribution():
     real = _gauss(300)
-    auc, lo, hi = classifier_auc(real, [_gauss(300, seed=s) for s in range(1, 4)], GRADED)
+    auc, lo, hi, per_draw = classifier_auc(real, [_gauss(300, seed=s) for s in range(1, 4)], GRADED)
     assert auc < 0.6 and lo < 0.5 < hi
+    assert per_draw.shape == (3,) and np.isclose(per_draw.mean(), auc)
 
 
 def test_auc_high_for_shifted_distribution():
-    auc, _, _ = classifier_auc(_gauss(300), [_gauss(300, shift=2, seed=1)], GRADED)
+    auc, _, _, _ = classifier_auc(_gauss(300), [_gauss(300, shift=2, seed=1)], GRADED)
     assert auc > 0.8
 
 
@@ -77,13 +79,20 @@ def test_evaluate_pitcher_on_synthetic():
     # Synthetic "real" pitches are continuous; round them like Statcast, since evaluation
     # rounds the generated side and would otherwise tell them apart on decimals.
     df = round_like_statcast(make(n=1500, seed=0))
-    summary, ks, skipped, clouds, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
+    summary, ks, skipped, clouds, _, physical = evaluate_pitcher(df, np.full(len(df), air_density()))
     g = summary[summary.model == "gaussian"]
     assert (g.auc < 0.65).all() and set(g.pitch_type) == {"FF", "SL", "CH", "CU"}
     # real-vs-real floor: present, a probability, and the same on both model rows of a type
     graded = summary[summary.graded]
     assert graded.auc_floor.between(0, 1).all()
     assert (graded.groupby("pitch_type").auc_floor.nunique() == 1).all()
+    # paired gap / margin columns; pass follows the floor-relative rule and pass_abs the old 0.55
+    assert (graded.auc_margin >= 0.02).all() and np.allclose(graded.auc_gap, graded.auc - graded.auc_floor)
+    assert (graded["pass"].astype(bool) == (graded.auc_gap <= graded.auc_margin)).all()
+    assert (graded.pass_abs.astype(bool) == (graded.auc <= 0.55)).all()
+    # physical-units rows: graded types only, GRADED features, one row each per model
+    assert set(physical.columns) >= {"pitch_type", "model", "feature", "unit", "mean_diff", "sd_ratio"}
+    assert set(physical.feature) == set(GRADED) and set(physical.pitch_type) == set(graded.pitch_type)
 
 
 def test_thin_types_skipped_or_ungraded():
@@ -93,16 +102,17 @@ def test_thin_types_skipped_or_ungraded():
     df = df.drop(cu[20:])                            # 20 CU total -> < 30 train
     ch = df.index[df.pitch_type == "CH"]
     df = df.drop(ch[70:])                            # ~70 CH -> < 30 held-out
-    summary, _, skipped, _, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
+    summary, _, skipped, _, _, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
     assert any(s.startswith("CU") for s in skipped)
     ch_rows = summary[summary.pitch_type == "CH"]
     assert (~ch_rows.graded).all() and ch_rows["pass"].isna().all()
     assert (ch_rows.n_components == 1).all()
+    assert ch_rows.pass_abs.isna().all()
 
 
 def test_nan_extension_rows_dropped():
     df = make(n=1500, seed=0); df.loc[:9, "release_extension"] = np.nan
-    _, _, skipped, _, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
+    _, _, skipped, _, _, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
     assert any("10" in s and "release_extension" in s for s in skipped)
 
 
@@ -165,3 +175,32 @@ def test_sample_context_one_row_per_context_and_axis_wrapped():
     df["spin_axis"] = (358 + 5 * np.random.default_rng(1).normal(size=len(df))) % 360  # straddles 0
     out = sample_context(fit_context(df), df.iloc[:77], seed=0)
     assert len(out) == 77 and out["spin_axis"].between(0, 360, inclusive="left").all()
+
+
+def test_paired_margin_identical_and_offset():
+    """Hand values: no gap -> margin is the 0.02 minimum; a constant offset has zero spread."""
+    a = np.array([0.6, 0.62, 0.58, 0.61])
+    assert paired_margin(a, a) == (0.0, 0.02)
+    gap, margin = paired_margin(a + 0.1, a)
+    assert np.isclose(gap, 0.1) and margin == 0.02
+
+
+def test_paired_margin_scales_with_noise():
+    """gap_k = [0.1, -0.1, 0.1, -0.1]: sd (ddof=1) = 0.2/sqrt(3); margin = 2 * sd / sqrt(4)."""
+    gap, margin = paired_margin(np.array([0.7, 0.5, 0.7, 0.5]), np.full(4, 0.6))
+    assert np.isclose(gap, 0.0) and np.isclose(margin, 0.2 / np.sqrt(3))
+
+
+def test_physical_diff_hand_values():
+    """Synthetic: generated is 2 mph faster with half the spread; other features identical."""
+    real = _gauss(2000, seed=0)
+    gen = real.copy()
+    gen["release_speed"] = real.release_speed.mean() + 2 + 0.5 * (real.release_speed - real.release_speed.mean())
+    d = physical_diff(real, gen, 200).set_index("feature")
+    assert list(d.index) == GRADED and d.loc["release_speed", "unit"] == "mph"
+    assert np.isclose(d.loc["release_speed", "mean_diff"], 2) and np.isclose(d.loc["release_speed", "sd_ratio"], 0.5)
+    assert np.isclose(d.loc["release_pos_x", "mean_diff"], 0) and np.isclose(d.loc["spin_axis", "sd_ratio"], 1)
+    # axis straddling 0/360 is unwrapped, not averaged to ~180
+    r = real.assign(spin_axis=(358 + 3 * np.random.default_rng(0).normal(size=len(real))) % 360)
+    assert abs(physical_diff(r, r.assign(spin_axis=(r.spin_axis + 1) % 360), 358)
+               .set_index("feature").loc["spin_axis", "mean_diff"] - 1) < 1e-6

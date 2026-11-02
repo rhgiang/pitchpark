@@ -51,7 +51,9 @@ MIN_MIXTURE = 100
 MAX_COMPONENTS = 4
 # Number of generated sets averaged in the classifier test, and the AUC counted as a pass.
 N_DRAWS = 10
-PASS_AUC = 0.55
+PASS_AUC = 0.55  # reported as pass_abs; no longer decides pass
+# Smallest margin allowed in the floor-relative pass rule (see paired_margin).
+MIN_MARGIN = 0.02
 N_BOOT = 200
 
 
@@ -136,10 +138,10 @@ def _design(df: pd.DataFrame, cols: list[str]) -> np.ndarray:
 
 
 def classifier_auc(real: pd.DataFrame, generated: list[pd.DataFrame], cols: list[str],
-                   seed: int = 0) -> tuple[float, float, float]:
+                   seed: int = 0) -> tuple[float, float, float, np.ndarray]:
     """Classifier two-sample test: can a model tell real (0) from generated (1)?
 
-    Returns (mean AUC, mean 2.5% bound, mean 97.5% bound) over the generated sets;
+    Returns (mean AUC, mean 2.5% bound, mean 97.5% bound, per-set AUCs) over the generated sets;
     AUC near 0.5 means indistinguishable. Each set should be the same size as `real`.
     The bounds bootstrap one CV run's out-of-fold predictions per generated set, then average
     the per-set percentiles: they describe a single draw's AUC, not the uncertainty of the mean.
@@ -168,7 +170,45 @@ def classifier_auc(real: pd.DataFrame, generated: list[pd.DataFrame], cols: list
             if len(np.unique(y[i])) == 2:
                 boot.append(roc_auc_score(y[i], p[i]))
         los.append(np.percentile(boot, 2.5)); his.append(np.percentile(boot, 97.5))
-    return float(np.mean(aucs)), float(np.mean(los)), float(np.mean(his))
+    return float(np.mean(aucs)), float(np.mean(los)), float(np.mean(his)), np.array(aucs)
+
+
+def paired_margin(model_aucs: np.ndarray, floor_aucs: np.ndarray) -> tuple[float, float]:
+    """(mean gap, margin) of per-draw AUCs; the model passes when gap <= margin.
+
+    gap_k = model AUC[k] - floor AUC[k]. Draw k of both uses the same held-out real set, so
+    subtracting cancels that shared sample's luck and leaves the model's extra detectability.
+    The margin is 2 standard errors of the gap over the draws, so a noisy pitch type (few
+    held-out pitches) gets a wider margin and a steady one a tight margin. Floor of MIN_MARGIN:
+    the draw spread misses part of the held-out sample's noise (the held-out set is the same in
+    every draw), so a tiny spread must not mean a tiny tolerance.
+    """
+    gap = np.asarray(model_aucs, dtype=float) - np.asarray(floor_aucs, dtype=float)
+    se = gap.std(ddof=1) / np.sqrt(len(gap))
+    return float(gap.mean()), float(max(MIN_MARGIN, 2 * se))
+
+
+# Report units for physical_diff.
+UNITS = {"release_pos_x": "ft", "release_pos_z": "ft", "release_extension": "ft",
+         "release_speed": "mph", "release_spin_rate": "rpm", "spin_axis": "deg"}
+
+
+def physical_diff(real: pd.DataFrame, generated: pd.DataFrame, center: float) -> pd.DataFrame:
+    """Generated vs real mean and spread of each GRADED feature, in real units.
+
+    Spin axis is unwrapped around `center` first (mean of 359 and 1 is not 180). mean_diff is
+    generated minus real; sd_ratio is generated sd / real sd (below 1 = too narrow).
+    Shows how a generated pitch differs, which the AUC alone does not.
+    """
+    rows = []
+    for c in GRADED:
+        a, b = real[c].to_numpy(dtype=float), generated[c].to_numpy(dtype=float)
+        if c == "spin_axis":
+            a, b = unwrap_deg(a, center), unwrap_deg(b, center)
+        rows.append({"feature": c, "unit": UNITS[c], "real_mean": a.mean(), "gen_mean": b.mean(),
+                     "mean_diff": b.mean() - a.mean(), "real_sd": a.std(ddof=1),
+                     "gen_sd": b.std(ddof=1), "sd_ratio": b.std(ddof=1) / a.std(ddof=1)})
+    return pd.DataFrame(rows)
 
 
 def marginal_ks(real: pd.DataFrame, generated: pd.DataFrame, center: float) -> pd.DataFrame:
@@ -299,14 +339,15 @@ def context_gain(train: pd.DataFrame, test: pd.DataFrame) -> dict:
 
 
 def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
-                     ) -> tuple[pd.DataFrame, pd.DataFrame, list[str], dict, pd.DataFrame]:
+                     ) -> tuple[pd.DataFrame, pd.DataFrame, list[str], dict, pd.DataFrame, pd.DataFrame]:
     """Score the generative model on held-out games, per pitch type and per model.
 
-    rho is air density (lb/ft^3) per row of df. Returns (summary, ks, skipped, clouds, context):
+    rho is air density (lb/ft^3) per row of df. Returns (summary, ks, skipped, clouds, context, physical):
     summary has one row per pitch type x model ("gaussian", "mixture") with the classifier
-    AUC on GRADED features (auc, bounds), the real-vs-real floor (auc_floor, bounds) and the
-    AUC on all FEATURES (auc8); ks has the marginal KS
-    rows; clouds[pitch_type] holds held-out pitches, 1,000 generated ones, and break (in)
+    AUC on GRADED features (auc, bounds), the real-vs-real floor (auc_floor, bounds), the
+    paired gap and margin (auc_gap, auc_margin; pass = gap <= margin, see paired_margin),
+    pass_abs (auc <= PASS_AUC, reference only) and the AUC on all FEATURES (auc8); ks has the
+    marginal KS rows; physical has physical_diff rows for graded types only; clouds[pitch_type] holds held-out pitches, 1,000 generated ones, and break (in)
     from three sources: Statcast's fit (a), the M1 simulation of the real release states (b),
     and the M1 simulation of generated release states (c).
 
@@ -331,7 +372,7 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
         skipped.append(f"context: missing columns {missing}")
     train_all, test_all = split_by_game(df)
 
-    rows, ks_rows, clouds, ctx_rows = [], [], {}, []
+    rows, ks_rows, clouds, ctx_rows, phys_rows = [], [], {}, [], []
     for ptype, g in df.groupby("pitch_type"):
         train = train_all[train_all["pitch_type"] == ptype]
         test = test_all[test_all["pitch_type"] == ptype]
@@ -344,7 +385,7 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
         graded = len(test) >= MIN_TEST
         # Real-vs-real floor: the AUC a perfect model of the training games would get, because
         # held-out games drift from training games. Real rows are already Statcast-rounded.
-        floor = (np.nan,) * 3
+        floor = (np.nan,) * 3 + (np.full(N_DRAWS, np.nan),)
         if len(test) >= 10:
             floor_sets = [train.sample(len(test), replace=len(train) < len(test), random_state=seed + k)
                           for k in range(1, N_DRAWS + 1)]
@@ -353,22 +394,28 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
                   "mixture": fit_pitch_type(train, True, seed)}
         for name, m in models.items():
             # Classifier needs a few pitches per class for 5 folds; below 10 report NaN.
-            auc = (np.nan,) * 3
+            auc = (np.nan,) * 3 + (np.full(N_DRAWS, np.nan),)
             auc8 = np.nan
             if len(test) >= 10:
                 draws = [round_like_statcast(sample(m, len(test), seed + k))
                          for k in range(1, N_DRAWS + 1)]
                 auc = classifier_auc(test, draws, GRADED, seed)
                 auc8 = classifier_auc(test, draws, FEATURES, seed)[0]
+            # Paired on draw k and the same held-out set (CV folds match: same labels and sizes).
+            gap, margin = paired_margin(auc[3], floor[3])
             rows.append({"pitch_type": ptype, "model": name, "n_train": m.n_train,
                          "n_test": len(test), "n_components": m.gmm.n_components,
                          "auc": auc[0], "auc_lo": auc[1], "auc_hi": auc[2], "auc8": auc8,
                          "auc_floor": floor[0], "auc_floor_lo": floor[1], "auc_floor_hi": floor[2],
-                         "graded": graded,
-                         "pass": bool(auc[0] <= PASS_AUC) if graded else pd.NA})
+                         "auc_gap": gap, "auc_margin": margin, "graded": graded,
+                         "pass": bool(gap <= margin) if graded and len(test) >= 10 else pd.NA,
+                         "pass_abs": bool(auc[0] <= PASS_AUC) if graded else pd.NA})
             gen_ks = round_like_statcast(sample(m, 1000, seed))  # large draw so the generated side isn't noisy
             ks_rows.append(marginal_ks(test, gen_ks, m.axis_center_deg)
                            .assign(pitch_type=ptype, model=name))
+            if graded:
+                phys_rows.append(physical_diff(test, gen_ks, m.axis_center_deg)
+                                 .assign(pitch_type=ptype, model=name))
 
         if not missing:
             ctx_rows.append({"pitch_type": ptype, **context_gain(train, test)})
@@ -398,4 +445,5 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
     context = pd.DataFrame(ctx_rows, columns=["pitch_type", "n_train", "n_test", "n_dropped",
                                               "ll_base", "ll_context"])
     context["ll_gain"] = context["ll_context"] - context["ll_base"]
-    return summary, ks, skipped, clouds, context
+    physical = pd.concat(phys_rows, ignore_index=True) if phys_rows else pd.DataFrame()
+    return summary, ks, skipped, clouds, context, physical
