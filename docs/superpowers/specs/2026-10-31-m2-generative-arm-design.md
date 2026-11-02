@@ -91,9 +91,22 @@ context and a seed, returns a DataFrame with the 8 columns (Statcast names for t
   unrounded. The derived release angles are continuous on both sides and stay unrounded.
   *(Claude's call)* To steady the number, draw 10 independent generated sets of size
   n_heldout and average the AUC over them.
-  **Pass: mean AUC ≤ 0.55 (point estimate)** *(Claude's call)*. Report the AUC with a
-  bootstrap 95% interval next to it so small-sample passes are visibly uncertain.
-  An 8-feature AUC (graded six + the two angles) is also reported as an ungraded diagnostic.
+  **Pass rule (Ryan, 2026-11-02; replaces "mean AUC ≤ 0.55"):** judged against the
+  **real-vs-real floor** (`auc_floor`: held-out real vs real pitches from training games,
+  same sizes and draws). Real pitches from other games already score ~0.60–0.68 because of
+  game-to-game drift, so a fixed 0.55 is unreachable under a by-game split. For each draw k,
+  gap_k = AUC(model, draw k) − AUC(floor, draw k), paired on the same held-out set and CV
+  folds. **Pass if mean gap ≤ margin, where margin = max(0.02, 2 × sd(gap_k) / √N_DRAWS)**:
+  the margin scales with that pitch type's own noise (strict for 300–500 held-out pitches,
+  lenient for ~40), with a 0.02 minimum because draw-to-draw spread doesn't capture all of
+  the held-out sample's noise. The 0.55 comparison is still reported, not used to pass.
+  Report the AUC with a bootstrap interval next to it so small-sample results are visibly
+  uncertain. An 8-feature AUC (graded six + the two angles) is also reported as an ungraded
+  diagnostic.
+- **Physical units (reported, not graded; Ryan, 2026-11-02):** per pitch type and graded
+  feature, generated minus held-out real mean and spread in real units (ft, mph, rpm, deg;
+  spin axis unwrapped), so it's visible *how* a generated pitch differs. Tolerances may be
+  set later once the numbers have been seen.
 - **On a fail:** report it honestly in `results/M2.md` with what seems to cause it. The only
   model iteration in scope is the spec's own Gaussian → mixture step; no tuning loops to
   force a pass *(Claude's call)*.
