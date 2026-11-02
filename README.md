@@ -46,12 +46,13 @@ python scripts/validate.py data/raw/694819_2026-03-01_2026-11-30.csv
 A per-pitcher generative model of how a pitch leaves the hand (release point, extension,
 velocity, spin rate, spin axis), scored by a classifier that tries to tell real held-out pitches
 from generated ones (generated values are rounded like Statcast's first, or the classifier wins
-on decimals alone). On the same three pitchers, 1 of 9 graded pitch types passes (AUC <= 0.55);
-the other 8 fail at 0.63 to 0.73 (Gaussian). A real-vs-real floor (real training-game pitches
-vs real held-out ones, same test) is 0.60 to 0.68 in 8 of those 9 rows, and the Gaussian is within
-0.05 of it in 8 of 9; only Misiorowski's slider (0.729 vs floor 0.599) is clearly above it. So
-most of the gap looks like game-to-game drift (suggested, not proven). The numbers are in
-[`results/M2.md`](results/M2.md). To reproduce it (cached CSVs from the M1 step):
+on decimals alone). Pass means the model's AUC is within a noise-scaled margin of a
+real-vs-real floor (real training-game pitches vs real held-out ones, same test; 0.60 to 0.68 in
+8 of 9 graded rows, so a fixed 0.55 bar is unreachable). On the same three pitchers, 6 of 9
+graded Gaussian pitch types pass; the fails are Misiorowski's slider (gap +0.130 vs margin 0.040),
+and two near misses, Sale's changeup (+0.046 vs 0.043) and slider (+0.021 vs 0.020). Under the
+old AUC <= 0.55 bar only 1 of 9 passes. The numbers, including a physical-units table
+(mean and spread differences in ft, mph, rpm, degrees), are in [`results/M2.md`](results/M2.md). To reproduce it (cached CSVs from the M1 step):
 
 ```bash
 python scripts/train_generative.py data/raw/660271_2025-03-01_2025-11-30.csv
@@ -59,7 +60,7 @@ python scripts/train_generative.py data/raw/519242_2026-03-01_2026-11-30.csv
 python scripts/train_generative.py data/raw/694819_2026-03-01_2026-11-30.csv
 ```
 
-This writes `results/m2/<pitcher>/` (summary, KS and context CSVs, one PNG per pitch type).
+This writes `results/m2/<pitcher>/` (summary, KS, context and physical-units CSVs, one PNG per pitch type).
 
 ## Files
 
