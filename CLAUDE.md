@@ -41,10 +41,12 @@ by the same pitcher. Each milestone measures part of that.
   `pfx_z`, `release_spin_rate`, `spin_axis`, `balls`, `strikes`, `outs_when_up`, `inning`,
   `stand`, `at_bat_number`, `pitch_number`, `game_pk`, `game_date`, `arm_angle` (if present).
 - **Coordinates:** feet; x toward the catcher's right, y from the plate toward the pitcher, z up.
-  Statcast's `plate_x/plate_z` are at the front of the plate (y = 17/12 ft).
-- **Caveat:** public `spin_axis` is *inferred from movement*. Savant's spin-direction / active-spin
-  leaderboards give the *observed* axis per pitcher and pitch type. The gap between the two is the
-  seam-shifted-wake signal (Milestone 3).
+  In the 2026 CSVs, `plate_x/plate_z` are at mid-plate (y ≈ 0.71 ft), not the front (y = 17/12 ft);
+  M1 scores against the 9-parameter fit evaluated at y = 17/12 instead.
+- **Caveat:** public `spin_axis` is *Hawk-Eye-measured*, not inferred from movement (checked
+  2026-10-30 against Savant's spin-direction leaderboard: within ~7° of "measured", 4–33° off
+  "inferred", for 15 pitch types). The gap between it and the axis implied by movement is the
+  seam-shifted-wake signal (Milestone 3), available per pitch.
 - Cache raw downloads in `data/raw/` (gitignored). Never re-download what's cached.
 - Video (Milestone 5) is for personal research only: don't commit or redistribute clips.
 
