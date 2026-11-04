@@ -7,6 +7,8 @@ of it per pitch type, but it still misses some types by inches in a consistent d
 
 Target: for each pitch, the constant extra acceleration (x, z, ft/s^2) that makes the
 calibrated M1 flight land on the Statcast fit crossing. It is "what's left after M1".
+Caveat: release_state extrapolates Statcast's fit back to release and is off by ~0.1-0.25
+ft/s, so the target also holds that start-state artefact; a learned push is not pure seam force.
 
 Inputs are release-only (spin axis, spin rate, speed, release point, extension). Predicting
 movement from movement (ax, az, pfx, plate_*) would be circular, so seam_design never reads

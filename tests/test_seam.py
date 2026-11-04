@@ -20,24 +20,37 @@ def _data(n, seed, push):
 def const():
     df = _data(300, 1, lambda c, a: (4.0, -3.0))
     target = push_target(df, df["true_cd"].to_numpy(), df["true_spin_eff"].to_numpy())
-    return df, target
+    # Same seed with zero push: make's rng draws don't depend on push, so these are the same
+    # pitches. Its target is pure release-state artefact (see seam.py), differenced out below.
+    zero = _data(300, 1, None)
+    base = push_target(zero, zero["true_cd"].to_numpy(), zero["true_spin_eff"].to_numpy())
+    return df, target, base
 
 
 def test_push_target_closes_the_miss(const):
     """SYNTHETIC: re-simulating with the target leaves ~no miss at the fit crossing."""
-    df, target = const
+    df, target, base = const
     fit_pos, fit_vel, _ = fit_plate_crossing(df)
     dx, dz, _ = residuals(df, fit_pos, fit_vel, df["true_cd"].to_numpy(),
                           df["true_spin_eff"].to_numpy(), "release", extra_acc=target)
     assert np.median(np.hypot(dx, dz)) < 0.05
-    # Not atol 0.2: the target closes the miss to Statcast's *fitted* crossing, and that
-    # 9-parameter constant-acceleration fit sits ~0.3-0.6 in off the true path, i.e. ~0.3 ft/s^2.
-    assert np.allclose(target.mean(axis=0), [4.0, -3.0], atol=0.4)
+    _check_recovers(df, target, base)
+
+
+def _check_recovers(df, target, base):
+    """Mean of (target - zero-push target) is (4, -3) overall and within each pitch type."""
+    diff = target - base
+    assert np.allclose(diff.mean(axis=0), [4.0, -3.0], atol=0.2)
+    for code in df["pitch_type"].unique():
+        m = (df["pitch_type"] == code).to_numpy()
+        assert np.allclose(diff[m].mean(axis=0), [4.0, -3.0], atol=0.2), code
 
 
 def test_fixed_recovers_constant_push(const):
-    """SYNTHETIC: the column means of the target are the constant push (same fit-error slack)."""
-    assert np.allclose(fit_fixed(const[1]).mean, [4.0, -3.0], atol=0.4)
+    """SYNTHETIC: fit_fixed's mean tracks the constant push once the artefact is differenced out."""
+    df, target, base = const
+    _check_recovers(df, target, base)
+    assert np.allclose(fit_fixed(target).mean - fit_fixed(base).mean, [4.0, -3.0], atol=0.2)
 
 
 def test_per_pitch_recovers_axis_slope():
