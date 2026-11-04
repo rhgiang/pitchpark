@@ -34,19 +34,22 @@ def split_by_game(df: pd.DataFrame, train_frac: float = 0.7,
 
 
 def run_sim(df: pd.DataFrame, cd: float, eff: float,
-            start: Literal["y50", "release"]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            start: Literal["y50", "release"], extra_acc: np.ndarray | None = None
+            ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Simulate each row to the front of the plate from the y = 50 ft or release state.
 
-    df must have a 'rho' column (lb/ft^3). Returns (pos, vel, flight time) like simulate_batch.
+    df must have a 'rho' column (lb/ft^3). extra_acc is an optional (N, 2) constant push
+    in ft/s^2. Returns (pos, vel, flight time) like simulate_batch.
     """
     pos0, vel0 = release_state(df) if start == "release" else initial_state(df)
     return simulate_batch(pos0, vel0, df["release_spin_rate"].to_numpy(),
-                          df["spin_axis"].to_numpy(), cd, eff, rho=df["rho"].to_numpy())
+                          df["spin_axis"].to_numpy(), cd, eff, rho=df["rho"].to_numpy(),
+                          extra_acc=extra_acc)
 
 
 def residuals(df: pd.DataFrame, fit_pos: np.ndarray, fit_vel: np.ndarray, cd: float,
-              eff: float, start: Literal["y50", "release"]
-              ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+              eff: float, start: Literal["y50", "release"],
+              extra_acc: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Simulated minus Statcast-fit plate crossing: dx, dz (inches) and speed (mph).
 
     The target is the fit's own crossing at FRONT_OF_PLATE_Y (from fit_plate_crossing),
@@ -55,7 +58,7 @@ def residuals(df: pd.DataFrame, fit_pos: np.ndarray, fit_vel: np.ndarray, cd: fl
     17/12 simulation against it adds a built-in ~1 in error. The fit crossing is the same
     in every season. validate.py's check [0] still compares the two, as an alarm.
     """
-    pos, vel, _ = run_sim(df, cd, eff, start)
+    pos, vel, _ = run_sim(df, cd, eff, start, extra_acc)
     dx = (pos[:, 0] - fit_pos[:, 0]) * 12
     dz = (pos[:, 2] - fit_pos[:, 2]) * 12
     dv = (np.linalg.norm(vel, axis=1) - np.linalg.norm(fit_vel, axis=1)) * FT_PER_S_TO_MPH

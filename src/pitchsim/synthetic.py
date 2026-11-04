@@ -11,6 +11,7 @@ if it doesn't, the bug is in our code, not in the data.
 These are NOT real pitches. Use scripts/fetch.py for real ones.
 """
 
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -41,7 +42,10 @@ def statcast_fit(t, pos):
     return v0, a
 
 
-def make(n=1500, seed=0):
+def make(n=1500, seed=0,
+         push: Callable[[str, float], tuple[float, float]] | None = None):
+    """push maps (pitch_type_code, spin_axis_deg) to a known extra (ax, az) in ft/s^2,
+    standing in for a seam-shifted-wake push. SYNTHETIC: lets M3 check it recovers it."""
     rng = np.random.default_rng(seed)
     names = [a[0] for a in ARSENAL]
     shares = np.array([a[6] for a in ARSENAL])
@@ -60,7 +64,8 @@ def make(n=1500, seed=0):
         vel = speed * d / np.linalg.norm(d)
 
         p = PhysicsParams(cd=TRUE_CD, spin_efficiency=eff)
-        tr = simulate(release, vel, spin, sa, p)
+        px, pz = (0.0, 0.0) if push is None else push(code, sa % 360)
+        tr = simulate(release, vel, spin, sa, p, extra_acc=np.array([px, pz]))
         v0, a = statcast_fit(tr["t"], tr["pos"])
         end = tr["pos"][-1]
         rows.append({
@@ -75,6 +80,7 @@ def make(n=1500, seed=0):
             "plate_x": end[0], "plate_z": end[2],
             "release_spin_rate": spin, "spin_axis": sa % 360,
             "true_cd": TRUE_CD, "true_spin_eff": eff,
+            "true_push_x": px, "true_push_z": pz,
         })
     return pd.DataFrame(rows)
 

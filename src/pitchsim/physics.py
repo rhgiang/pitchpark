@@ -14,7 +14,8 @@ Model follows Alan Nathan's standard baseball trajectory model:
     CL       = S / (0.4 + 2.32 S),  S = r * w_active / |v|   (Nathan / Sawicki fit)
 
 What this model deliberately does NOT include yet (good next steps):
-    - seam-shifted wake (movement not explained by spin)
+    - a physical model of the seam-shifted wake; only an optional constant extra
+      acceleration (`extra_acc`) that M3 fits per pitch
     - spin decay during flight (small over ~0.4 s)
     - Cd depending on speed/spin
 """
@@ -100,8 +101,13 @@ def acceleration(vel: np.ndarray, spin_rpm: float, w_hat: np.ndarray,
 
 def simulate(pos0, vel0, spin_rpm: float, spin_axis_deg: float,
              p: PhysicsParams | None = None, y_stop: float = FRONT_OF_PLATE_Y,
-             dt: float = 1e-3) -> dict:
+             dt: float = 1e-3, extra_acc: np.ndarray | None = None) -> dict:
     """Integrate a pitch with RK4 until it reaches y_stop.
+
+    extra_acc: optional constant (x, z) acceleration in ft/s^2 added at every stage.
+    It stands in for the seam-shifted-wake push (Smith; Driveline). Statcast's
+    9-parameter fit is itself constant-acceleration, so a constant extra term is the
+    most detail the data can support.
 
     Returns dict with arrays t, pos (N x 3), vel (N x 3); the final point is
     interpolated to land exactly on y_stop.
@@ -113,8 +119,10 @@ def simulate(pos0, vel0, spin_rpm: float, spin_axis_deg: float,
     t = 0.0
     ts, ps, vs = [t], [pos.copy()], [vel.copy()]
 
+    extra = np.zeros(3) if extra_acc is None else np.array([extra_acc[0], 0.0, extra_acc[1]])
+
     def f(v):
-        return acceleration(v, spin_rpm, w_hat, p)
+        return acceleration(v, spin_rpm, w_hat, p) + extra
 
     while pos[1] > y_stop:
         # RK4 on (pos, vel); acceleration depends only on velocity
@@ -142,12 +150,14 @@ def simulate(pos0, vel0, spin_rpm: float, spin_axis_deg: float,
 
 def simulate_batch(pos0, vel0, spin_rpm, spin_axis_deg, cd, spin_efficiency,
                    rho: float | np.ndarray | None = None,
-                   y_stop: float = FRONT_OF_PLATE_Y, dt: float = 1e-3):
+                   y_stop: float = FRONT_OF_PLATE_Y, dt: float = 1e-3,
+                   extra_acc: np.ndarray | None = None):
     """Vectorized version of `simulate` for many pitches at once.
 
     All array arguments have length N (cd / spin_efficiency / rho may be scalars).
     rho can vary per pitch: each game's ballpark and temperature set its own air
     density (Coors Field air is ~17% thinner than sea level).
+    extra_acc: optional (N, 2) constant (x, z) acceleration in ft/s^2 (see `simulate`).
     Returns (pos_at_plate (N x 3), vel_at_plate (N x 3), flight_time (N,)).
     Used for validation and for fitting Cd / spin efficiency, where we need
     thousands of simulations per optimizer step.
@@ -166,6 +176,9 @@ def simulate_batch(pos0, vel0, spin_rpm, spin_axis_deg, cd, spin_efficiency,
     w_hat = np.stack([-mz, np.zeros(n), mx], axis=1)
     w_active = spin * eff * 2 * np.pi / 60
     gvec = np.array([0.0, 0.0, -G])
+    extra = np.zeros((n, 3))
+    if extra_acc is not None:
+        extra[:, [0, 2]] = extra_acc
 
     def f(v, m):
         # m: boolean mask of pitches still in flight
@@ -173,7 +186,7 @@ def simulate_batch(pos0, vel0, spin_rpm, spin_axis_deg, cd, spin_efficiency,
         s = BALL_RADIUS_FT * w_active[m][:, None] / speed
         cl = lift_coefficient(s)
         v_hat = v / speed
-        return (gvec - k[m][:, None] * cd[m][:, None] * speed * v
+        return (gvec + extra[m] - k[m][:, None] * cd[m][:, None] * speed * v
                 + k[m][:, None] * cl * speed ** 2 * np.cross(w_hat[m], v_hat))
 
     out_pos = np.full((n, 3), np.nan)
