@@ -181,9 +181,11 @@ def paired_margin(model_aucs: np.ndarray, floor_aucs: np.ndarray) -> tuple[float
     The margin is 2 standard errors of the gap over the draws, so a noisy pitch type (few
     held-out pitches) gets a wider margin and a steady one a tight margin. Floor of MIN_MARGIN:
     the draw spread misses part of the held-out sample's noise (the held-out set is the same in
-    every draw), so a tiny spread must not mean a tiny tolerance.
+    every draw), so a tiny spread must not mean a tiny tolerance. Any NaN AUC -> (nan, nan).
     """
     gap = np.asarray(model_aucs, dtype=float) - np.asarray(floor_aucs, dtype=float)
+    if np.isnan(gap).any():
+        return float("nan"), float("nan")
     se = gap.std(ddof=1) / np.sqrt(len(gap))
     return float(gap.mean()), float(max(MIN_MARGIN, 2 * se))
 
