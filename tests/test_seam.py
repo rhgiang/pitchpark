@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pytest
 
 from pitchsim.physics import air_density
@@ -89,3 +90,72 @@ def test_few_games_still_fits():
     assert fit_per_pitch(df, target).kind == "per_pitch"
     df["game_pk"] = 7
     assert fit_per_pitch(df, target).kind == "fixed_fallback"
+
+
+# ---- evaluation (Task 4) ----
+from pitchsim.seam import evaluate_pitcher, median_drop_ci  # noqa: E402
+
+SUMMARY_COLS = ["pitch_type", "pitch_name", "n_train", "n_test", "n_games_train", "cd", "spin_eff",
+                "err_m1_in", "err_fixed_in", "err_per_pitch_in", "bias_x_m1_in", "bias_z_m1_in",
+                "bias_x_m3_in", "bias_z_m3_in", "drop_in", "drop_lo_in", "drop_hi_in",
+                "pp_vs_fixed_in", "pp_vs_fixed_lo_in", "pp_vs_fixed_hi_in", "push_x_fts2",
+                "push_z_fts2", "axis_gap_deg", "alpha", "model_kind", "graded", "pass"]
+_CH_PUSH = lambda c, a: (5.0, -4.0) if c == "CH" else (0.0, 0.0)
+
+
+def test_median_drop_ci_hand_values():
+    games = np.repeat(np.arange(10), 4)
+    assert median_drop_ci(np.full(40, 5.0), np.full(40, 3.0), games) == (2, 2, 2)
+    x = np.arange(40.0)
+    assert median_drop_ci(x, x, games) == (0, 0, 0)
+
+
+@pytest.fixture(scope="module")
+def evaluated():
+    df = make(n=1500, seed=0, push=_CH_PUSH)
+    rho = np.full(len(df), air_density())
+    return evaluate_pitcher(df, rho)
+
+
+def test_evaluate_on_synthetic_push(evaluated):
+    summary, _, _ = evaluated
+    assert list(summary.columns) == SUMMARY_COLS
+    ch = summary[summary.pitch_type == "CH"].iloc[0]
+    assert ch["err_per_pitch_in"] < ch["err_m1_in"]
+    assert ch["pass"] is True or ch["pass"] == True  # noqa: E712
+
+
+def test_evaluate_no_push_no_harm():
+    df = make(n=1500, seed=0)
+    summary, _, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
+    g = summary[summary.graded]
+    assert len(g) > 0
+    assert (g.err_per_pitch_in <= g.err_m1_in + 0.3).all()
+
+
+def test_ungraded_type_never_passes():
+    df = make(n=1500, seed=0, push=_CH_PUSH)
+    ch = np.flatnonzero(df.pitch_type == "CH")
+    df = df.drop(index=ch[70:]).reset_index(drop=True)
+    summary, _, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
+    row = summary[summary.pitch_type == "CH"]
+    if len(row):  # may be skipped outright if too few training pitches
+        assert not row.iloc[0]["graded"]
+        assert row.iloc[0]["pass"] is pd.NA
+
+
+def test_nan_feature_rows_dropped():
+    df = make(n=600, seed=0)
+    df.loc[df.index[:10], "release_extension"] = np.nan
+    _, _, skipped = evaluate_pitcher(df, np.full(len(df), air_density()))
+    assert any("10" in s and "release_extension" in s for s in skipped)
+
+
+def test_knock_on_shape(evaluated):
+    summary, knock, _ = evaluated
+    assert list(knock.columns) == ["pitch_type", "variant", "component", "ks_stat", "p_value",
+                                   "mean_diff_in"]
+    for t in summary.pitch_type:
+        sub = knock[knock.pitch_type == t]
+        assert set(zip(sub.variant, sub.component)) == {(v, c) for v in ("m1", "m1+m3")
+                                                         for c in ("x", "z")}

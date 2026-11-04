@@ -27,8 +27,15 @@ from sklearn.model_selection import GridSearchCV, GroupKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from pitchsim.statcast import fit_plate_crossing
-from pitchsim.validation import run_sim
+from scipy.stats import ks_2samp
+
+from pitchsim.generative import (MIN_TEST, MIN_TRAIN, add_release_angles, circular_mean_deg,
+                                 fit_pitch_type, generated_release_state, movement_in, sample)
+from pitchsim.physics import simulate_batch
+from pitchsim.statcast import (_time_to_y, fit_plate_crossing, observed_break_direction_deg,
+                               release_state)
+from pitchsim.validation import (MAX_TRAIN, angle_diff, calibrate, residuals, run_sim,
+                                 split_by_game)
 
 SEAM_FEATURES = ["sin_axis", "cos_axis", "release_spin_rate", "release_speed",
                  "release_pos_x", "release_pos_z", "release_extension"]
@@ -98,3 +105,113 @@ def predict_push(model: SeamModel, df: pd.DataFrame) -> np.ndarray:
     if model.pipeline is None:
         return np.tile(model.mean, (len(df), 1))
     return model.pipeline.predict(seam_design(df))
+
+
+N_BOOT = 1000
+_RAW_FEATURES = ["spin_axis"] + _PLAIN
+
+
+def median_drop_ci(before_in: np.ndarray, after_in: np.ndarray, games: np.ndarray,
+                   seed: int = 0, n_boot: int = N_BOOT) -> tuple[float, float, float]:
+    """(median(before) - median(after), 2.5%, 97.5%), bootstrapping held-out GAMES.
+
+    Pitches in a game share air and mound, the same reason the split is by game, so the
+    resampling unit is the game: a drawn game brings all its pitches, paired before/after.
+    """
+    before, after, games = (np.asarray(a) for a in (before_in, after_in, games))
+    groups = [np.flatnonzero(games == g) for g in np.unique(games)]
+    rng = np.random.default_rng(seed)
+    drops = np.empty(n_boot)
+    for b in range(n_boot):
+        idx = np.concatenate([groups[i] for i in rng.integers(len(groups), size=len(groups))])
+        drops[b] = np.median(before[idx]) - np.median(after[idx])
+    lo, hi = np.percentile(drops, [2.5, 97.5])
+    return float(np.median(before) - np.median(after)), float(lo), float(hi)
+
+
+def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
+                     ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+    """Held-out score of M1, M1 + fixed push, M1 + per-pitch push, per pitch type.
+
+    rho is air density (lb/ft^3) per row of df. Returns (summary, knock_on, skipped).
+    summary: median held-out miss (in) for each variant on the same pitches, M3 biases, game
+    bootstrap intervals for the drop (M1 -> per-pitch) and for per-pitch vs fixed, the training
+    push and spin-axis gap, and the pass rule (graded types only: drop > 0 and its interval
+    above 0). knock_on (reported, not graded): M2-generated pitches flown with M1 and with
+    M1 + per-pitch push, KS vs held-out Statcast movement.
+    """
+    df = add_release_angles(df.assign(rho=np.asarray(rho))).reset_index(drop=True)
+    skipped = []
+    for c in _RAW_FEATURES:
+        k = int(df[c].isna().sum())
+        if k:
+            skipped.append(f"dropped {k} rows with missing {c}")
+    df = df.dropna(subset=_RAW_FEATURES)
+    train_all, test_all = split_by_game(df)
+
+    rows, knock = [], []
+    for ptype, g in df.groupby("pitch_type"):
+        train = train_all[train_all["pitch_type"] == ptype]
+        test = test_all[test_all["pitch_type"] == ptype]
+        if len(train) < MIN_TRAIN:
+            skipped.append(f"{ptype} (n={len(g)}): fewer than {MIN_TRAIN} training pitches")
+            continue
+        if len(test) == 0:
+            skipped.append(f"{ptype} (n={len(g)}): no pitches in held-out games")
+            continue
+        # Calibrate exactly as M1/M2 (capped sample); the push is fitted on ALL training
+        # pitches with those Cd/eff.
+        cal = train.sample(MAX_TRAIN, random_state=seed) if len(train) > MAX_TRAIN else train
+        cd, eff = calibrate(cal, "release")
+        target = push_target(train, cd, eff)
+        fixed, per = fit_fixed(target), fit_per_pitch(train, target, seed)
+
+        fit_pos, fit_vel, t_s = fit_plate_crossing(test)
+        miss, bias = {}, {}
+        for name, acc in (("m1", None), ("fixed", predict_push(fixed, test)),
+                          ("pp", predict_push(per, test))):
+            dx, dz, _ = residuals(test, fit_pos, fit_vel, cd, eff, "release", extra_acc=acc)
+            miss[name], bias[name] = np.hypot(dx, dz), (dx.mean(), dz.mean())
+        games = test["game_pk"].to_numpy()
+        drop = median_drop_ci(miss["m1"], miss["pp"], games, seed)
+        vs_fixed = median_drop_ci(miss["fixed"], miss["pp"], games, seed)
+        graded = len(test) >= MIN_TEST
+        rows.append({
+            "pitch_type": ptype,
+            "pitch_name": g["pitch_name"].iloc[0] if "pitch_name" in g else ptype,
+            "n_train": len(train), "n_test": len(test),
+            "n_games_train": int(train["game_pk"].nunique()),  # fixed.n_games is 0 = unknown
+            "cd": cd, "spin_eff": eff,
+            "err_m1_in": np.median(miss["m1"]), "err_fixed_in": np.median(miss["fixed"]),
+            "err_per_pitch_in": np.median(miss["pp"]),
+            "bias_x_m1_in": bias["m1"][0], "bias_z_m1_in": bias["m1"][1],
+            "bias_x_m3_in": bias["pp"][0], "bias_z_m3_in": bias["pp"][1],
+            "drop_in": drop[0], "drop_lo_in": drop[1], "drop_hi_in": drop[2],
+            "pp_vs_fixed_in": vs_fixed[0], "pp_vs_fixed_lo_in": vs_fixed[1],
+            "pp_vs_fixed_hi_in": vs_fixed[2],
+            "push_x_fts2": fixed.mean[0], "push_z_fts2": fixed.mean[1],
+            "axis_gap_deg": circular_mean_deg(angle_diff(
+                train["spin_axis"].to_numpy(float), observed_break_direction_deg(train))),
+            "alpha": np.nan if per.alpha is None else per.alpha, "model_kind": per.kind,
+            "graded": graded,
+            "pass": bool(drop[0] > 0 and drop[1] > 0) if graded else pd.NA})
+
+        # M2 knock-on: generated pitches through M1 and M1 + per-pitch push vs Statcast movement
+        # (same cloud and formula as generative.evaluate_pitcher).
+        _, v_rel = release_state(test)
+        t_flight = t_s - _time_to_y(test["release_pos_y"].to_numpy(), test["vy0"].to_numpy(),
+                                    test["ay"].to_numpy())
+        stat = movement_in(v_rel, fit_vel, t_flight)
+        gen = sample(fit_pitch_type(train, mixture=False, seed=seed), 1000, seed)
+        pos_g, v_g = generated_release_state(gen)
+        for variant, acc in (("m1", None), ("m1+m3", predict_push(per, gen))):
+            _, vp, t = simulate_batch(pos_g, v_g, gen["release_spin_rate"].to_numpy(),
+                                      gen["spin_axis"].to_numpy(), cd, eff,
+                                      rho=float(train["rho"].median()), extra_acc=acc)
+            for comp, sim, ref in zip("xz", movement_in(v_g, vp, t), stat):
+                r = ks_2samp(sim, ref)
+                knock.append({"pitch_type": ptype, "variant": variant, "component": comp,
+                              "ks_stat": r.statistic, "p_value": r.pvalue,
+                              "mean_diff_in": float(sim.mean() - ref.mean())})
+    cols = ["pitch_type", "variant", "component", "ks_stat", "p_value", "mean_diff_in"]
+    return pd.DataFrame(rows), pd.DataFrame(knock, columns=cols), skipped
