@@ -7,7 +7,7 @@ from pitchsim.seam import (FORBIDDEN, SEAM_FEATURES, fit_fixed, fit_per_pitch,
                            predict_push, push_target, seam_design)
 from pitchsim.statcast import fit_plate_crossing
 from pitchsim.synthetic import make
-from pitchsim.validation import residuals
+from pitchsim.validation import calibrate, residuals
 
 
 def _data(n, seed, push):
@@ -101,8 +101,9 @@ SUMMARY_COLS = ["pitch_type", "pitch_name", "n_train", "n_test", "n_games_test",
                 "bias_x_m3_in", "bias_z_m3_in", "drop_in", "drop_lo_in", "drop_hi_in",
                 "pp_vs_fixed_in", "pp_vs_fixed_lo_in", "pp_vs_fixed_hi_in", "push_x_fts2",
                 "push_z_fts2", "axis_gap_deg", "alpha", "model_kind", "graded", "pass"]
-# Off-axis on purpose: a push along the spin force (e.g. (5, -4) here) is absorbed whole by M1's
-# spin-efficiency calibration, leaving no miss for M3. A seam push is what spin can't explain.
+# Off-axis on purpose: a push on the spin-force line (e.g. (5, -4) here, opposed to the force) is
+# absorbed by M1's spin-efficiency calibration, as far as efficiency can move inside its 0.2-1.0
+# bounds, leaving almost no miss for M3. An off-line push tests what spin can't explain.
 _CH_PUSH = lambda c, a: (4.0, 5.0) if c == "CH" else (0.0, 0.0)
 
 
@@ -128,7 +129,8 @@ def test_evaluate_on_synthetic_push(evaluated):
     assert ch["pass"] is True or ch["pass"] == True  # noqa: E712
     cloud = clouds["CH"]
     assert len(cloud) == ch["n_test"]
-    assert np.median(np.hypot(cloud.dx_pp_in, cloud.dz_pp_in)) == pytest.approx(ch["err_per_pitch_in"])
+    miss = np.hypot(cloud.dx_pp_in, cloud.dz_pp_in)
+    assert np.median(miss) == pytest.approx(ch["err_per_pitch_in"])
 
 
 def test_no_seam_types_do_not_pass(evaluated):
@@ -142,9 +144,20 @@ def test_no_seam_types_do_not_pass(evaluated):
 def test_grade_rule():
     assert grade(100, 10, (MIN_DROP_IN, 0.1, 1.0)) == (True, True)
     assert grade(100, 10, (MIN_DROP_IN - 0.01, 0.1, 1.0)) == (True, False)  # too small
-    assert grade(100, 10, (2.0, -0.1, 3.0)) == (True, False)  # interval touches zero
+    assert grade(100, 10, (2.0, -0.1, 3.0)) == (True, False)  # interval crosses zero
+    assert grade(100, 10, (2.0, 0.0, 3.0)) == (True, False)  # lower end exactly 0 isn't above it
+    assert grade(30, 10, (2.0, 1.0, 3.0)) == (True, True)  # exactly the minimum pitches
+    assert grade(100, 2, (2.0, 1.0, 3.0)) == (True, True)  # exactly the minimum games
     assert grade(29, 10, (2.0, 1.0, 3.0)) == (False, pd.NA)  # too few pitches
     assert grade(100, 1, (2.0, 2.0, 2.0)) == (False, pd.NA)  # one game: no real interval
+
+
+def test_eff_min_lowers_the_bound():
+    """SYNTHETIC: a big push opposing CH's spin force pins efficiency at 0.2 until it moves."""
+    df = _data(150, 0, lambda c, a: (10.0, -8.0) if c == "CH" else (0.0, 0.0))
+    ch = df[df.pitch_type == "CH"]
+    assert calibrate(ch, "release")[1] == pytest.approx(0.2)
+    assert calibrate(ch, "release", eff_min=0.01)[1] < 0.19
 
 
 def test_evaluate_no_push_no_harm():

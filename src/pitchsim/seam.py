@@ -1,9 +1,10 @@
 """Seam-shifted wake (Milestone 3): learn the push Magnus can't explain.
 
-The seams trip the boundary layer on one side of the ball, so the wake shifts and the ball
-gets an extra sideways/vertical force that Magnus + drag never model (Barton Smith's
-experiments; Driveline's seam-shifted-wake write-ups). M1's calibration absorbs the average
-of it per pitch type, but it still misses some types by inches in a consistent direction.
+In experiments the seams can trip the boundary layer on one side of the ball, shifting the wake
+and adding a sideways/vertical force that Magnus + drag don't model (Barton Smith's work;
+Driveline's seam-shifted-wake write-ups). That is the hypothesis, not something measured here:
+M1 still misses some types by inches in a consistent direction, and this module fits that miss
+whatever its cause (see results/M3.md).
 
 Target: for each pitch, the constant extra acceleration (x, z, ft/s^2) that makes the
 calibrated M1 flight land on the Statcast fit crossing. It is "what's left after M1".
@@ -146,15 +147,17 @@ def grade(n_test: int, n_games_test: int, drop: tuple[float, float, float]
     return True, bool(drop[0] >= MIN_DROP_IN and drop[1] > 0)
 
 
-def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
+def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0, eff_min: float = 0.2
                      ) -> tuple[pd.DataFrame, pd.DataFrame, list[str], dict[str, pd.DataFrame]]:
     """Held-out score of M1, M1 + fixed push, M1 + per-pitch push, per pitch type.
 
-    rho is air density (lb/ft^3) per row of df. Returns (summary, knock_on, skipped, clouds).
+    rho is air density (lb/ft^3) per row of df. eff_min is M1's lower efficiency bound (see
+    calibrate). Returns (summary, knock_on, skipped, clouds).
     summary: median held-out miss (in) for each variant on the same pitches, M3 biases, game
     bootstrap intervals for the drop (M1 -> per-pitch) and for per-pitch vs fixed, the training
-    push and spin-axis gap, and the pass rule (see grade). knock_on (reported, not graded): M2-generated pitches flown with M1 and with
-    M1 + per-pitch push, KS vs held-out Statcast movement.
+    push and spin-axis gap, and the pass rule (see grade). knock_on (reported, not graded):
+    M2-generated pitches flown with M1 and with M1 + per-pitch push, KS vs held-out Statcast
+    movement.
     clouds[pitch_type]: one row per held-out pitch, signed miss (in) for M1 only and for M1 +
     per-pitch push (dx_m1_in, dz_m1_in, dx_pp_in, dz_pp_in).
     """
@@ -180,7 +183,7 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
         # Calibrate exactly as M1/M2 (capped sample); the push is fitted on ALL training
         # pitches with those Cd/eff.
         cal = train.sample(MAX_TRAIN, random_state=seed) if len(train) > MAX_TRAIN else train
-        cd, eff = calibrate(cal, "release")
+        cd, eff = calibrate(cal, "release", eff_min)
         target = push_target(train, cd, eff)
         fixed, per = fit_fixed(target), fit_per_pitch(train, target, seed)
 

@@ -66,11 +66,12 @@ This writes `results/m2/<pitcher>/` (summary, KS, context and physical-units CSV
 
 A learned constant push added to M1's flight, for the movement spin can't explain, on five
 pitchers (the three above plus Cristopher Sánchez and Michael King, 2026). 16 of 17 graded pitch
-types pass (median held-out miss drops by at least 0.6 in, 95% interval above zero); the fail is
+types pass (median held-out miss drops by at least 0.6 in, 95% interval above zero) under M1's
+0.20 lower bound on spin efficiency, and 14 of 17 with that bound lowered; the reported fail is
 Misiorowski's four-seamer. Graded medians go from 2.03–8.26 in to 1.49–3.15 in. The data mostly
 shows a fixed habit per pitch type rather than a per-pitch effect, and the push isn't shown to be
-seam force: it also holds a release-state artefact, and it can't see any part of a seam push along
-the spin-force direction. The numbers and synthetic controls are in
+seam force: it also holds a release-state artefact, and M1's efficiency absorbs a push on the
+spin-force line as far as efficiency can move inside its 0.2–1.0 bounds. The numbers and synthetic controls are in
 [`results/M3.md`](results/M3.md). To reproduce it:
 
 ```bash
@@ -78,6 +79,7 @@ python scripts/fetch.py --id 650911 --start 2026-03-01 --end 2026-11-30
 python scripts/fetch.py --id 650633 --start 2026-03-01 --end 2026-11-30
 python scripts/train_seam.py data/raw/<pitcher>.csv   # each of the five CSVs
 python scripts/seam_controls.py                       # SYNTHETIC controls
+python scripts/seam_bound_check.py                    # real data, rows on the 0.20 bound
 ```
 
 This writes `results/m3/<pitcher>/` (summary and knock-on CSVs, one PNG per pitch type).
@@ -92,6 +94,7 @@ This writes `results/m3/<pitcher>/` (summary and knock-on CSVs, one PNG per pitc
 | `scripts/validate.py` | The experiment: data check → convention check → default physics → calibrated physics → bias. |
 | `src/pitchsim/seam.py`, `scripts/train_seam.py` | M3: learn the extra push per pitch type and per pitch, score it on held-out games. |
 | `scripts/seam_controls.py` | M3 controls on synthetic pitches: what the method finds when the truth is known. |
+| `scripts/seam_bound_check.py` | Reruns real pitch types on the 0.20 efficiency bound with it lowered. |
 | `src/pitchsim/synthetic.py` | Fake pitcher with known physics, for testing without the internet. |
 | `tests/` | Checks against known numbers: ~0.4 s flight, ~8% speed loss, realistic rise, Coors effect. |
 
@@ -126,8 +129,10 @@ This writes `results/m3/<pitcher>/` (summary and knock-on CSVs, one PNG per pitc
    wind or pressure, and roofed games use the reported (indoor) temperature.
 5. **Cd is constant.** In reality it depends on speed and spin.
 6. **M3's push is "what's left after M1", not measured seam force.** It includes a release-state
-   artefact (up to about 1 ft/s² on synthetic pitches), and M1's spin efficiency absorbs any seam
-   push along the spin force, so a small residual doesn't prove there's no seam effect.
+   artefact (up to about 1 ft/s² on synthetic pitches), and M1's spin efficiency absorbs a push on
+   the spin-force line as far as efficiency can move inside its 0.2–1.0 bounds, so a small residual
+   doesn't prove there's no seam effect. Where efficiency sits on the 0.20 bound, part of the push
+   is repairing M1 instead.
 
 ## References
 

@@ -7,7 +7,9 @@ Answers questions the real runs can't, and writes results/synthetic/m3_controls.
   no_push   What does M3 "find" when there is no seam force at all? (source of the 0.6 in floor)
   artefact  How wrong is release_state, and how big a push does that alone look like?
             Uses the true Cd and efficiency, so nothing but the start state is off.
-  along / off_axis  A planted CH push along the spin force vs off it: what can M3 see?
+  against / with / against_2x / off_axis  A planted CH push on the spin-force line, in either
+            sense, vs off it: what can M3 see? spin_dir_* is CH's spin-force direction (unit
+            vector in x, z) and cos_spin each planted push's cosine with it.
 """
 
 from pathlib import Path
@@ -19,14 +21,14 @@ import pitchsim.synthetic as syn
 from pitchsim.physics import air_density
 from pitchsim.seam import evaluate_pitcher, push_target
 from pitchsim.statcast import fit_plate_crossing, release_state
-from pitchsim.validation import residuals
+from pitchsim.validation import residuals, run_sim
 
 OUT = Path(__file__).resolve().parents[1] / "results" / "synthetic" / "m3_controls.csv"
 COLS = ["pitch_type", "n_test", "n_games_test", "spin_eff", "err_m1_in", "err_fixed_in",
         "err_per_pitch_in", "drop_in", "drop_lo_in", "drop_hi_in", "pp_vs_fixed_in",
-        "push_x_fts2", "push_z_fts2", "graded", "pass"]
-ALONG = lambda c, a: (5.0, -4.0) if c == "CH" else (0.0, 0.0)
-OFF_AXIS = lambda c, a: (4.0, 5.0) if c == "CH" else (0.0, 0.0)
+        "pp_vs_fixed_lo_in", "pp_vs_fixed_hi_in", "push_x_fts2", "push_z_fts2", "graded", "pass"]
+PLANTED = {"against": (5.0, -4.0), "with": (-5.0, 4.0), "against_2x": (10.0, -8.0),
+           "off_axis": (4.0, 5.0)}   # CH only, ft/s^2
 
 
 def make_recording_velocity() -> tuple[pd.DataFrame, np.ndarray]:
@@ -48,14 +50,27 @@ def make_recording_velocity() -> tuple[pd.DataFrame, np.ndarray]:
 def main():
     rho = air_density(70.0, 0.0)
     df, true_vel = make_recording_velocity()
-    parts = []
-    for name, frame in (("no_push", df), ("along", syn.make(n=1500, seed=0, push=ALONG)),
-                        ("off_axis", syn.make(n=1500, seed=0, push=OFF_AXIS))):
-        summary = evaluate_pitcher(frame, np.full(len(frame), rho))[0]
-        parts.append(summary[COLS].assign(control=name))
-
     df = df.assign(rho=rho)
     cd, eff = df["true_cd"].to_numpy(), df["true_spin_eff"].to_numpy()
+
+    # Spin-force direction: where spin moves a CH at the plate, compared with no spin at all.
+    ch = df[df["pitch_type"] == "CH"]
+    moved = (run_sim(ch, syn.TRUE_CD, ch["true_spin_eff"].to_numpy(), "release")[0]
+             - run_sim(ch, syn.TRUE_CD, 0.0, "release")[0])[:, [0, 2]].mean(axis=0)
+    spin_dir = moved / np.linalg.norm(moved)
+
+    parts = []
+    for name, planted in (("no_push", None), *PLANTED.items()):
+        frame = df if planted is None else syn.make(
+            n=1500, seed=0, push=lambda c, a, p=planted: p if c == "CH" else (0.0, 0.0))
+        summary = evaluate_pitcher(frame, np.full(len(frame), rho))[0]
+        part = summary[COLS].assign(control=name)
+        if planted is not None:
+            is_ch = part["pitch_type"] == "CH"
+            part.loc[is_ch, "planted_x_fts2"], part.loc[is_ch, "planted_z_fts2"] = planted
+            part.loc[is_ch, "cos_spin"] = np.dot(planted, spin_dir) / np.linalg.norm(planted)
+        parts.append(part)
+
     vel_err = np.abs(release_state(df)[1] - true_vel)
     fit_pos, fit_vel, _ = fit_plate_crossing(df)
     dx, dz, _ = residuals(df, fit_pos, fit_vel, cd, eff, "release")
@@ -69,7 +84,8 @@ def main():
     parts.append(pd.DataFrame([{
         "pitch_type": "ALL", "control": "artefact", "floor_miss_in": np.median(miss),
         "vel_err_x_fts": np.median(vel_err[:, 0]), "vel_err_y_fts": np.median(vel_err[:, 1]),
-        "vel_err_z_fts": np.median(vel_err[:, 2])}]))
+        "vel_err_z_fts": np.median(vel_err[:, 2]),
+        "spin_dir_x": spin_dir[0], "spin_dir_z": spin_dir[1]}]))
     out = pd.concat(parts, ignore_index=True)
 
     OUT.parent.mkdir(parents=True, exist_ok=True)

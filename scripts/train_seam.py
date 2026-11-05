@@ -1,5 +1,5 @@
 """
-M3: fit and score the seam push (the part of a pitch's movement M1's spin can't explain).
+M3: fit and score the extra push (the part of a pitch's movement M1's spin can't explain).
 
     python scripts/train_seam.py data/raw/<pitcher>.csv
     python scripts/train_seam.py data/synthetic.csv --no-weather
