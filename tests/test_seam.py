@@ -102,7 +102,7 @@ SUMMARY_COLS = ["pitch_type", "pitch_name", "n_train", "n_test", "n_games_test",
                 "pp_vs_fixed_in", "pp_vs_fixed_lo_in", "pp_vs_fixed_hi_in", "push_x_fts2",
                 "push_z_fts2", "axis_gap_deg", "alpha", "model_kind", "graded", "pass"]
 # Off-axis on purpose: a push on the spin-force line (e.g. (5, -4) here, opposed to the force) is
-# absorbed by M1's spin-efficiency calibration, as far as efficiency can move inside its 0.2-1.0
+# absorbed by M1's spin-efficiency calibration, as far as efficiency can move inside its 0.01-1.0
 # bounds, leaving almost no miss for M3. An off-line push tests what spin can't explain.
 _CH_PUSH = lambda c, a: (4.0, 5.0) if c == "CH" else (0.0, 0.0)
 
@@ -153,11 +153,12 @@ def test_grade_rule():
 
 
 def test_eff_min_lowers_the_bound():
-    """SYNTHETIC: a big push opposing CH's spin force pins efficiency at 0.2 until it moves."""
+    """SYNTHETIC: a big push opposing CH's spin force pins efficiency at an 0.2 bound, not the
+    default."""
     df = _data(150, 0, lambda c, a: (10.0, -8.0) if c == "CH" else (0.0, 0.0))
     ch = df[df.pitch_type == "CH"]
-    assert calibrate(ch, "release")[1] == pytest.approx(0.2)
-    assert calibrate(ch, "release", eff_min=0.01)[1] < 0.19
+    assert calibrate(ch, "release", eff_min=0.2)[1] == pytest.approx(0.2)
+    assert calibrate(ch, "release")[1] < 0.19
 
 
 def test_evaluate_no_push_no_harm():

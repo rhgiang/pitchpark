@@ -52,6 +52,9 @@ VENUE_ELEVATION_FT = {
     4169: ("loanDepot park", 10),
     4705: ("Truist Park", 1001),
     5325: ("Globe Life Field", 545),
+    # Mexico City Series. 7,349 ft per FanGraphs (blogs.fangraphs.com/mexico-city-series-provided-
+    # an-elevated-run-and-entertainment-environment) and Arizona Sports; one article gives 7,320.
+    5340: ("Estadio Alfredo Harp Helu", 7349),
 }
 
 

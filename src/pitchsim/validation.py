@@ -66,11 +66,11 @@ def residuals(df: pd.DataFrame, fit_pos: np.ndarray, fit_vel: np.ndarray, cd: fl
 
 
 def calibrate(train: pd.DataFrame, start: Literal["y50", "release"],
-              eff_min: float = 0.2) -> np.ndarray:
+              eff_min: float = 0.01) -> np.ndarray:
     """Least-squares fit of [Cd, spin efficiency] on training pitches.
 
-    eff_min is efficiency's lower bound. Only scripts/seam_bound_check.py changes it, to see
-    what the 0.2 bound does to M3's numbers.
+    eff_min is efficiency's lower bound. Only scripts/seam_bound_check.py changes it, to compare
+    with the old 0.20 bound.
     """
     fit_pos, fit_vel, _ = fit_plate_crossing(train)
 
@@ -81,9 +81,9 @@ def calibrate(train: pd.DataFrame, start: Literal["y50", "release"],
         return np.concatenate([dx, dz, dv])
 
     # Bounds: Cd 0.15-0.6 brackets every published baseball drag value with room to spare.
-    # Efficiency 0.2-1.0: 1.0 is all spin transverse, and 0.2 keeps gyro-heavy pitches from
-    # collapsing to zero spin. On real data 0.20 is hit (4 of 15 types), so for those the
-    # optimizer wanted <= 0.20.
+    # Efficiency 0.01-1.0: 1.0 is all spin transverse, and a positive floor keeps a share of
+    # spin a share. The floor was 0.20 until 2026-11-04, but that forced excess spin force on
+    # some sliders and cutters; their fitted values land at about 0.07-0.15 on real data.
     res = least_squares(resid, x0=[0.33, 0.9], bounds=([0.15, eff_min], [0.6, 1.0]),
                         diff_step=1e-3)
     return res.x

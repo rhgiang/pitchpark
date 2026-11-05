@@ -147,7 +147,7 @@ def grade(n_test: int, n_games_test: int, drop: tuple[float, float, float]
     return True, bool(drop[0] >= MIN_DROP_IN and drop[1] > 0)
 
 
-def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0, eff_min: float = 0.2
+def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0, eff_min: float = 0.01
                      ) -> tuple[pd.DataFrame, pd.DataFrame, list[str], dict[str, pd.DataFrame]]:
     """Held-out score of M1, M1 + fixed push, M1 + per-pitch push, per pitch type.
 
