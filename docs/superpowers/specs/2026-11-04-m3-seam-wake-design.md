@@ -67,11 +67,14 @@ comments with references. Small steps, Ryan's OK between steps.
 - **Is the drop real:** a paired bootstrap interval on the per-pitch improvement
   (M1 miss − M3 miss on the same held-out pitches). *(Claude's call)*
 - **Pass rule (Ryan, 2026-11-04):** a graded pitch type passes if the median held-out
-  miss drops and the 95% paired bootstrap interval on the improvement is above zero
-  (CLAUDE.md: "shrinks measurably"). The fastball-level and 1–2 in targets are reported
+  miss drops by at least 0.6 in and the 95% paired bootstrap interval on the improvement
+  is above zero (CLAUDE.md: "shrinks measurably"). The 0.6 in floor is the largest drop
+  seen on a synthetic pitch type with no seam force, where the push only removes a
+  constant M1 offset. The fastball-level and 1–2 in targets are reported
   as goals beside it; they don't decide the pass.
 - **Grading minimum:** pitch types with < 30 held-out pitches are fitted and reported but
-  marked too few to grade (M1/M2's rule). Ohtani's sweeper (27), splitter (7), sinker (5)
+  marked too few to grade (M1/M2's rule), and so are types with one held-out game, where
+  the interval collapses to a point. Held-out game counts are reported. Ohtani's sweeper (27), splitter (7), sinker (5)
   fall under this.
 - **Per-pitch vs fixed:** per pitch type, is the per-pitch model's held-out miss lower
   than the fixed push's, with the same paired bootstrap.

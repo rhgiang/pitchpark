@@ -93,14 +93,17 @@ def test_few_games_still_fits():
 
 
 # ---- evaluation (Task 4) ----
-from pitchsim.seam import evaluate_pitcher, median_drop_ci  # noqa: E402
+from pitchsim.seam import MIN_DROP_IN, evaluate_pitcher, grade, median_drop_ci  # noqa: E402
 
-SUMMARY_COLS = ["pitch_type", "pitch_name", "n_train", "n_test", "n_games_train", "cd", "spin_eff",
+SUMMARY_COLS = ["pitch_type", "pitch_name", "n_train", "n_test", "n_games_test",
+                "n_games_train", "cd", "spin_eff",
                 "err_m1_in", "err_fixed_in", "err_per_pitch_in", "bias_x_m1_in", "bias_z_m1_in",
                 "bias_x_m3_in", "bias_z_m3_in", "drop_in", "drop_lo_in", "drop_hi_in",
                 "pp_vs_fixed_in", "pp_vs_fixed_lo_in", "pp_vs_fixed_hi_in", "push_x_fts2",
                 "push_z_fts2", "axis_gap_deg", "alpha", "model_kind", "graded", "pass"]
-_CH_PUSH = lambda c, a: (5.0, -4.0) if c == "CH" else (0.0, 0.0)
+# Off-axis on purpose: a push along the spin force (e.g. (5, -4) here) is absorbed whole by M1's
+# spin-efficiency calibration, leaving no miss for M3. A seam push is what spin can't explain.
+_CH_PUSH = lambda c, a: (4.0, 5.0) if c == "CH" else (0.0, 0.0)
 
 
 def test_median_drop_ci_hand_values():
@@ -123,6 +126,22 @@ def test_evaluate_on_synthetic_push(evaluated):
     ch = summary[summary.pitch_type == "CH"].iloc[0]
     assert ch["err_per_pitch_in"] < ch["err_m1_in"]
     assert ch["pass"] is True or ch["pass"] == True  # noqa: E712
+
+
+def test_no_seam_types_do_not_pass(evaluated):
+    """Synthetic: only CH has a seam push, so the constant M1 offset alone must not pass."""
+    summary, _, _ = evaluated
+    others = summary[(summary.pitch_type != "CH") & summary.graded]
+    assert len(others) > 0
+    assert not others["pass"].astype(bool).any()
+
+
+def test_grade_rule():
+    assert grade(100, 10, (MIN_DROP_IN, 0.1, 1.0)) == (True, True)
+    assert grade(100, 10, (MIN_DROP_IN - 0.01, 0.1, 1.0)) == (True, False)  # too small
+    assert grade(100, 10, (2.0, -0.1, 3.0)) == (True, False)  # interval touches zero
+    assert grade(29, 10, (2.0, 1.0, 3.0)) == (False, pd.NA)  # too few pitches
+    assert grade(100, 1, (2.0, 2.0, 2.0)) == (False, pd.NA)  # one game: no real interval
 
 
 def test_evaluate_no_push_no_harm():

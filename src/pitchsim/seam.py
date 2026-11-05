@@ -108,6 +108,10 @@ def predict_push(model: SeamModel, df: pd.DataFrame) -> np.ndarray:
 
 
 N_BOOT = 1000
+# Smallest drop that counts. A synthetic pitcher with NO seam force on a type still drops by up
+# to 0.6 in, because the push also removes a constant M1 offset (probably the release-state
+# artefact above). Synthetic has no measurement noise, so this is an estimate for real data.
+MIN_DROP_IN = 0.6
 _RAW_FEATURES = ["spin_axis"] + _PLAIN
 
 
@@ -129,6 +133,19 @@ def median_drop_ci(before_in: np.ndarray, after_in: np.ndarray, games: np.ndarra
     return float(np.median(before) - np.median(after)), float(lo), float(hi)
 
 
+def grade(n_test: int, n_games_test: int, drop: tuple[float, float, float]
+          ) -> tuple[bool, bool | object]:
+    """(graded, pass) for one pitch type; pass is pd.NA when not graded.
+
+    Graded needs MIN_TEST held-out pitches and at least 2 held-out games: with one game every
+    bootstrap draw is that game, so the interval collapses to a point and says nothing.
+    Pass needs the drop (in) to reach MIN_DROP_IN with its 95% interval above zero.
+    """
+    if n_test < MIN_TEST or n_games_test < 2:
+        return False, pd.NA
+    return True, bool(drop[0] >= MIN_DROP_IN and drop[1] > 0)
+
+
 def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
                      ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     """Held-out score of M1, M1 + fixed push, M1 + per-pitch push, per pitch type.
@@ -136,8 +153,7 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
     rho is air density (lb/ft^3) per row of df. Returns (summary, knock_on, skipped).
     summary: median held-out miss (in) for each variant on the same pitches, M3 biases, game
     bootstrap intervals for the drop (M1 -> per-pitch) and for per-pitch vs fixed, the training
-    push and spin-axis gap, and the pass rule (graded types only: drop > 0 and its interval
-    above 0). knock_on (reported, not graded): M2-generated pitches flown with M1 and with
+    push and spin-axis gap, and the pass rule (see grade). knock_on (reported, not graded): M2-generated pitches flown with M1 and with
     M1 + per-pitch push, KS vs held-out Statcast movement.
     """
     df = add_release_angles(df.assign(rho=np.asarray(rho))).reset_index(drop=True)
@@ -175,11 +191,12 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
         games = test["game_pk"].to_numpy()
         drop = median_drop_ci(miss["m1"], miss["pp"], games, seed)
         vs_fixed = median_drop_ci(miss["fixed"], miss["pp"], games, seed)
-        graded = len(test) >= MIN_TEST
+        n_games_test = int(test["game_pk"].nunique())
+        graded, passed = grade(len(test), n_games_test, drop)
         rows.append({
             "pitch_type": ptype,
             "pitch_name": g["pitch_name"].iloc[0] if "pitch_name" in g else ptype,
-            "n_train": len(train), "n_test": len(test),
+            "n_train": len(train), "n_test": len(test), "n_games_test": n_games_test,
             "n_games_train": int(train["game_pk"].nunique()),  # fixed.n_games is 0 = unknown
             "cd": cd, "spin_eff": eff,
             "err_m1_in": np.median(miss["m1"]), "err_fixed_in": np.median(miss["fixed"]),
@@ -193,8 +210,7 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
             "axis_gap_deg": circular_mean_deg(angle_diff(
                 train["spin_axis"].to_numpy(float), observed_break_direction_deg(train))),
             "alpha": np.nan if per.alpha is None else per.alpha, "model_kind": per.kind,
-            "graded": graded,
-            "pass": bool(drop[0] > 0 and drop[1] > 0) if graded else pd.NA})
+            "graded": graded, "pass": passed})
 
         # M2 knock-on: generated pitches through M1 and M1 + per-pitch push vs Statcast movement
         # (same cloud and formula as generative.evaluate_pitcher).
