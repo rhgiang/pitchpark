@@ -33,7 +33,7 @@ comments with references. Small steps, Ryan's OK between steps.
   time. *(Claude's call)* The target is derived from the same plate miss M3 is graded on,
   so fitting and grading can't disagree. It is honestly "what's left after M1's
   calibration": M1's Cd and efficiency already soak up part of the seam push (4 of 15
-  pitch types sit on the 0.20 efficiency floor), and a joint refit is a non-goal.
+  pitch types sit on the 0.20 efficiency floor) *[2026-11-05: 6 of 22 sat on it; the bound is now 0.01 and none do]*, and a joint refit is a non-goal.
   Builder checks numerically that adding the fitted constant push to one pitch closes its
   miss to within a small tolerance (drag makes a = 2·miss/t² approximate) and documents it.
 - **Inputs, known at the hand only:** measured `spin_axis` (as sin/cos), `release_spin_rate`,

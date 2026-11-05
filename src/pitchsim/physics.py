@@ -105,9 +105,9 @@ def simulate(pos0, vel0, spin_rpm: float, spin_axis_deg: float,
     """Integrate a pitch with RK4 until it reaches y_stop.
 
     extra_acc: optional constant (x, z) acceleration in ft/s^2 added at every stage.
-    It stands in for the seam-shifted-wake push (Smith; Driveline). Statcast's
-    9-parameter fit is itself constant-acceleration, so a constant extra term is the
-    most detail the data can support.
+    It carries the extra push M3 fits (see results/M3.md; whether that is seam force is open).
+    Statcast's 9-parameter fit is itself constant-acceleration, so a constant extra term is
+    the most detail the data can support.
 
     Returns dict with arrays t, pos (N x 3), vel (N x 3); the final point is
     interpolated to land exactly on y_stop.

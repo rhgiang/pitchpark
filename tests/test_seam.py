@@ -1,3 +1,5 @@
+import inspect
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -7,7 +9,7 @@ from pitchsim.seam import (FORBIDDEN, SEAM_FEATURES, fit_fixed, fit_per_pitch,
                            predict_push, push_target, seam_design)
 from pitchsim.statcast import fit_plate_crossing
 from pitchsim.synthetic import make
-from pitchsim.validation import calibrate, residuals
+from pitchsim.validation import EFF_MIN, calibrate, residuals, split_by_game
 
 
 def _data(n, seed, push):
@@ -77,9 +79,11 @@ def test_design_has_no_jump_at_zero():
 
 
 def test_design_never_reads_movement():
+    """Everything except the six release columns is NaN, and the design is still finite."""
     df = make(n=5, seed=0)
     df[FORBIDDEN] = np.nan
     assert np.isfinite(seam_design(df)).all()
+    assert np.isfinite(seam_design(df[["spin_axis", *SEAM_FEATURES[2:]]])).all()
 
 
 def test_few_games_still_fits():
@@ -98,13 +102,26 @@ from pitchsim.seam import MIN_DROP_IN, evaluate_pitcher, grade, median_drop_ci  
 SUMMARY_COLS = ["pitch_type", "pitch_name", "n_train", "n_test", "n_games_test",
                 "n_games_train", "cd", "spin_eff",
                 "err_m1_in", "err_fixed_in", "err_per_pitch_in", "bias_x_m1_in", "bias_z_m1_in",
-                "bias_x_m3_in", "bias_z_m3_in", "drop_in", "drop_lo_in", "drop_hi_in",
+                "bias_x_fixed_in", "bias_z_fixed_in", "bias_x_m3_in", "bias_z_m3_in", "drop_in", "drop_lo_in", "drop_hi_in",
                 "pp_vs_fixed_in", "pp_vs_fixed_lo_in", "pp_vs_fixed_hi_in", "push_x_fts2",
                 "push_z_fts2", "axis_gap_deg", "alpha", "model_kind", "graded", "pass"]
 # Off-axis on purpose: a push on the spin-force line (e.g. (5, -4) here, opposed to the force) is
 # absorbed by M1's spin-efficiency calibration, as far as efficiency can move inside its 0.01-1.0
 # bounds, leaving almost no miss for M3. An off-line push tests what spin can't explain.
 _CH_PUSH = lambda c, a: (4.0, 5.0) if c == "CH" else (0.0, 0.0)
+
+
+def test_bootstrap_resamples_games_not_pitches():
+    """One game carries the whole drop. Resampling games sometimes draws only the other game
+    (no drop), so the lower end is 0; resampling pitches (every pitch its own group) averages
+    that away and stays near the full drop."""
+    games = np.repeat([0, 1], [40, 20])
+    before = np.full(60, 5.0)
+    after = np.where(games == 0, 1.0, 5.0)
+    by_game = median_drop_ci(before, after, games)
+    by_pitch = median_drop_ci(before, after, np.arange(60))
+    assert by_game[0] == 4 and by_game[1] == 0
+    assert by_pitch[1] > 3
 
 
 def test_median_drop_ci_hand_values():
@@ -124,8 +141,12 @@ def evaluated():
 def test_evaluate_on_synthetic_push(evaluated):
     summary, _, _, clouds = evaluated
     assert list(summary.columns) == SUMMARY_COLS
+    assert summary.axis_gap_deg.between(-180, 180, inclusive="left").all()
     ch = summary[summary.pitch_type == "CH"].iloc[0]
     assert ch["err_per_pitch_in"] < ch["err_m1_in"]
+    # per-pitch is scored with its own ridge push, not the fixed mean: the two must differ
+    assert ch["err_per_pitch_in"] != ch["err_fixed_in"]
+    assert (ch["bias_x_fixed_in"], ch["bias_z_fixed_in"]) != (ch["bias_x_m3_in"], ch["bias_z_m3_in"])
     assert ch["pass"] is True or ch["pass"] == True  # noqa: E712
     cloud = clouds["CH"]
     assert len(cloud) == ch["n_test"]
@@ -175,9 +196,9 @@ def test_ungraded_type_never_passes():
     df = df.drop(index=ch[70:]).reset_index(drop=True)
     summary, _, _, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
     row = summary[summary.pitch_type == "CH"]
-    if len(row):  # may be skipped outright if too few training pitches
-        assert not row.iloc[0]["graded"]
-        assert row.iloc[0]["pass"] is pd.NA
+    assert len(row) == 1  # fitted (48 train pitches) but not graded (22 held-out)
+    assert not row.iloc[0]["graded"]
+    assert row.iloc[0]["pass"] is pd.NA
 
 
 def test_nan_feature_rows_dropped():
@@ -195,3 +216,46 @@ def test_knock_on_shape(evaluated):
         sub = knock[knock.pitch_type == t]
         assert set(zip(sub.variant, sub.component)) == {(v, c) for v in ("m1", "m1+m3")
                                                          for c in ("x", "z")}
+    # CH has a real push, so flying it with the push must change the generated movement
+    ch = knock[knock.pitch_type == "CH"].set_index(["variant", "component"])["mean_diff_in"]
+    assert ch["m1", "x"] != ch["m1+m3", "x"] and ch["m1", "z"] != ch["m1+m3", "z"]
+
+
+def test_eff_min_is_pinned():
+    """One constant feeds calibrate and evaluate_pitcher; changing it must be deliberate."""
+    assert EFF_MIN == 0.01
+    for fn in (calibrate, evaluate_pitcher):
+        assert inspect.signature(fn).parameters["eff_min"].default == EFF_MIN
+
+
+@pytest.fixture(scope="module")
+def small():
+    df = make(n=600, seed=0, push=_CH_PUSH)
+    return df, evaluate_pitcher(df, np.full(len(df), air_density()))[0]
+
+
+def test_held_out_games_never_reach_a_fit(small):
+    """SYNTHETIC: scramble the held-out games' movement and spin; every fitted quantity must be
+    bit-identical, while the held-out misses (which do read them) move."""
+    df, base = small
+    held = df["game_pk"].isin(split_by_game(df)[1]["game_pk"]).to_numpy()
+    assert held.any()
+    noisy = df.copy()
+    rng = np.random.default_rng(5)
+    for c in ("ax", "az", "vx0", "vz0", "plate_x", "plate_z"):
+        noisy.loc[held, c] += rng.normal(0, 2.0, held.sum())
+    noisy.loc[held, "release_spin_rate"] *= 1.05
+    noisy.loc[held, "spin_axis"] = (noisy.loc[held, "spin_axis"] + 30) % 360
+    again = evaluate_pitcher(noisy, np.full(len(df), air_density()))[0]
+    fitted = ["pitch_type", "n_train", "cd", "spin_eff", "push_x_fts2", "push_z_fts2",
+              "axis_gap_deg", "alpha"]
+    pd.testing.assert_frame_equal(base[fitted], again[fitted], check_exact=True)
+    assert (base["err_m1_in"] != again["err_m1_in"]).all()
+
+
+def test_split_seed(small):
+    df, base = small
+    rho = np.full(len(df), air_density())
+    pd.testing.assert_frame_equal(base, evaluate_pitcher(df, rho, split_seed=0)[0])
+    other = evaluate_pitcher(df, rho, split_seed=1)[0]
+    assert not other[["n_train", "n_test"]].equals(base[["n_train", "n_test"]])

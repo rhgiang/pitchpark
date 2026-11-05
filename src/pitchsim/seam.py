@@ -23,19 +23,18 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from scipy.stats import ks_2samp
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import GridSearchCV, GroupKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-
-from scipy.stats import ks_2samp
 
 from pitchsim.generative import (MIN_TEST, MIN_TRAIN, add_release_angles, circular_mean_deg,
                                  fit_pitch_type, generated_release_state, movement_in, sample)
 from pitchsim.physics import simulate_batch
 from pitchsim.statcast import (_time_to_y, fit_plate_crossing, observed_break_direction_deg,
                                release_state)
-from pitchsim.validation import (MAX_TRAIN, angle_diff, calibrate, residuals, run_sim,
+from pitchsim.validation import (EFF_MIN, MAX_TRAIN, angle_diff, calibrate, residuals, run_sim,
                                  split_by_game)
 
 SEAM_FEATURES = ["sin_axis", "cos_axis", "release_spin_rate", "release_speed",
@@ -50,7 +49,7 @@ def seam_design(df: pd.DataFrame) -> np.ndarray:
     return np.column_stack([np.sin(axis), np.cos(axis), df[_PLAIN].to_numpy(float)])
 
 
-def push_target(df: pd.DataFrame, cd, eff) -> np.ndarray:
+def push_target(df: pd.DataFrame, cd: float | np.ndarray, eff: float | np.ndarray) -> np.ndarray:
     """N x 2 constant push (ft/s^2) that closes each pitch's calibrated miss.
 
     Constant acceleration a over flight time t moves the ball a*t^2/2, so the first guess is
@@ -69,8 +68,9 @@ def push_target(df: pd.DataFrame, cd, eff) -> np.ndarray:
 
 @dataclass
 class SeamModel:
+    """A fitted push predictor for one pitch type (push in ft/s^2)."""
     kind: str                      # "fixed", "per_pitch" or "fixed_fallback"
-    mean: np.ndarray               # (2,) column means of the target
+    mean: np.ndarray               # (2,) mean push x, z in ft/s^2 (training target)
     pipeline: Pipeline | None
     alpha: float | None
     n_train: int
@@ -147,12 +147,15 @@ def grade(n_test: int, n_games_test: int, drop: tuple[float, float, float]
     return True, bool(drop[0] >= MIN_DROP_IN and drop[1] > 0)
 
 
-def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0, eff_min: float = 0.01
+def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0, eff_min: float = EFF_MIN,
+                     split_seed: int = 0
                      ) -> tuple[pd.DataFrame, pd.DataFrame, list[str], dict[str, pd.DataFrame]]:
     """Held-out score of M1, M1 + fixed push, M1 + per-pitch push, per pitch type.
 
     rho is air density (lb/ft^3) per row of df. eff_min is M1's lower efficiency bound (see
-    calibrate). Returns (summary, knock_on, skipped, clouds).
+    calibrate). split_seed picks the train/held-out game split (default 0, the one every
+    result uses; scripts/seam_split_check.py varies it). Returns (summary, knock_on, skipped,
+    clouds).
     summary: median held-out miss (in) for each variant on the same pitches, M3 biases, game
     bootstrap intervals for the drop (M1 -> per-pitch) and for per-pitch vs fixed, the training
     push and spin-axis gap, and the pass rule (see grade). knock_on (reported, not graded):
@@ -168,7 +171,7 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0, eff_min: 
         if k:
             skipped.append(f"dropped {k} rows with missing {c}")
     df = df.dropna(subset=_RAW_FEATURES)
-    train_all, test_all = split_by_game(df)
+    train_all, test_all = split_by_game(df, seed=split_seed)
 
     rows, knock, clouds = [], [], {}
     for ptype, g in df.groupby("pitch_type"):
@@ -210,13 +213,15 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0, eff_min: 
             "err_m1_in": np.median(miss["m1"]), "err_fixed_in": np.median(miss["fixed"]),
             "err_per_pitch_in": np.median(miss["pp"]),
             "bias_x_m1_in": bias["m1"][0], "bias_z_m1_in": bias["m1"][1],
+            "bias_x_fixed_in": bias["fixed"][0], "bias_z_fixed_in": bias["fixed"][1],
             "bias_x_m3_in": bias["pp"][0], "bias_z_m3_in": bias["pp"][1],
             "drop_in": drop[0], "drop_lo_in": drop[1], "drop_hi_in": drop[2],
             "pp_vs_fixed_in": vs_fixed[0], "pp_vs_fixed_lo_in": vs_fixed[1],
             "pp_vs_fixed_hi_in": vs_fixed[2],
             "push_x_fts2": fixed.mean[0], "push_z_fts2": fixed.mean[1],
-            "axis_gap_deg": circular_mean_deg(angle_diff(
-                train["spin_axis"].to_numpy(float), observed_break_direction_deg(train))),
+            # measured minus movement-implied axis, signed, in [-180, 180)
+            "axis_gap_deg": float(angle_diff(circular_mean_deg(angle_diff(
+                train["spin_axis"].to_numpy(float), observed_break_direction_deg(train))), 0.0)),
             "alpha": np.nan if per.alpha is None else per.alpha, "model_kind": per.kind,
             "graded": graded, "pass": passed})
 
@@ -226,11 +231,13 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0, eff_min: 
         t_flight = t_s - _time_to_y(test["release_pos_y"].to_numpy(), test["vy0"].to_numpy(),
                                     test["ay"].to_numpy())
         stat = movement_in(v_rel, fit_vel, t_flight)
+        # large draw so the generated side isn't noisy
         gen = sample(fit_pitch_type(train, mixture=False, seed=seed), 1000, seed)
         pos_g, v_g = generated_release_state(gen)
         for variant, acc in (("m1", None), ("m1+m3", predict_push(per, gen))):
             _, vp, t = simulate_batch(pos_g, v_g, gen["release_spin_rate"].to_numpy(),
                                       gen["spin_axis"].to_numpy(), cd, eff,
+                                      # training-median rho: a generated pitch has no game
                                       rho=float(train["rho"].median()), extra_acc=acc)
             for comp, sim, ref in zip("xz", movement_in(v_g, vp, t), stat):
                 r = ks_2samp(sim, ref)

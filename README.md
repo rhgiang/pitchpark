@@ -82,6 +82,7 @@ python scripts/fetch.py --id 650633 --start 2026-03-01 --end 2026-11-30
 python scripts/train_seam.py data/raw/<pitcher>.csv   # each of the five CSVs
 python scripts/seam_controls.py                       # SYNTHETIC controls
 python scripts/seam_bound_check.py                    # real data, old 0.20 bound vs new default
+python scripts/seam_split_check.py                    # real data, four different game splits
 ```
 
 This writes `results/m3/<pitcher>/` (summary and knock-on CSVs, one PNG per pitch type).
@@ -96,7 +97,8 @@ This writes `results/m3/<pitcher>/` (summary and knock-on CSVs, one PNG per pitc
 | `scripts/validate.py` | The experiment: data check → convention check → default physics → calibrated physics → bias. |
 | `src/pitchsim/seam.py`, `scripts/train_seam.py` | M3: learn the extra push per pitch type and per pitch, score it on held-out games. |
 | `scripts/seam_controls.py` | M3 controls on synthetic pitches: what the method finds when the truth is known. |
-| `scripts/seam_bound_check.py` | Record of the efficiency bound change: real results at the old 0.20 vs the new 0.01. |
+| `scripts/seam_bound_check.py` | Record of the efficiency bound change: real results at the old 0.20 vs the new 0.01, plus the Spearman figures. |
+| `scripts/seam_split_check.py` | M3: pass counts when a different set of games is held out (split seeds 0-3). |
 | `src/pitchsim/synthetic.py` | Fake pitcher with known physics, for testing without the internet. |
 | `tests/` | Checks against known numbers: ~0.4 s flight, ~8% speed loss, realistic rise, Coors effect. |
 

@@ -17,6 +17,8 @@ MIN_PITCHES = 30
 # Speed cap: every optimizer step re-simulates all training pitches, and Cd / efficiency
 # stop moving well before 400 pitches.
 MAX_TRAIN = 400
+# Lower bound on spin efficiency in calibrate (0.20 until 2026-11-04; see results/M3.md).
+EFF_MIN = 0.01
 
 
 def split_by_game(df: pd.DataFrame, train_frac: float = 0.7,
@@ -66,7 +68,7 @@ def residuals(df: pd.DataFrame, fit_pos: np.ndarray, fit_vel: np.ndarray, cd: fl
 
 
 def calibrate(train: pd.DataFrame, start: Literal["y50", "release"],
-              eff_min: float = 0.01) -> np.ndarray:
+              eff_min: float = EFF_MIN) -> np.ndarray:
     """Least-squares fit of [Cd, spin efficiency] on training pitches.
 
     eff_min is efficiency's lower bound. Only scripts/seam_bound_check.py changes it, to compare
@@ -81,7 +83,7 @@ def calibrate(train: pd.DataFrame, start: Literal["y50", "release"],
         return np.concatenate([dx, dz, dv])
 
     # Bounds: Cd 0.15-0.6 brackets every published baseball drag value with room to spare.
-    # Efficiency 0.01-1.0: 1.0 is all spin transverse, and a positive floor keeps a share of
+    # Efficiency EFF_MIN-1.0: 1.0 is all spin transverse, and a positive floor keeps a share of
     # spin a share. The floor was 0.20 until 2026-11-04, but that forced excess spin force on
     # some sliders and cutters; their fitted values land at about 0.07-0.15 on real data.
     res = least_squares(resid, x0=[0.33, 0.9], bounds=([0.15, eff_min], [0.6, 1.0]),
