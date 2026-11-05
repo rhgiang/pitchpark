@@ -121,16 +121,19 @@ def evaluated():
 
 
 def test_evaluate_on_synthetic_push(evaluated):
-    summary, _, _ = evaluated
+    summary, _, _, clouds = evaluated
     assert list(summary.columns) == SUMMARY_COLS
     ch = summary[summary.pitch_type == "CH"].iloc[0]
     assert ch["err_per_pitch_in"] < ch["err_m1_in"]
     assert ch["pass"] is True or ch["pass"] == True  # noqa: E712
+    cloud = clouds["CH"]
+    assert len(cloud) == ch["n_test"]
+    assert np.median(np.hypot(cloud.dx_pp_in, cloud.dz_pp_in)) == pytest.approx(ch["err_per_pitch_in"])
 
 
 def test_no_seam_types_do_not_pass(evaluated):
     """Synthetic: only CH has a seam push, so the constant M1 offset alone must not pass."""
-    summary, _, _ = evaluated
+    summary, _, _, _ = evaluated
     others = summary[(summary.pitch_type != "CH") & summary.graded]
     assert len(others) > 0
     assert not others["pass"].astype(bool).any()
@@ -146,7 +149,7 @@ def test_grade_rule():
 
 def test_evaluate_no_push_no_harm():
     df = make(n=1500, seed=0)
-    summary, _, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
+    summary, _, _, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
     g = summary[summary.graded]
     assert len(g) > 0
     assert (g.err_per_pitch_in <= g.err_m1_in + 0.3).all()
@@ -156,7 +159,7 @@ def test_ungraded_type_never_passes():
     df = make(n=1500, seed=0, push=_CH_PUSH)
     ch = np.flatnonzero(df.pitch_type == "CH")
     df = df.drop(index=ch[70:]).reset_index(drop=True)
-    summary, _, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
+    summary, _, _, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
     row = summary[summary.pitch_type == "CH"]
     if len(row):  # may be skipped outright if too few training pitches
         assert not row.iloc[0]["graded"]
@@ -166,12 +169,12 @@ def test_ungraded_type_never_passes():
 def test_nan_feature_rows_dropped():
     df = make(n=600, seed=0)
     df.loc[df.index[:10], "release_extension"] = np.nan
-    _, _, skipped = evaluate_pitcher(df, np.full(len(df), air_density()))
+    _, _, skipped, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
     assert any("10" in s and "release_extension" in s for s in skipped)
 
 
 def test_knock_on_shape(evaluated):
-    summary, knock, _ = evaluated
+    summary, knock, _, _ = evaluated
     assert list(knock.columns) == ["pitch_type", "variant", "component", "ks_stat", "p_value",
                                    "mean_diff_in"]
     for t in summary.pitch_type:

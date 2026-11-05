@@ -147,14 +147,16 @@ def grade(n_test: int, n_games_test: int, drop: tuple[float, float, float]
 
 
 def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
-                     ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+                     ) -> tuple[pd.DataFrame, pd.DataFrame, list[str], dict[str, pd.DataFrame]]:
     """Held-out score of M1, M1 + fixed push, M1 + per-pitch push, per pitch type.
 
-    rho is air density (lb/ft^3) per row of df. Returns (summary, knock_on, skipped).
+    rho is air density (lb/ft^3) per row of df. Returns (summary, knock_on, skipped, clouds).
     summary: median held-out miss (in) for each variant on the same pitches, M3 biases, game
     bootstrap intervals for the drop (M1 -> per-pitch) and for per-pitch vs fixed, the training
     push and spin-axis gap, and the pass rule (see grade). knock_on (reported, not graded): M2-generated pitches flown with M1 and with
     M1 + per-pitch push, KS vs held-out Statcast movement.
+    clouds[pitch_type]: one row per held-out pitch, signed miss (in) for M1 only and for M1 +
+    per-pitch push (dx_m1_in, dz_m1_in, dx_pp_in, dz_pp_in).
     """
     df = add_release_angles(df.assign(rho=np.asarray(rho))).reset_index(drop=True)
     skipped = []
@@ -165,7 +167,7 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
     df = df.dropna(subset=_RAW_FEATURES)
     train_all, test_all = split_by_game(df)
 
-    rows, knock = [], []
+    rows, knock, clouds = [], [], {}
     for ptype, g in df.groupby("pitch_type"):
         train = train_all[train_all["pitch_type"] == ptype]
         test = test_all[test_all["pitch_type"] == ptype]
@@ -183,11 +185,14 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
         fixed, per = fit_fixed(target), fit_per_pitch(train, target, seed)
 
         fit_pos, fit_vel, t_s = fit_plate_crossing(test)
-        miss, bias = {}, {}
+        miss, bias, signed = {}, {}, {}
         for name, acc in (("m1", None), ("fixed", predict_push(fixed, test)),
                           ("pp", predict_push(per, test))):
             dx, dz, _ = residuals(test, fit_pos, fit_vel, cd, eff, "release", extra_acc=acc)
             miss[name], bias[name] = np.hypot(dx, dz), (dx.mean(), dz.mean())
+            signed[f"dx_{name}_in"], signed[f"dz_{name}_in"] = dx, dz
+        clouds[ptype] = pd.DataFrame({k: signed[k] for k in
+                                      ("dx_m1_in", "dz_m1_in", "dx_pp_in", "dz_pp_in")})
         games = test["game_pk"].to_numpy()
         drop = median_drop_ci(miss["m1"], miss["pp"], games, seed)
         vs_fixed = median_drop_ci(miss["fixed"], miss["pp"], games, seed)
@@ -230,4 +235,4 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0
                               "ks_stat": r.statistic, "p_value": r.pvalue,
                               "mean_diff_in": float(sim.mean() - ref.mean())})
     cols = ["pitch_type", "variant", "component", "ks_stat", "p_value", "mean_diff_in"]
-    return pd.DataFrame(rows), pd.DataFrame(knock, columns=cols), skipped
+    return pd.DataFrame(rows), pd.DataFrame(knock, columns=cols), skipped, clouds
