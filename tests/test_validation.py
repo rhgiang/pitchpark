@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pytest
 
 from pitchsim.physics import air_density
@@ -56,3 +57,14 @@ def test_residuals_ignore_where_plate_x_z_are_reported():
         return [np.median(r) for r in residuals(d, fit_pos, fit_vel, 0.35, 0.8, "release")]
 
     assert medians(shifted) == medians(df)
+
+
+def test_make_push_none_unchanged():
+    a, b = make(n=50, seed=0), make(n=50, seed=0, push=None)
+    old = [c for c in a.columns if not c.startswith("true_push")]
+    pd.testing.assert_frame_equal(a[old], b[old])
+    assert (a[["true_push_x", "true_push_z"]] == 0).all().all()
+    pushed = make(n=50, seed=0, push=lambda code, axis: (3.0, -2.0))
+    assert (pushed["true_push_x"] == 3.0).all()
+    assert not np.allclose(pushed["plate_x"], a["plate_x"])
+    assert not np.allclose(pushed["plate_z"], a["plate_z"])

@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
+import pytest
 
+from pitchsim import generative
 from pitchsim.generative import (FEATURES, GRADED, add_release_angles, circular_mean_deg,
                                  classifier_auc, context_gain, evaluate_pitcher, fit_context,
                                  fit_pitch_type, marginal_ks, movement_in, paired_margin,
@@ -74,11 +76,17 @@ def test_marginal_ks_flags_shifted_feature_only():
     assert ks.loc["release_speed", "flagged"] and not ks.loc["release_spin_rate", "flagged"]
 
 
-def test_evaluate_pitcher_on_synthetic():
+@pytest.fixture
+def fast_bootstrap(monkeypatch):
+    """The AUC-bound bootstrap is ~2/3 of evaluate_pitcher's time; no test asserts on the bounds."""
+    monkeypatch.setattr(generative, "N_BOOT", 20)
+
+
+def test_evaluate_pitcher_on_synthetic(fast_bootstrap):
     """Synthetic pitcher, real-data path. Model is exact-ish, so every type is below AUC 0.65."""
     # Synthetic "real" pitches are continuous; round them like Statcast, since evaluation
     # rounds the generated side and would otherwise tell them apart on decimals.
-    df = round_like_statcast(make(n=1500, seed=0))
+    df = round_like_statcast(make(n=1000, seed=0))
     summary, ks, skipped, clouds, _, physical = evaluate_pitcher(df, np.full(len(df), air_density()))
     g = summary[summary.model == "gaussian"]
     assert (g.auc < 0.65).all() and set(g.pitch_type) == {"FF", "SL", "CH", "CU"}
@@ -95,9 +103,9 @@ def test_evaluate_pitcher_on_synthetic():
     assert set(physical.feature) == set(GRADED) and set(physical.pitch_type) == set(graded.pitch_type)
 
 
-def test_thin_types_skipped_or_ungraded():
+def test_thin_types_skipped_or_ungraded(fast_bootstrap):
     """Synthetic: trimmed arsenal."""
-    df = make(n=1500, seed=0)
+    df = make(n=700, seed=0)                         # >70 CH and >20 CU before trimming
     cu = df.index[df.pitch_type == "CU"]
     df = df.drop(cu[20:])                            # 20 CU total -> < 30 train
     ch = df.index[df.pitch_type == "CH"]
@@ -110,8 +118,8 @@ def test_thin_types_skipped_or_ungraded():
     assert ch_rows.pass_abs.isna().all()
 
 
-def test_nan_extension_rows_dropped():
-    df = make(n=1500, seed=0); df.loc[:9, "release_extension"] = np.nan
+def test_nan_extension_rows_dropped(fast_bootstrap):
+    df = make(n=400, seed=0); df.loc[:9, "release_extension"] = np.nan
     _, _, skipped, _, _, _ = evaluate_pitcher(df, np.full(len(df), air_density()))
     assert any("10" in s and "release_extension" in s for s in skipped)
 
@@ -204,3 +212,8 @@ def test_physical_diff_hand_values():
     r = real.assign(spin_axis=(358 + 3 * np.random.default_rng(0).normal(size=len(real))) % 360)
     assert abs(physical_diff(r, r.assign(spin_axis=(r.spin_axis + 1) % 360), 358)
                .set_index("feature").loc["spin_axis", "mean_diff"] - 1) < 1e-6
+
+
+def test_paired_margin_nan_when_auc_missing():
+    gap, margin = paired_margin(np.full(10, np.nan), np.full(10, 0.6))
+    assert np.isnan(gap) and np.isnan(margin)

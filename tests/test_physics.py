@@ -1,6 +1,7 @@
 """Sanity checks against well-known pitch physics numbers.  Run: pytest -q"""
 
 import numpy as np
+import pytest
 
 from pitchsim.physics import PhysicsParams, air_density, simulate, simulate_batch
 
@@ -64,3 +65,36 @@ def test_batch_per_pitch_density():
     for i, rho in enumerate([sea, coors]):
         one = simulate(RELEASE, v, 2600, 0, PhysicsParams(cd=0.33, spin_efficiency=0.9, rho=rho))
         assert np.allclose(pos[i], one["pos"][-1], atol=1e-6)
+
+
+def _batch(extra_acc=None, n=3):
+    v = 95 * MPH * np.array([0.0, -1.0, -0.03]) / np.linalg.norm([0, -1, -0.03])
+    kw = {} if extra_acc is None else {"extra_acc": extra_acc}
+    return simulate_batch(np.tile(RELEASE, (n, 1)), np.tile(v, (n, 1)),
+                          np.full(n, 2400.0), np.full(n, 200.0), 0.33, 0.9, **kw)
+
+
+def test_extra_acc_none_is_identical():
+    base = _batch()
+    for extra in (None, np.zeros((3, 2))):
+        for a, b in zip(base, _batch(extra)):
+            assert np.array_equal(a, b)
+
+
+def test_extra_acc_shifts_by_half_a_t_squared():
+    pos0, _, t = _batch(n=1)
+    pos1, _, _ = _batch(np.array([[3.0, -2.0]]), n=1)
+    t = t[0]
+    # drag damps the push by ~k*Cd*v*t/3 ~ 3% (measured 3.0%), so 5% not 2%
+    assert (pos1[0, 0] - pos0[0, 0]) == pytest.approx(0.5 * 3.0 * t ** 2, rel=0.05)
+    assert (pos1[0, 2] - pos0[0, 2]) == pytest.approx(0.5 * -2.0 * t ** 2, rel=0.05)
+
+
+def test_single_and_batch_agree_with_push():
+    v = 95 * MPH * np.array([0.0, -1.0, -0.03]) / np.linalg.norm([0, -1, -0.03])
+    push = np.array([3.0, -2.0])
+    tr = simulate(RELEASE, v, 2400, 200, PhysicsParams(cd=0.33, spin_efficiency=0.9),
+                  extra_acc=push)
+    pos, _, _ = simulate_batch(RELEASE[None], v[None], [2400.0], [200.0], 0.33, 0.9,
+                               extra_acc=push[None])
+    assert np.allclose(tr["pos"][-1], pos[0], atol=1e-6)

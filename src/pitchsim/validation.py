@@ -17,6 +17,8 @@ MIN_PITCHES = 30
 # Speed cap: every optimizer step re-simulates all training pitches, and Cd / efficiency
 # stop moving well before 400 pitches.
 MAX_TRAIN = 400
+# Lower bound on spin efficiency in calibrate (0.20 until 2026-11-04; see results/M3.md).
+EFF_MIN = 0.01
 
 
 def split_by_game(df: pd.DataFrame, train_frac: float = 0.7,
@@ -34,19 +36,22 @@ def split_by_game(df: pd.DataFrame, train_frac: float = 0.7,
 
 
 def run_sim(df: pd.DataFrame, cd: float, eff: float,
-            start: Literal["y50", "release"]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            start: Literal["y50", "release"], extra_acc: np.ndarray | None = None
+            ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Simulate each row to the front of the plate from the y = 50 ft or release state.
 
-    df must have a 'rho' column (lb/ft^3). Returns (pos, vel, flight time) like simulate_batch.
+    df must have a 'rho' column (lb/ft^3). extra_acc is an optional (N, 2) constant push
+    in ft/s^2. Returns (pos, vel, flight time) like simulate_batch.
     """
     pos0, vel0 = release_state(df) if start == "release" else initial_state(df)
     return simulate_batch(pos0, vel0, df["release_spin_rate"].to_numpy(),
-                          df["spin_axis"].to_numpy(), cd, eff, rho=df["rho"].to_numpy())
+                          df["spin_axis"].to_numpy(), cd, eff, rho=df["rho"].to_numpy(),
+                          extra_acc=extra_acc)
 
 
 def residuals(df: pd.DataFrame, fit_pos: np.ndarray, fit_vel: np.ndarray, cd: float,
-              eff: float, start: Literal["y50", "release"]
-              ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+              eff: float, start: Literal["y50", "release"],
+              extra_acc: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Simulated minus Statcast-fit plate crossing: dx, dz (inches) and speed (mph).
 
     The target is the fit's own crossing at FRONT_OF_PLATE_Y (from fit_plate_crossing),
@@ -55,15 +60,20 @@ def residuals(df: pd.DataFrame, fit_pos: np.ndarray, fit_vel: np.ndarray, cd: fl
     17/12 simulation against it adds a built-in ~1 in error. The fit crossing is the same
     in every season. validate.py's check [0] still compares the two, as an alarm.
     """
-    pos, vel, _ = run_sim(df, cd, eff, start)
+    pos, vel, _ = run_sim(df, cd, eff, start, extra_acc)
     dx = (pos[:, 0] - fit_pos[:, 0]) * 12
     dz = (pos[:, 2] - fit_pos[:, 2]) * 12
     dv = (np.linalg.norm(vel, axis=1) - np.linalg.norm(fit_vel, axis=1)) * FT_PER_S_TO_MPH
     return dx, dz, dv
 
 
-def calibrate(train: pd.DataFrame, start: Literal["y50", "release"]) -> np.ndarray:
-    """Least-squares fit of [Cd, spin efficiency] on training pitches."""
+def calibrate(train: pd.DataFrame, start: Literal["y50", "release"],
+              eff_min: float = EFF_MIN) -> np.ndarray:
+    """Least-squares fit of [Cd, spin efficiency] on training pitches.
+
+    eff_min is efficiency's lower bound. Only scripts/seam_bound_check.py changes it, to compare
+    with the old 0.20 bound.
+    """
     fit_pos, fit_vel, _ = fit_plate_crossing(train)
 
     def resid(params):
@@ -73,10 +83,10 @@ def calibrate(train: pd.DataFrame, start: Literal["y50", "release"]) -> np.ndarr
         return np.concatenate([dx, dz, dv])
 
     # Bounds: Cd 0.15-0.6 brackets every published baseball drag value with room to spare.
-    # Efficiency 0.2-1.0: 1.0 is all spin transverse, and 0.2 keeps gyro-heavy pitches from
-    # collapsing to zero spin. On real data 0.20 is hit (4 of 15 types), so for those the
-    # optimizer wanted <= 0.20.
-    res = least_squares(resid, x0=[0.33, 0.9], bounds=([0.15, 0.2], [0.6, 1.0]),
+    # Efficiency EFF_MIN-1.0: 1.0 is all spin transverse, and a positive floor keeps a share of
+    # spin a share. The floor was 0.20 until 2026-11-04, but that forced excess spin force on
+    # some sliders and cutters; their fitted values land at about 0.07-0.15 on real data.
+    res = least_squares(resid, x0=[0.33, 0.9], bounds=([0.15, eff_min], [0.6, 1.0]),
                         diff_step=1e-3)
     return res.x
 
