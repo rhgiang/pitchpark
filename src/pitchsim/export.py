@@ -102,7 +102,9 @@ def export_pitcher(raw: pd.DataFrame, rho: pd.Series, dt_s: float = 0.005) -> di
                 path = (s, p)
                 real = _path(s, p)
                 plate_real = [_num(plate_pos[i, 0]), _num(plate_pos[i, 2]), _num(flight[i])]
-                q = flight[i] * np.array([0.25, 0.5, 0.75])
+                # Round the times before evaluating: the JSON stores t to 1e-4 s, and a ball
+                # at ~130 ft/s moves ~0.08 in in 5e-5 s, so positions must match the stored t.
+                q = np.round(flight[i] * np.array([0.25, 0.5, 0.75]), 4)
                 # Independent of the samples (Task 4 checks the samples against these).
                 check = np.round(np.column_stack([q, fit_at(i, q)]), 4).tolist()
             if status == "ok":
