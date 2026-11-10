@@ -6,11 +6,35 @@
     <title>Batter's Eye</title>
     <style>
       html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
-      #label { position: fixed; top: 12px; left: 12px; color: #fff; font: 14px system-ui, sans-serif; }
+      .panel { position: fixed; left: 12px; color: #fff; font: 14px system-ui, sans-serif;
+        background: rgba(0, 0, 0, 0.55); padding: 8px 10px; border-radius: 6px; }
+      #hud { top: 12px; max-width: 46em; line-height: 1.45; }
+      #hud .count { font-size: 22px; font-weight: 600; }
+      #hud .pitch { font-size: 17px; }
+      #hud .status { color: #ffd27a; }
+      #hud .tunnel { color: #cde; font-size: 13px; }
+      #controls { bottom: 12px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+      #controls select, #controls button { font: 13px system-ui, sans-serif; }
+      #controls button.on { background: #ffd27a; }
+      #controls button:disabled { opacity: 0.55; }
     </style>
   </head>
   <body>
-    <div id="label"></div>
+    <div id="hud" class="panel">Loading…</div>
+    <div id="controls" class="panel">
+      <select id="pitcher" aria-label="Pitcher"></select>
+      <select id="atbat" aria-label="At-bat"></select>
+      <button id="random">Random at-bat (A)</button>
+      <button id="prev">◀ Prev (←)</button>
+      <button id="replay">Throw / replay (Space)</button>
+      <button id="next">Next ▶ (→)</button>
+      <button id="mode-real">Statcast fit (R)</button>
+      <button id="mode-sim">M1 + M3 (S)</button>
+      <button id="mode-ghost">Ghost (G)</button>
+      <button id="speed-1">1× (1)</button>
+      <button id="speed-0.25">0.25× (2)</button>
+      <button id="speed-0.1">0.1× (3)</button>
+    </div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
