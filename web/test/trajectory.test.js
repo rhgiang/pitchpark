@@ -36,7 +36,8 @@ test("Statcast-fit paths replay the exporter's analytic points and plate time", 
         worstIn = Math.max(worstIn, d * 12);
         assert.ok(d < TOL_FT, `${file.pathname} check_real t=${t}: off by ${(d * 12).toFixed(4)} in`);
       }
-      // Independent: the plate time comes from the fit's root, the path's last t from sampling.
+      // Not independent either: the exporter writes round(flight, 4) as both the path's last t
+      // and plate_real[2]. Kept as a guard that duration() reads the right sample.
       assert.ok(Math.abs(T - p.plate_real[2]) < TOL_S, `plate time ${T} vs ${p.plate_real[2]}`);
       // Not independent: the exporter copies plate_real's x/z into the last sample. Kept as a
       // guard that stateAt clamps at the end and that the path really stops at the plate.

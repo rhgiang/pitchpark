@@ -1,42 +1,36 @@
 // Camera placements in Statcast feet (x catcher's right, y plate -> pitcher, z up).
 
-// Batter's box: 4 ft wide x 6 ft long, inner line 6 in from the 17 in plate (Official Baseball
-// Rules 2.01 diagram), so the box spans |x| = 14.5 in to 62.5 in and is centred on the plate's
-// middle (y ~ 0.71 ft), running from about y = -2.3 to 3.7 ft.
 // Eye height: standing eye height is ~0.936 x stature (Drillis & Contini 1966, segment
 // proportions); for an MLB-average ~6 ft 2 in hitter that is ~5.8 ft, less ~9 in of batting
 // crouch -> 5.0 ft. The crouch amount is our estimate, not a measurement.
 export const EYE_HEIGHT_FT = 5.0;
-// Head over the inner half of the box, leaning toward the plate: |x| = 2.5 ft (our choice,
-// inside the box's 1.2-5.2 ft span).
+// Batter's box: 4 ft wide x 6 ft long, inner line 6 in from the 17 in plate (Official Baseball
+// Rules 2.01 diagram), so it spans |x| = 1.2 to 5.2 ft and y ~ -2.3 to 3.7 ft.
+// The two numbers below are camera-framing choices, not a measured stance: |x| = 2.5 ft puts the
+// eye over the inner half of the box, y = -2.0 ft keeps it inside the box near the back line.
 export const STANCE_X_FT = 2.5;
-// Toward the back of the box (y = -2.3 at the back line), where many hitters set up for time.
-// Also what lets the zone and the pitcher fit in one frame. Our choice.
 export const STANCE_Y_FT = -2.0;
 
-// Aim point at the front of the plate, 2.0 ft up: below the middle of a typical 1.6-3.4 ft zone
-// so the whole zone, bottom included, stays in frame.
-const ZONE_AIM = [0, 17 / 12, 2.0];
-const RELEASE_AREA = [0, 55, 6]; // roughly where pitchers let go
+// Aim and field of view, also framing choices: picked (by a grid search over every exported
+// pitch, 2026-11-10) as the narrowest vertical FOV that, at 16:9 and within 95% of the frame,
+// shows every pitch's zone corners, plate arrival (Statcast fit and simulated) and release point
+// for the pitch's own batter side. Needs 66.6 deg; balls in the dirt (plate z down to -0.8 ft,
+// 5.8 ft below the eye at ~3.7 ft away) set it. Checked by test/cameras.test.js.
+export const AIM_YAW_DEG = 16.5; // turned toward the plate (right for a righty, left for a lefty)
+export const AIM_PITCH_DEG = -26; // looking down
+export const BATTER_EYE_VFOV_DEG = 67;
 
 /**
  * Batter's-eye camera for batter side `stand` ("R" or "L").
- * A righty stands on the catcher's left (x < 0), a lefty on the right.
- * Aims along the bisector of the directions to the strike zone and to the release area, so both
- * are in frame (needs a ~50 deg vertical FOV: the zone sits up to ~35 deg below the eye line).
+ * A righty stands on the catcher's left (x < 0), a lefty on the right; the aim is mirrored.
+ * Use with a perspective camera of vertical FOV BATTER_EYE_VFOV_DEG.
  * @returns {{position: number[], target: number[]}} Statcast feet.
  */
 export function batterEye(stand) {
   const side = stand === "L" ? 1 : -1;
   const position = [side * STANCE_X_FT, STANCE_Y_FT, EYE_HEIGHT_FT];
-  const a = unit(sub(ZONE_AIM, position));
-  const b = unit(sub(RELEASE_AREA, position));
-  const dir = unit(a.map((v, i) => v + b[i]));
+  const yaw = (-side * AIM_YAW_DEG * Math.PI) / 180; // +yaw turns toward +x
+  const pitch = (AIM_PITCH_DEG * Math.PI) / 180;
+  const dir = [Math.sin(yaw) * Math.cos(pitch), Math.cos(yaw) * Math.cos(pitch), Math.sin(pitch)];
   return { position, target: position.map((v, i) => v + 10 * dir[i]) };
 }
-
-const sub = (u, v) => u.map((a, i) => a - v[i]);
-const unit = (u) => {
-  const n = Math.hypot(...u);
-  return u.map((a) => a / n);
-};

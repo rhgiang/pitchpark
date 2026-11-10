@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { toScene } from "./coords.js";
 import { buildField, buildZone } from "./field.js";
-import { batterEye } from "./cameras.js";
+import { batterEye, BATTER_EYE_VFOV_DEG } from "./cameras.js";
 import { stateAt } from "./trajectory.js";
 // ponytail: one fixture pitch until the HUD/at-bat picker lands (later tasks use data.js).
 import fixture from "../test/fixtures/synthetic.json";
@@ -27,8 +27,8 @@ const ball = new THREE.Mesh(
 );
 scene.add(ball);
 
-// 50 deg vertical FOV fits both the zone and the mound from the box (see cameras.js).
-const camera = new THREE.PerspectiveCamera(50, 1, 0.05, 2000);
+// Vertical FOV chosen so every pitch's zone, plate arrival and release fit (see cameras.js).
+const camera = new THREE.PerspectiveCamera(BATTER_EYE_VFOV_DEG, 1, 0.05, 2000);
 const eye = batterEye(stand);
 camera.position.copy(toScene(eye.position));
 camera.lookAt(toScene(eye.target));
