@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { toScene } from "./coords.js";
-import { PALETTE, makeToonMaterial, noOutline } from "./look.js";
+import { PALETTE, makeToonMaterial, inkProof } from "./look.js";
 
 // Geometry from the Official Baseball Rules (2.01-2.02, Appendix 2). Statcast's y = 0 is the
 // back point of home plate, which is also where the rules measure the rubber from.
@@ -69,7 +69,7 @@ export function buildZone(szTop, szBot) {
   const pts = [[-w, szBot], [w, szBot], [w, szTop], [-w, szTop]].map(([x, z]) =>
     toScene([x, PLATE_FRONT_Y_FT, z]),
   );
-  return noOutline(new THREE.LineLoop(
+  return inkProof(new THREE.LineLoop(
     new THREE.BufferGeometry().setFromPoints(pts),
     new THREE.LineBasicMaterial({ color: 0xffffff, fog: false }),
   ));

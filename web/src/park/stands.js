@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { PALETTE, makeToonMaterial, noOutline } from "../look.js";
 import { sweep, cap, frameAt, box, place } from "./build.js";
 import {
@@ -126,7 +127,7 @@ function seatsAndCrowd(seats, seed) {
   const seatGeo = new THREE.BoxGeometry(1.6, 0.3, 1.3).translate(0, 1.2, 0);
   const backGeo = new THREE.BoxGeometry(1.6, 1.3, 0.25).translate(0, 1.9, 0.6);
   const seatMesh = new THREE.InstancedMesh(
-    mergeTwo(seatGeo, backGeo), makeToonMaterial(0xffffff), seats.length);
+    mergeGeometries([seatGeo, backGeo]), makeToonMaterial(0xffffff), seats.length);
   const people = seats.filter(() => R() < 0.5); // half full: the seat colours still show
   const body = new THREE.InstancedMesh(new THREE.BoxGeometry(1.25, 1.7, 0.9).translate(0, 2.15, 0.15),
     makeToonMaterial(0xffffff), people.length);
@@ -147,17 +148,6 @@ function seatsAndCrowd(seats, seed) {
   });
   for (const m of [seatMesh, body, head]) { m.receiveShadow = true; m.castShadow = m === seatMesh; }
   return [seatMesh, body, head];
-}
-
-function mergeTwo(a, b) {
-  const g = new THREE.BufferGeometry();
-  const pos = [...a.attributes.position.array, ...b.attributes.position.array];
-  const nor = [...a.attributes.normal.array, ...b.attributes.normal.array];
-  const off = a.attributes.position.count;
-  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
-  g.setIndex([...a.index.array, ...[...b.index.array].map((i) => i + off)]);
-  return g;
 }
 
 /** Dugout: open-fronted shelter in foul ground against the stands (local x along the line). */

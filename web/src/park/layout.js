@@ -116,6 +116,8 @@ export function rng(seed) {
   };
 }
 
+// Middle of the bowl: light towers aim here; look.js's night falloff and sun are centred here.
+export const FIELD_CENTRE_FT = [0, 170];
 // The floating island the park sits on (art): a disc around the middle of the park.
 export const ISLAND = { centre: [0, 165], radiusFt: 560 };
 // Outfield: bleachers start this far behind the fence; the gap holds the bullpens.

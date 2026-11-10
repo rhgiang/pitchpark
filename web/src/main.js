@@ -14,7 +14,7 @@ import { makeBall, makeGhost, updateBall, spinBall } from "./ball.js";
 import { renderHud } from "./hud.js";
 import { makePitcher, poseAtRelease } from "./pitcher.js";
 import { buildPark } from "./park/index.js";
-import { initLook, setTimeOfDay, refreshShadows, noOutline, timeOfDay, TIMES } from "./look.js";
+import { initLook, setTimeOfDay, refreshShadows, inkProof, timeOfDay, TIMES } from "./look.js";
 
 // No MSAA: the composer renders to its own targets, and SMAA (look.js) anti-aliases instead.
 const renderer = new THREE.WebGLRenderer({ antialias: false });
@@ -24,9 +24,9 @@ document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 scene.add(buildPark()); // swappable: see park/index.js
 scene.add(buildField());
-// The ball is tiny on screen: an outline would swamp it, so it and the ghost are not outlined.
-const ball = noOutline(makeBall());
-const ghost = noOutline(makeGhost());
+// The ball is tiny on screen: an outline would swamp it, and no line may cross it (inkProof).
+const ball = inkProof(makeBall());
+const ghost = inkProof(makeGhost());
 scene.add(ball, ghost);
 let zone = null;
 let figure = null; // the pitcher, rebuilt per pitcher (handedness), re-posed per pitch
@@ -35,6 +35,7 @@ let figure = null; // the pitcher, rebuilt per pitcher (handedness), re-posed pe
 // Far plane 6000 ft: the free camera can pull back to the whole floating island (~1300 ft across).
 const camera = new THREE.PerspectiveCamera(BATTER_EYE_VFOV_DEG, 1, 0.05, 6000);
 camera.layers.enable(1); // layer 1: drawn but not outlined (look.js)
+camera.layers.enable(2); // layer 2: not outlined and never inked over (look.js)
 const look = initLook(renderer, scene, camera);
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -129,6 +130,7 @@ async function pickPitcher(slug) {
     });
   }
   figure = makePitcher(data.pitcher.throws);
+  refreshShadows(); // new figure: redraw even if this at-bat's first pitch has no release
   scene.add(figure);
   dispatch({ type: "pickPitcher", slug, data });
   $("pitcher").value = slug;

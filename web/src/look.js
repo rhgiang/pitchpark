@@ -56,25 +56,58 @@ function toonRamp() {
 // Floodlight falloff, shared by every toon material: at night the sun is replaced by the
 // stadium lights, which should light the bowl and not the trees outside it. Direct light is
 // scaled from 1 inside radius r0 (ft, around the field centre) to `min` beyond r1. By day min = 1.
-const FIELD_CENTRE = new THREE.Vector2(0, -170); // scene x, z (Statcast y = 170 ft)
-const flood = { value: new THREE.Vector4(FIELD_CENTRE.x, FIELD_CENTRE.y, 330, 560) };
+// The numbers depend on the park's size, so they come from the park: setParkLighting() below
+// (park/index.js calls it). These defaults suit the starter park.
+const parkLight = { centreFt: [0, 170], floodRadiiFt: [330, 560], shadowHalfFt: 450 };
+const flood = { value: new THREE.Vector4(0, -170, 330, 560) }; // scene x, z, r0, r1
 const floodMin = { value: 1 };
+
+/**
+ * Apply [find, replace] pairs to shader source, throwing if any `find` is missing: a three.js
+ * upgrade that renames a chunk should fail loudly, not silently drop the patch.
+ */
+function patch(src, ...pairs) {
+  for (const [a, b] of pairs) {
+    if (!src.includes(a)) throw new Error(`look.js shader patch: "${a}" not found`);
+    src = src.replace(a, b);
+  }
+  return src;
+}
+
 function addFloodFalloff(shader) {
   shader.uniforms.uFlood = flood;
   shader.uniforms.uFloodMin = floodMin;
-  shader.vertexShader = shader.vertexShader
-    .replace("#include <common>", "#include <common>\nvarying vec2 vParkXZ;")
-    .replace("#include <project_vertex>", `#include <project_vertex>
+  shader.vertexShader = patch(shader.vertexShader,
+    ["#include <common>", "#include <common>\nvarying vec2 vParkXZ;"],
+    ["#include <project_vertex>", `#include <project_vertex>
       vec4 parkW = vec4(transformed, 1.0);
       #ifdef USE_INSTANCING
         parkW = instanceMatrix * parkW;
       #endif
-      vParkXZ = (modelMatrix * parkW).xz;`);
-  shader.fragmentShader = shader.fragmentShader
-    .replace("#include <common>", "#include <common>\nvarying vec2 vParkXZ;\nuniform vec4 uFlood;\nuniform float uFloodMin;")
-    .replace("#include <lights_fragment_end>", `#include <lights_fragment_end>
+      vParkXZ = (modelMatrix * parkW).xz;`]);
+  shader.fragmentShader = patch(shader.fragmentShader,
+    ["#include <common>", "#include <common>\nvarying vec2 vParkXZ;\nuniform vec4 uFlood;\nuniform float uFloodMin;"],
+    ["#include <lights_fragment_end>", `#include <lights_fragment_end>
       reflectedLight.directDiffuse *= mix(1.0, uFloodMin,
-        smoothstep(uFlood.z, uFlood.w, distance(vParkXZ, uFlood.xy)));`);
+        smoothstep(uFlood.z, uFlood.w, distance(vParkXZ, uFlood.xy)));`]);
+}
+
+/**
+ * Lighting numbers that depend on the park, in Statcast feet; any omitted keep their value.
+ * centreFt: middle of the bowl (night falloff centre, sun aim); floodRadiiFt: [r0, r1], full
+ * floodlight inside r0, faded out by r1; shadowHalfFt: half-width of the sun's shadow box.
+ * Works before or after initLook.
+ */
+export function setParkLighting(opts = {}) {
+  for (const k of ["centreFt", "floodRadiiFt", "shadowHalfFt"]) if (opts[k] !== undefined) parkLight[k] = opts[k];
+  const [x, y] = parkLight.centreFt;
+  flood.value.set(x, -y, ...parkLight.floodRadiiFt);
+  if (!look.sun) return; // initLook reads parkLight when it runs
+  look.sun.target.position.set(x, 0, -y);
+  const h = parkLight.shadowHalfFt;
+  Object.assign(look.sun.shadow.camera, { left: -h, right: h, top: h, bottom: -h });
+  look.sun.shadow.camera.updateProjectionMatrix();
+  if (look.timeOfDay) setTimeOfDay(look.timeOfDay); // re-place the sun about the new centre
 }
 
 /**
@@ -114,6 +147,17 @@ export function makeGlowSprite(sizeFt) {
   return noOutline(s);
 }
 
+/**
+ * Layer 2: never outlined and never inked over (ball, ghost, strike zone). These are what the
+ * viewer is about, so they must stay on top of every line: the normal/depth pass marks their
+ * pixels (a < 0) wherever they are nearer than the outlined scene, and the edge pass skips ink
+ * there and treats marked neighbours as background-free (no ring around the ball either).
+ */
+export function inkProof(obj) {
+  obj.traverse((o) => o.layers.set(2));
+  return obj;
+}
+
 /** Layer 1 only: drawn, but not outlined (sky, glows, the strike zone, the ball, nets). */
 export function noOutline(obj) {
   obj.traverse((o) => o.layers.set(1));
@@ -128,13 +172,13 @@ function makeNormalDepthMaterial(far) {
   const m = new THREE.MeshNormalMaterial({ side: THREE.DoubleSide, transparent: true, blending: THREE.NoBlending });
   m.onBeforeCompile = (s) => {
     s.uniforms.uFar = { value: far };
-    s.vertexShader = s.vertexShader
-      .replace("#include <common>", "#include <common>\nvarying float vViewZ;")
-      .replace("#include <project_vertex>", "#include <project_vertex>\nvViewZ = -mvPosition.z;");
-    s.fragmentShader = s.fragmentShader
-      .replace("#include <packing>", "#include <packing>\nvarying float vViewZ;\nuniform float uFar;")
-      .replace("gl_FragColor = vec4( packNormalToRGB( normal ), diffuseColor.a );",
-        "gl_FragColor = vec4( normal, vViewZ / uFar );");
+    s.vertexShader = patch(s.vertexShader,
+      ["#include <common>", "#include <common>\nvarying float vViewZ;"],
+      ["#include <project_vertex>", "#include <project_vertex>\nvViewZ = -mvPosition.z;"]);
+    s.fragmentShader = patch(s.fragmentShader,
+      ["#include <packing>", "#include <packing>\nvarying float vViewZ;\nuniform float uFar;"],
+      ["gl_FragColor = vec4( packNormalToRGB( normal ), diffuseColor.a );",
+        "gl_FragColor = vec4( normal, vViewZ / uFar );"]);
   };
   return m;
 }
@@ -173,7 +217,8 @@ const EDGE_SHADER = {
     uniform vec3 uInk;
     uniform float uFar, uScale;
     varying vec2 vUv;
-    vec4 nd(vec2 o) { return texture2D(tND, vUv + o * uTexel * uScale); }
+    vec4 c0; // the centre sample; an ink-proof neighbour (a < 0) reads as the centre
+    vec4 nd(vec2 o) { vec4 v = texture2D(tND, vUv + o * uTexel * uScale); return v.a < 0.0 ? c0 : v; }
     float inv(float a) { return 1.0 / max(a, 1e-6); }
     // Near-side silhouette / ridge strength at step k px along both axes.
     float ridge(float iz, float k) {
@@ -182,8 +227,10 @@ const EDGE_SHADER = {
       return max(-sx, -sy) / iz;
     }
     void main() {
-      vec4 c = nd(vec2(0.0));
       vec3 col = texture2D(tDiffuse, vUv).rgb;
+      c0 = texture2D(tND, vUv);
+      if (c0.a < 0.0) { gl_FragColor = vec4(col, 1.0); return; } // ball / ghost / zone: no ink
+      vec4 c = c0;
       if (c.a >= 1.0) { gl_FragColor = vec4(col, 1.0); return; } // sky: no line
       float iz = inv(c.a);
       float depthEdge = smoothstep(0.02, 0.06, max(ridge(iz, 1.0), ridge(iz, 2.0)));
@@ -323,7 +370,8 @@ const dirFrom = ([az, el]) => {
  * and ink, and switches the light towers on at sunset and night. Call after initLook.
  */
 export function setTimeOfDay(name) {
-  const T = TIMES[name] ?? TIMES.day;
+  if (!Object.hasOwn(TIMES, name)) name = "day"; // ?tod= is user input: own keys only
+  const T = TIMES[name];
   const u = look.sky.material.uniforms;
   u.uTop.value.set(T.top); u.uMid.value.set(T.mid);
   u.uHorizon.value.set(T.horizon); u.uBelow.value.set(T.below);
@@ -346,7 +394,7 @@ export function setTimeOfDay(name) {
   floodMin.value = T.floodMin;
   lampMaterial.color.set(T.lamps ? PALETTE.lampOn : PALETTE.lampOff);
   glowMaterial.opacity = name === "night" ? 0.7 : T.lamps ? 0.35 : 0;
-  look.timeOfDay = name in TIMES ? name : "day";
+  look.timeOfDay = name;
   refreshShadows();
 }
 
@@ -375,10 +423,11 @@ export function initLook(renderer, scene, camera) {
   // One shadow-casting sun over the stadium (900 ft square): 4096 texels -> ~0.22 ft per texel,
   // enough for the pitcher's shadow on the mound. Trees beyond have painted contact shadows.
   const sun = new THREE.DirectionalLight(0xffffff, 2);
-  sun.target.position.set(FIELD_CENTRE.x, 0, FIELD_CENTRE.y);
+  sun.target.position.set(parkLight.centreFt[0], 0, -parkLight.centreFt[1]);
   sun.castShadow = true;
   sun.shadow.mapSize.set(4096, 4096);
-  Object.assign(sun.shadow.camera, { left: -450, right: 450, top: 450, bottom: -450, near: 900, far: 2100 });
+  const h = parkLight.shadowHalfFt;
+  Object.assign(sun.shadow.camera, { left: -h, right: h, top: h, bottom: -h, near: 900, far: 2100 });
   // Biases against shadow acne on walls the sun grazes (~0.3 ft texels): a constant depth
   // offset plus a push along the surface normal, in feet.
   sun.shadow.bias = -0.0005;
@@ -404,6 +453,12 @@ export function initLook(renderer, scene, camera) {
     type: THREE.FloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
   });
   const ndMaterial = makeNormalDepthMaterial(camera.far);
+  // Ink-proof marker: a = -1 where a layer-2 object is in front (depth-tested against layer 0).
+  const markMaterial = new THREE.ShaderMaterial({
+    vertexShader: "void main() { gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+    fragmentShader: "void main() { gl_FragColor = vec4(0.0, 0.0, 0.0, -1.0); }",
+    side: THREE.DoubleSide, blending: THREE.NoBlending, transparent: true,
+  });
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
   look.edge = new ShaderPass(EDGE_SHADER);
@@ -435,6 +490,12 @@ export function initLook(renderer, scene, camera) {
       renderer.setClearColor(0x000000, 1);
       renderer.clear();
       renderer.render(scene, camera);
+      camera.layers.set(2);
+      scene.overrideMaterial = markMaterial;
+      const autoClear = renderer.autoClear;
+      renderer.autoClear = false; // keep layer 0's depth so hidden parts of the ball stay unmarked
+      renderer.render(scene, camera);
+      renderer.autoClear = autoClear;
       scene.overrideMaterial = null;
       camera.layers.mask = mask;
       renderer.setClearColor(clear, alpha);

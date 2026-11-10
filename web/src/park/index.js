@@ -1,11 +1,11 @@
 import * as THREE from "three";
-import { PALETTE } from "../look.js";
+import { PALETTE, setParkLighting } from "../look.js";
 import { buildGround, offsetPath } from "./ground.js";
 import { buildStands, mainPath, upperPath, bleacherPaths, MAIN_DEPTH_FT, BLEACHER_DEPTH_FT } from "./stands.js";
 import { buildProps, ISLETS } from "./props.js";
 import {
   ISLAND, fieldBoundary, fencePath, polar, fenceDistFt, resample, normals, rng, inside,
-  BATTERS_EYE_HALF_DEG,
+  BATTERS_EYE_HALF_DEG, FIELD_CENTRE_FT,
 } from "./layout.js";
 
 /*
@@ -24,6 +24,10 @@ import {
  *   look.js's makeToonMaterial(color) so it gets the outlines' companion shading, fog and the
  *   night falloff, and set castShadow / receiveShadow. Keep the field clear around home plate
  *   and the mound so field.js's geometry shows through.
+ * - Lighting that depends on the park's size is the park's job too: call look.js's
+ *   setParkLighting({ centreFt, floodRadiiFt, shadowHalfFt }) from buildPark (see below):
+ *   the bowl's centre, the radii the night floodlights reach, and the half-width of the sun's
+ *   shadow box (make it cover your stands; more area means coarser shadows).
  *
  * Layout: everything is placed from a "plan" (paths, footprints, scatter of trees and props)
  * built once from a fixed seed, so the park is the same on every load and the painted ground
@@ -136,6 +140,9 @@ function tree(R, p, h) {
 
 /** The whole starter park as one Group (scene feet). */
 export function buildPark() {
+  // Floodlights fully on inside 330 ft of the bowl's centre, gone by 560 (the island's trees);
+  // the shadow box covers the stadium (~900 ft square, ~0.22 ft per shadow texel).
+  setParkLighting({ centreFt: FIELD_CENTRE_FT, floodRadiiFt: [330, 560], shadowHalfFt: 450 });
   const plan = makePlan();
   const g = new THREE.Group();
   g.name = "park";

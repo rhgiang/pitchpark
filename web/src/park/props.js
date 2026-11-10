@@ -1,15 +1,15 @@
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { PALETTE, makeToonMaterial, lampMaterial, makeGlowSprite, noOutline } from "../look.js";
 import { sweep, frameAt, radialFrame, box, place, textTexture, shadeOf } from "./build.js";
 import {
   POLE_R, POLE_L, ISLAND, polar, fenceDistFt, normals, rng, BLEACHER_GAP_FT,
-  BATTERS_EYE_HALF_DEG,
+  BATTERS_EYE_HALF_DEG, FIELD_CENTRE_FT as FIELD_CENTRE,
 } from "./layout.js";
 
 // Everything that isn't seating or ground: poles, towers, scoreboard, batter's eye, bullpens,
 // trees, umbrellas, kiosks, flags, the island's rock underside and the floating islets.
 
-const FIELD_CENTRE = [0, 170];
 
 /** Light tower: a tapered mast and a bank of lamps aimed at the field, with a night glow. */
 function lightTower([x, y], heightFt, lampSlots) {
@@ -132,7 +132,7 @@ function bullpens() {
 /** Instanced trees: conifers (stacked cones) and round trees, with trunks. */
 function trees(list) {
   const cone = (r, h, y) => new THREE.ConeGeometry(r, h, 7).translate(0, y + h / 2, 0);
-  const conifer = mergeAll([cone(0.5, 0.5, 0.18), cone(0.38, 0.42, 0.45), cone(0.25, 0.34, 0.7)]);
+  const conifer = mergeGeometries([cone(0.5, 0.5, 0.18), cone(0.38, 0.42, 0.45), cone(0.25, 0.34, 0.7)]);
   const round = new THREE.IcosahedronGeometry(0.36, 1).scale(1, 0.9, 1).translate(0, 0.62, 0);
   const trunk = new THREE.CylinderGeometry(0.05, 0.07, 0.4, 6).translate(0, 0.2, 0);
   const kinds = { conifer: list.filter((t) => t.kind === "conifer"), round: list.filter((t) => t.kind === "round") };
@@ -152,21 +152,6 @@ function trees(list) {
   tr.castShadow = true;
   out.push(tr);
   return out;
-}
-
-function mergeAll(geos) {
-  const pos = [], nor = [], idx = [];
-  for (const g of geos) {
-    const off = pos.length / 3;
-    pos.push(...g.attributes.position.array);
-    nor.push(...g.attributes.normal.array);
-    idx.push(...[...g.index.array].map((i) => i + off));
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
-  g.setIndex(idx);
-  return g;
 }
 
 /** Striped parasols with poles (instanced), for the plazas. */
