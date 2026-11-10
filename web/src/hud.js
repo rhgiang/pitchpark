@@ -1,4 +1,4 @@
-import { currentAtBat, shownPaths, landed } from "./state.js";
+import { currentAtBat, shownPaths, landed, spinFactor } from "./state.js";
 import { inDirt } from "./ball.js";
 
 const MODE_LABEL = { real: "Statcast fit", sim: "M1 + M3", ghost: "Ghost: Statcast fit + M1 + M3 (translucent)" };
@@ -14,6 +14,22 @@ function statusLabel(state, pitch) {
     : MODE_LABEL[state.mode];
   // Only after landing: "in the dirt" before release would give the pitch away.
   return landed(state) && shownPaths(state).some(inDirt) ? `${label} · in the dirt` : label;
+}
+
+const VIEW_LABEL = {
+  batter: "Batter's eye", side: "Side view (first-base side)",
+  free: "Free camera (drag to orbit, wheel to zoom)", ride: "Riding with the ball",
+};
+
+/** Spin line: Statcast rpm and axis, and whether the on-screen rotation is slowed. */
+function spinLabel(state, pitch) {
+  if (pitch.spin_rpm == null || pitch.spin_axis_deg == null) return "spin unknown";
+  const rps = pitch.spin_rpm / 60;
+  const f = spinFactor(state.speed);
+  const shown = state.speed >= 1
+    ? `rotation slowed to 1/${Math.round(1 / f)} of true: ${(rps * f).toFixed(1)} rev/s shown`
+    : "rotation at the true rate (slow motion)";
+  return `spin ${pitch.spin_rpm.toFixed(0)} rpm = ${rps.toFixed(1)} rev/s, axis ${pitch.spin_axis_deg.toFixed(0)}° (blue rod) · ${shown}`;
 }
 
 /**
@@ -35,7 +51,8 @@ export function renderHud(state, pitch) {
     <div>${ab.game_date} · vs ${ab.stand}HB · pitch ${state.pitchIndex + 1} of ${n}</div>
     <div class="pitch">${pitch.pitch_name ?? pitch.pitch_type ?? "unknown"} · ${fmt(pitch.speed_mph, 1, " mph")}</div>
     <div>Result: ${result}</div>
-    <div class="status">${statusLabel(state, pitch)}</div>
+    <div class="status">${statusLabel(state, pitch)} · ${VIEW_LABEL[state.view]}</div>
+    <div class="tunnel">${spinLabel(state, pitch)}</div>
     <div class="tunnel">From the Statcast fit: VAA ${fmt(tn.vaa_deg, 1, "°")} · HAA ${fmt(tn.haa_deg, 1, "°")}
       · perceived ${fmt(tn.perceived_mph, 1, " mph")} · sep. from previous at ${state.data.meta.decision_y_ft} ft ${fmt(tn.sep_prev_in, 1, " in")}</div>`;
 }

@@ -1,10 +1,16 @@
 import * as THREE from "three";
 import { toScene } from "./coords.js";
 import { buildField, buildZone } from "./field.js";
-import { batterEye, BATTER_EYE_VFOV_DEG } from "./cameras.js";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import {
+  batterEye, sideView, rideAlong, BATTER_EYE_VFOV_DEG, SIDE_VFOV_DEG, RIDE_VFOV_DEG, FREE_VFOV_DEG,
+  FREE_START, FREE_MIN_DIST_FT, FREE_MAX_DIST_FT,
+} from "./cameras.js";
 import { loadIndex, loadPitcher } from "./data.js";
-import { initialState, reduce, currentAtBat, currentPitch, MODES, SPEEDS } from "./state.js";
-import { makeBall, makeGhost, updateBall } from "./ball.js";
+import {
+  initialState, reduce, currentAtBat, currentPitch, shownPaths, MODES, SPEEDS, VIEWS, spinFactor,
+} from "./state.js";
+import { makeBall, makeGhost, updateBall, spinBall } from "./ball.js";
 import { renderHud } from "./hud.js";
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -22,6 +28,38 @@ let zone = null;
 
 // Vertical FOV chosen so every pitch's zone, plate arrival and release fit (see cameras.js).
 const camera = new THREE.PerspectiveCamera(BATTER_EYE_VFOV_DEG, 1, 0.05, 2000);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enabled = false;
+controls.minDistance = FREE_MIN_DIST_FT;
+controls.maxDistance = FREE_MAX_DIST_FT;
+let freeInit = false;
+let appliedView = null;
+const VFOV = { batter: BATTER_EYE_VFOV_DEG, side: SIDE_VFOV_DEG, free: FREE_VFOV_DEG, ride: RIDE_VFOV_DEG };
+
+/** Point the camera for the current view. Runs every frame: cheap, and ride follows t. */
+function updateCamera() {
+  const ab = currentAtBat(state);
+  const path = shownPaths(state)[0]; // none for no_tracking: keep the last pose
+  if (state.view !== appliedView) {
+    appliedView = state.view;
+    camera.fov = VFOV[state.view];
+    camera.updateProjectionMatrix();
+    controls.enabled = state.view === "free";
+    if (state.view === "free" && !freeInit) { // later visits keep the user's orbit
+      freeInit = true;
+      camera.position.copy(toScene(FREE_START.position));
+      controls.target.copy(toScene(FREE_START.target));
+    }
+  }
+  if (state.view === "free") { controls.update(); return; }
+  let pose = null;
+  if (state.view === "batter") pose = batterEye(ab.stand);
+  else if (path) pose = state.view === "side" ? sideView(path, camera.aspect) : rideAlong(path, state.t);
+  if (!pose) return;
+  camera.position.copy(toScene(pose.position));
+  camera.lookAt(toScene(pose.target));
+}
 
 function resize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -46,11 +84,6 @@ function dispatch(action) {
   }
   const ab = currentAtBat(state);
   const pitch = currentPitch(state);
-  if (ab !== shown.ab) { // re-frame for this batter's side
-    const eye = batterEye(ab.stand);
-    camera.position.copy(toScene(eye.position));
-    camera.lookAt(toScene(eye.target));
-  }
   if (pitch !== shown.pitch) { // zone height is per pitch (Statcast sz_top / sz_bot)
     if (zone) scene.remove(zone);
     zone = pitch.sz_top_ft == null ? null : buildZone(pitch.sz_top_ft, pitch.sz_bot_ft);
@@ -63,7 +96,9 @@ function dispatch(action) {
     b.disabled = m !== "real" && !state.modeAllowed;
     b.classList.toggle("on", state.mode === m);
   }
-  for (const v of SPEEDS) $(`speed-${v}`).classList.toggle("on", state.speed === v);
+  for (const v of VIEWS) $(`view-${v}`).classList.toggle("on", state.view === v);
+  for (const v of VIEWS) $(`view-${v}`).onclick = () => dispatch({ type: "setView", view: v });
+for (const v of SPEEDS) $(`speed-${v}`).classList.toggle("on", state.speed === v);
   renderHud(state, pitch);
 }
 
@@ -85,8 +120,10 @@ const KEYS = {
   Space: { type: "replay" }, ArrowRight: { type: "nextPitch" }, ArrowLeft: { type: "prevPitch" },
   KeyR: { type: "setMode", mode: "real" }, KeyS: { type: "setMode", mode: "sim" },
   KeyG: { type: "setMode", mode: "ghost" },
-  Digit1: { type: "setSpeed", speed: 1 }, Digit2: { type: "setSpeed", speed: 0.25 },
-  Digit3: { type: "setSpeed", speed: 0.1 },
+  Digit1: { type: "setView", view: "batter" }, Digit2: { type: "setView", view: "side" },
+  Digit3: { type: "setView", view: "free" }, Digit4: { type: "setView", view: "ride" },
+  KeyZ: { type: "setSpeed", speed: 1 }, KeyX: { type: "setSpeed", speed: 0.25 },
+  KeyC: { type: "setSpeed", speed: 0.1 },
 };
 window.addEventListener("keydown", (e) => {
   // Leave browser shortcuts (Ctrl+R, ...) alone, and keys aimed at a focused control: a select
@@ -127,6 +164,7 @@ async function start() {
   for (let i = 0; i < Number(q.get("pitch") ?? 0); i++) dispatch({ type: "nextPitch" });
   // Unknown mode/speed values are ignored by the reducer.
   if (q.has("mode")) dispatch({ type: "setMode", mode: q.get("mode") });
+  if (q.has("view")) dispatch({ type: "setView", view: q.get("view") });
   if (q.has("speed")) dispatch({ type: "setSpeed", speed: Number(q.get("speed")) });
   // Freeze at t (no playback) so a headless screenshot catches the ball mid-flight.
   state = { ...state, playing: false, t: Number(q.get("t") ?? 0) };
@@ -144,7 +182,9 @@ renderer.setAnimationLoop((now) => {
     dispatch({ type: "tick", dt });
     const p = currentPitch(state);
     updateBall(ball, state.mode === "sim" ? p.sim : p.real, state.t);
+    spinBall(ball, p.spin_rpm == null ? null : p.spin_axis_deg, 2 * Math.PI * (p.spin_rpm / 60) * state.t * spinFactor(state.speed));
     updateBall(ghost, state.mode === "ghost" ? p.sim : null, state.t);
   }
+  if (state.data) updateCamera();
   renderer.render(scene, camera);
 });

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { initialState, reduce, currentPitch, landed, flightEnd } from "../src/state.js";
+import { initialState, reduce, currentPitch, landed, flightEnd, spinFactor } from "../src/state.js";
 import { duration } from "../src/trajectory.js";
 
 // Synthetic fixture (labelled synthetic in its meta); at-bat 0 = "6-1", at-bat 1 = "28-1".
@@ -92,4 +92,20 @@ test("unknown mode or speed (e.g. from the URL) is ignored", () => {
   const s = run(loaded(), { type: "pickAtBat", index: 0 });
   assert.equal(reduce(s, { type: "setMode", mode: "bogus" }), s);
   assert.equal(reduce(s, { type: "setSpeed", speed: 7 }), s);
+});
+
+test("setView switches the view and keeps the pitch and time; unknown views are ignored", () => {
+  let s = { ...loaded(), t: 0.31 };
+  const view0 = s.view;
+  const r = reduce(s, { type: "setView", view: "ride" });
+  assert.equal(r.view, "ride");
+  assert.equal(r.t, 0.31);
+  assert.equal(r.pitchIndex, s.pitchIndex);
+  assert.equal(reduce(s, { type: "setView", view: "nope" }).view, view0);
+});
+
+test("spin is shown slowed at 1x and at the true rate in slow motion", () => {
+  assert.equal(spinFactor(1), 1 / 20);
+  assert.equal(spinFactor(0.25), 1);
+  assert.equal(spinFactor(0.1), 1);
 });

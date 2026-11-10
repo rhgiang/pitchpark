@@ -4,11 +4,18 @@ import { duration } from "./trajectory.js";
 
 export const MODES = ["real", "sim", "ghost"]; // "Statcast fit", "M1 + M3", both
 export const SPEEDS = [1, 0.25, 0.1];
+export const VIEWS = ["batter", "side", "free", "ride"]; // keys 1-4
+
+// Ball rotation on screen. True spin is ~40 rev/s, which a 60 Hz screen cannot show at 1x (it
+// would alias), so at 1x we show 1/20 of it; in slow motion the true rate is shown (angle =
+// true rate x flight time, and slow motion stretches the flight time on screen).
+export const SLOWED_SPIN_FACTOR = 1 / 20;
+export const spinFactor = (speed) => (speed >= 1 ? SLOWED_SPIN_FACTOR : 1);
 
 export function initialState() {
   return {
     slug: null, data: null, abIndex: 0, pitchIndex: 0,
-    t: 0, playing: false, speed: 1,
+    t: 0, playing: false, speed: 1, view: "batter",
     wantMode: "real", // what the user picked; kept across pitches that cannot show it
     mode: "real", // what is shown: wantMode, or "real" when modeAllowed is false
     modeAllowed: false,
@@ -41,7 +48,7 @@ export function landed(s) {
 export function reduce(s, a) {
   switch (a.type) {
     case "pickPitcher":
-      return derive({ ...initialState(), speed: s.speed, slug: a.slug, data: a.data });
+      return derive({ ...initialState(), speed: s.speed, view: s.view, slug: a.slug, data: a.data });
     case "pickAtBat": {
       const n = s.data.at_bats.length;
       const abIndex = a.index === "random" ? Math.floor(mulberry32(a.seed) * n) : a.index;
@@ -57,6 +64,8 @@ export function reduce(s, a) {
       return { ...s, t: 0, playing: true };
     case "setMode": // unknown values (e.g. a bad ?mode=) are ignored
       return MODES.includes(a.mode) ? derive({ ...s, wantMode: a.mode }) : s;
+    case "setView": // unknown values (e.g. a bad ?view=) are ignored; pitch and t are kept
+      return VIEWS.includes(a.view) ? { ...s, view: a.view } : s;
     case "setSpeed":
       return SPEEDS.includes(a.speed) ? { ...s, speed: a.speed } : s;
     case "tick": {

@@ -1,3 +1,5 @@
+import { stateAt } from "./trajectory.js";
+
 // Camera placements in Statcast feet (x catcher's right, y plate -> pitcher, z up).
 
 // Eye height: standing eye height is ~0.936 x stature (Drillis & Contini 1966, segment
@@ -34,3 +36,54 @@ export function batterEye(stand) {
   const dir = [Math.sin(yaw) * Math.cos(pitch), Math.cos(yaw) * Math.cos(pitch), Math.sin(pitch)];
   return { position, target: position.map((v, i) => v + 10 * dir[i]) };
 }
+
+// Other views. Vertical FOVs are framing choices (the batter's eye needs 67 deg; these do not).
+export const SIDE_VFOV_DEG = 35;
+export const RIDE_VFOV_DEG = 60;
+export const FREE_VFOV_DEG = 50;
+const RIDE_BEHIND_FT = 6; // camera trails the ball by this much along its flight...
+const RIDE_ABOVE_FT = 1.5; // ...and sits this far above it (framing choices)
+const SIDE_HEIGHT_FT = 5; // side camera height; it aims 1 ft lower (framing choices)
+
+/**
+ * First-base-side camera (x > 0) looking across the flight at its midpoint, far enough back that
+ * release and plate fit the horizontal field of view at `aspect` with 15% spare each side.
+ * @param path {t, p} exported path (Statcast feet); release is p[0], the plate the last sample.
+ * @returns {{position: number[], target: number[]}} Statcast feet; use vertical FOV SIDE_VFOV_DEG.
+ */
+export function sideView(path, aspect = 16 / 9) {
+  const a = path.p[0];
+  const b = path.p[path.p.length - 1];
+  const midY = (a[1] + b[1]) / 2;
+  const halfSpan = (Math.abs(a[1] - b[1]) / 2) * 1.15;
+  const hfov = 2 * Math.atan(Math.tan((SIDE_VFOV_DEG * Math.PI) / 360) * aspect);
+  return {
+    position: [halfSpan / Math.tan(hfov / 2), midY, SIDE_HEIGHT_FT],
+    target: [0, midY, SIDE_HEIGHT_FT - 1],
+  };
+}
+
+/**
+ * Camera riding with the ball at time t_s: behind it (larger y; the ball flies toward -y) and
+ * above, looking down the flight direction (central difference of the samples).
+ * @returns {{position: number[], target: number[]}} Statcast feet; use vertical FOV RIDE_VFOV_DEG.
+ */
+export function rideAlong(path, t_s) {
+  const h = 0.02;
+  const p0 = stateAt(path, t_s - h).p;
+  const p1 = stateAt(path, t_s + h).p;
+  const ball = stateAt(path, t_s).p;
+  const d = p1.map((v, i) => v - p0[i]);
+  const n = Math.hypot(...d) || 1;
+  const dir = d.map((v) => v / n);
+  return {
+    position: [ball[0] - RIDE_BEHIND_FT * dir[0], ball[1] - RIDE_BEHIND_FT * dir[1],
+      ball[2] - RIDE_BEHIND_FT * dir[2] + RIDE_ABOVE_FT],
+    target: ball.map((v, i) => v + 40 * dir[i]),
+  };
+}
+
+// Free orbit (OrbitControls, in main.js): first-base side behind the plate, high, looking at mid-flight.
+export const FREE_START = { position: [35, -18, 16], target: [0, 27, 4] };
+export const FREE_MIN_DIST_FT = 2;
+export const FREE_MAX_DIST_FT = 900; // whole park (fences ~330-400 ft); far plane is 2000
