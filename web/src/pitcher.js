@@ -3,6 +3,7 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { JOINTS, J, buildSkeleton } from "./skeleton.js";
 import { toScene } from "./coords.js";
 import { groundHeightFt, RUBBER_FRONT_Y_FT } from "./field.js";
+import { PALETTE, makeToonMaterial } from "./look.js";
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const DEG = Math.PI / 180;
@@ -222,13 +223,13 @@ export function poseAtRelease(pitcher, release, armAngleDeg) {
   pitcher.updateMatrixWorld(true);
 }
 
-// Materials: one plain toon material per body part, all made here (Task 8 swaps the look).
+// Materials: one park-style toon material per body part (look.js), all made here.
 const COLORS = {
-  jersey: 0xf3f0e8, sleeve: 0x1f3a68, pants: 0xe6e1d4, skin: 0xc98d66,
-  cap: 0x1f3a68, glove: 0x8a5a2b, shoe: 0x1c1c1c,
+  jersey: PALETTE.jersey, sleeve: PALETTE.navy, pants: PALETTE.pants, skin: PALETTE.skin,
+  cap: PALETTE.navy, glove: PALETTE.glove, shoe: PALETTE.shoe,
 };
 const makeMaterials = () => Object.fromEntries(
-  Object.entries(COLORS).map(([k, c]) => [k, new THREE.MeshToonMaterial({ color: c })]));
+  Object.entries(COLORS).map(([k, c]) => [k, makeToonMaterial(c)]));
 
 /** Rigid skinning: each vertex follows one bone, chosen from its rest position. */
 function skin(geo, boneOf) {
@@ -309,6 +310,7 @@ export function makePitcher(throws) {
   mesh.add(bones[0]);
   mesh.bind(skeleton); // at rest: T-pose is the bind pose
   mesh.frustumCulled = false; // bounds are from the rest pose at the origin, not on the mound
+  mesh.castShadow = mesh.receiveShadow = true;
   const g = new THREE.Group();
   g.add(mesh);
   g.userData = { throws, bones };

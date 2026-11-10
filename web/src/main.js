@@ -13,23 +13,29 @@ import {
 import { makeBall, makeGhost, updateBall, spinBall } from "./ball.js";
 import { renderHud } from "./hud.js";
 import { makePitcher, poseAtRelease } from "./pitcher.js";
+import { buildPark } from "./park/index.js";
+import { initLook, setTimeOfDay, refreshShadows, noOutline, timeOfDay, TIMES } from "./look.js";
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+// No MSAA: the composer renders to its own targets, and SMAA (look.js) anti-aliases instead.
+const renderer = new THREE.WebGLRenderer({ antialias: false });
 renderer.setPixelRatio(window.devicePixelRatio);
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87b5e0);
-scene.add(new THREE.HemisphereLight(0xffffff, 0x445533, 2.5));
+scene.add(buildPark()); // swappable: see park/index.js
 scene.add(buildField());
-const ball = makeBall();
-const ghost = makeGhost();
+// The ball is tiny on screen: an outline would swamp it, so it and the ghost are not outlined.
+const ball = noOutline(makeBall());
+const ghost = noOutline(makeGhost());
 scene.add(ball, ghost);
 let zone = null;
 let figure = null; // the pitcher, rebuilt per pitcher (handedness), re-posed per pitch
 
 // Vertical FOV chosen so every pitch's zone, plate arrival and release fit (see cameras.js).
-const camera = new THREE.PerspectiveCamera(BATTER_EYE_VFOV_DEG, 1, 0.05, 2000);
+// Far plane 6000 ft: the free camera can pull back to the whole floating island (~1300 ft across).
+const camera = new THREE.PerspectiveCamera(BATTER_EYE_VFOV_DEG, 1, 0.05, 6000);
+camera.layers.enable(1); // layer 1: drawn but not outlined (look.js)
+const look = initLook(renderer, scene, camera);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enabled = false;
@@ -66,6 +72,7 @@ function updateCamera() {
 
 function resize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
+  look.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
 }
@@ -95,6 +102,7 @@ function dispatch(action) {
     // the figure keeps the previous pose (and a missing arm angle keeps the previous one).
     if (pitch.release?.every(Number.isFinite)) {
       poseAtRelease(figure, pitch.release, pitch.arm_angle_deg ?? figure.userData.armAngleDeg);
+      refreshShadows(); // the pitcher moved: redraw his shadow
     }
   }
   shown = { ab, pitch };
@@ -113,7 +121,13 @@ const randomSeed = () => Math.floor(Math.random() * 2 ** 31);
 
 async function pickPitcher(slug) {
   const data = await loadPitcher(slug);
-  if (figure) scene.remove(figure); // ponytail: old geometry not disposed; small, and only on a pitcher switch
+  if (figure) {
+    scene.remove(figure);
+    figure.traverse((o) => {
+      o.geometry?.dispose();
+      for (const m of [o.material ?? []].flat()) m.dispose();
+    });
+  }
   figure = makePitcher(data.pitcher.throws);
   scene.add(figure);
   dispatch({ type: "pickPitcher", slug, data });
@@ -136,12 +150,19 @@ const KEYS = {
   KeyZ: { type: "setSpeed", speed: 1 }, KeyX: { type: "setSpeed", speed: 0.25 },
   KeyC: { type: "setSpeed", speed: 0.1 },
 };
+const TOD_NAMES = Object.keys(TIMES);
+/** Next time of day: day -> sunset -> night -> day. */
+const cycleTimeOfDay = () => {
+  setTimeOfDay(TOD_NAMES[(TOD_NAMES.indexOf(timeOfDay()) + 1) % TOD_NAMES.length]);
+  $("tod").textContent = `${timeOfDay()[0].toUpperCase()}${timeOfDay().slice(1)} (T)`;
+};
 window.addEventListener("keydown", (e) => {
   // Leave browser shortcuts (Ctrl+R, ...) alone, and keys aimed at a focused control: a select
   // uses arrows itself, and Space on a focused button would also click it (a double replay).
   if (!state.data || e.ctrlKey || e.metaKey || e.altKey) return;
   if (["SELECT", "BUTTON"].includes(e.target.tagName)) return;
   if (e.code === "KeyA") return dispatch({ type: "pickAtBat", index: "random", seed: randomSeed() });
+  if (e.code === "KeyT") return cycleTimeOfDay();
   if (KEYS[e.code]) {
     e.preventDefault();
     dispatch(KEYS[e.code]);
@@ -157,13 +178,18 @@ $("random").onclick = () => dispatch({ type: "pickAtBat", index: "random", seed:
 for (const m of MODES) $(`mode-${m}`).onclick = () => dispatch({ type: "setMode", mode: m });
 for (const v of VIEWS) $(`view-${v}`).onclick = () => dispatch({ type: "setView", view: v });
 for (const v of SPEEDS) $(`speed-${v}`).onclick = () => dispatch({ type: "setSpeed", speed: v });
+$("tod").onclick = cycleTimeOfDay;
 $("pitcher").onchange = (e) => pickPitcher(e.target.value);
 $("atbat").onchange = (e) => dispatch({ type: "pickAtBat", index: Number(e.target.value) });
 
 // Initial state from the URL, e.g. ?pitcher=sale-chris&ab=0&pitch=2&t=0.3&mode=ghost (frozen at
 // t, for screenshots); ab=random&seed=N picks a seeded random at-bat.
+const q = new URLSearchParams(location.search);
+// ?tod=day|sunset|night (unknown names fall back to day).
+setTimeOfDay(q.get("tod") ?? "day");
+$("tod").textContent = `${timeOfDay()[0].toUpperCase()}${timeOfDay().slice(1)} (T)`;
+
 async function start() {
-  const q = new URLSearchParams(location.search);
   const index = await loadIndex();
   $("pitcher").replaceChildren(...index.map((p) => new Option(`${p.name} (${p.throws}HP)`, p.slug)));
   await pickPitcher(q.get("pitcher") ?? index[0].slug);
@@ -186,11 +212,57 @@ async function start() {
   // Freeze at t (no playback) so a headless screenshot catches the ball mid-flight.
   state = { ...state, playing: false, t: Number(q.get("t") ?? 0) };
   renderHud(state, currentPitch(state)); // t may already be past landing
+  if (fpsBox) benchmark();
 }
 start();
 
+// ?fps=1: frame-rate readout, averaged over half-second windows.
+const fpsBox = q.get("fps") === "1" ? $("fps") : null;
+if (fpsBox) fpsBox.hidden = false;
+let fpsFrames = 0, fpsSince = null;
+// Which GPU the browser gave WebGL (a software renderer such as SwiftShader is far slower).
+const gl = renderer.getContext();
+const gpu = gl.getExtension("WEBGL_debug_renderer_info");
+const gpuName = gpu ? gl.getParameter(gpu.UNMASKED_RENDERER_WEBGL) : "unknown GPU";
+function countFrame(now) {
+  if (!fpsBox) return;
+  fpsSince ??= now;
+  fpsFrames++;
+  if (now - fpsSince >= 500) {
+    fpsBox.innerHTML = `${((fpsFrames * 1000) / (now - fpsSince)).toFixed(1)} fps · ${renderer.info.render.calls} draws · ${(renderer.info.render.triangles / 1e6).toFixed(2)} M tris<br>${gpuName}${burst}`;
+    fpsFrames = 0;
+    fpsSince = now;
+  }
+}
+
+/**
+ * Render-cost check for ?fps=1: 100 frames back to back, then a pixel read, which waits for the
+ * GPU to finish them all. Gives ms per frame independent of requestAnimationFrame pacing (a
+ * headless browser hardly runs rAF, so its live fps says nothing about the GPU).
+ */
+let burst = "";
+function benchmark() {
+  updateCamera();
+  look.render(); // warm-up: shaders compiled, shadow map drawn
+  const px = new Uint8Array(4);
+  const t0 = performance.now();
+  for (let i = 0; i < 100; i++) look.render();
+  gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  const ms = (performance.now() - t0) / 100;
+  const t1 = performance.now();
+  refreshShadows();
+  look.render(); // one frame that also redraws the shadow map (happens on each pitch change)
+  gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  const shadowMs = performance.now() - t1;
+  console.log(`render burst (${state.view}, ${timeOfDay()}): ${ms.toFixed(2)} ms/frame; with shadow redraw ${shadowMs.toFixed(1)} ms`);
+  burst = `<br>burst: ${ms.toFixed(2)} ms/frame (${(1000 / ms).toFixed(0)} fps if GPU-bound)`;
+}
+
 let last = null;
+renderer.info.autoReset = false; // count the whole frame (all passes), reset below
 renderer.setAnimationLoop((now) => {
+  countFrame(now);
+  renderer.info.reset();
   // Real time: 1 s of animation per 1 s of flight (times speed), from the exported timestamps.
   // dt is capped so a backgrounded tab does not jump the ball to the plate on return.
   const dt = last === null ? 0 : Math.min((now - last) / 1000, 0.1);
@@ -203,5 +275,5 @@ renderer.setAnimationLoop((now) => {
     updateBall(ghost, state.mode === "ghost" ? p.sim : null, state.t);
   }
   if (state.data) updateCamera();
-  renderer.render(scene, camera);
+  look.render();
 });

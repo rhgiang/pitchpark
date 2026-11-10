@@ -86,4 +86,4 @@ export function rideAlong(path, t_s) {
 // Free orbit (OrbitControls, in main.js): first-base side behind the plate, high, looking at mid-flight.
 export const FREE_START = { position: [35, -18, 16], target: [0, 27, 4] };
 export const FREE_MIN_DIST_FT = 2;
-export const FREE_MAX_DIST_FT = 900; // whole park (fences ~330-400 ft); far plane is 2000
+export const FREE_MAX_DIST_FT = 2200; // out to the whole floating island (~1300 ft across); far plane is 6000

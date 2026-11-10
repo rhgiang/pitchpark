@@ -17,10 +17,12 @@
       #controls select, #controls button { font: 13px system-ui, sans-serif; }
       #controls button.on { background: #ffd27a; }
       #controls button:disabled { opacity: 0.55; }
+      #fps { top: 12px; left: auto; right: 12px; font: 13px ui-monospace, monospace; }
     </style>
   </head>
   <body>
     <div id="hud" class="panel">Loading…</div>
+    <div id="fps" class="panel" hidden></div>
     <div id="controls" class="panel">
       <select id="pitcher" aria-label="Pitcher"></select>
       <select id="atbat" aria-label="At-bat"></select>
@@ -38,6 +40,7 @@
       <button id="speed-1">1× (Z)</button>
       <button id="speed-0.25">0.25× (X)</button>
       <button id="speed-0.1">0.1× (C)</button>
+      <button id="tod">Day (T)</button>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>
