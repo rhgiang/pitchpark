@@ -1,17 +1,19 @@
+import "./ui.css";
 import * as THREE from "three";
 import { toScene } from "./coords.js";
 import { buildField, buildZone } from "./field.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
-  batterEye, sideView, rideAlong, BATTER_EYE_VFOV_DEG, SIDE_VFOV_DEG, RIDE_VFOV_DEG, FREE_VFOV_DEG,
-  FREE_START, FREE_MIN_DIST_FT, FREE_MAX_DIST_FT,
+  batterEye, catcherView, sideView, rideAlong, BATTER_EYE_VFOV_DEG, CATCHER_VFOV_DEG, SIDE_VFOV_DEG,
+  RIDE_VFOV_DEG, FREE_VFOV_DEG, FREE_START, FREE_MIN_DIST_FT, FREE_MAX_DIST_FT,
 } from "./cameras.js";
 import { loadIndex, loadPitcher } from "./data.js";
 import {
   initialState, reduce, currentAtBat, currentPitch, shownPaths, MODES, SPEEDS, VIEWS, spinFactor,
 } from "./state.js";
+import { makeTube, updateTube } from "./trail.js";
 import { makeBall, makeGhost, updateBall, spinBall } from "./ball.js";
-import { renderHud } from "./hud.js";
+import { renderHud, buildStrip } from "./hud.js";
 import { makePitcher, poseAtRelease } from "./pitcher.js";
 import { buildPark } from "./park/index.js";
 import { initLook, setTimeOfDay, refreshShadows, inkProof, timeOfDay, TIMES } from "./look.js";
@@ -28,12 +30,17 @@ scene.add(buildField());
 const ball = inkProof(makeBall());
 const ghost = inkProof(makeGhost());
 scene.add(ball, ghost);
+// Movement aids (trail.js): a fading trail behind each flying ball, and the dashed no-spin path.
+const trail = makeTube({ color: 0xffe07a, radiusFt: 0.035, fadeS: 0.12 });
+const ghostTrail = makeTube({ color: 0xffb070, radiusFt: 0.03, fadeS: 0.12, opacity: 0.7 });
+const noSpinLine = makeTube({ color: 0xffffff, radiusFt: 0.022, dashS: 0.012, opacity: 0.85 });
+scene.add(trail, ghostTrail, noSpinLine);
 let zone = null;
 let figure = null; // the pitcher, rebuilt per pitcher (handedness), re-posed per pitch
 
 // Vertical FOV chosen so every pitch's zone, plate arrival and release fit (see cameras.js).
 // Far plane 6000 ft: the free camera can pull back to the whole floating island (~1300 ft across).
-const camera = new THREE.PerspectiveCamera(BATTER_EYE_VFOV_DEG, 1, 0.05, 6000);
+const camera = new THREE.PerspectiveCamera(CATCHER_VFOV_DEG, 1, 0.05, 6000);
 camera.layers.enable(1); // layer 1: drawn but not outlined (look.js)
 camera.layers.enable(2); // layer 2: not outlined and never inked over (look.js)
 const look = initLook(renderer, scene, camera);
@@ -44,14 +51,17 @@ controls.minDistance = FREE_MIN_DIST_FT;
 controls.maxDistance = FREE_MAX_DIST_FT;
 let freePose = { position: toScene(FREE_START.position), target: toScene(FREE_START.target) };
 let appliedView = null;
-const VFOV = { batter: BATTER_EYE_VFOV_DEG, side: SIDE_VFOV_DEG, free: FREE_VFOV_DEG, ride: RIDE_VFOV_DEG };
+const VFOV = {
+  catcher: CATCHER_VFOV_DEG, batter: BATTER_EYE_VFOV_DEG, side: SIDE_VFOV_DEG, free: FREE_VFOV_DEG,
+  ride: RIDE_VFOV_DEG,
+};
 
 /** Point the camera for the current view. Runs every frame: cheap, and ride follows t. */
 function updateCamera() {
   const ab = currentAtBat(state);
   const path = shownPaths(state)[0]; // none for no_tracking: keep the last pose
   if (state.view !== appliedView) {
-    // Leaving Free: remember the orbit (views 1/2/4 overwrite the camera); entering: restore it.
+    // Leaving Free: remember the orbit (the other views overwrite the camera); entering: restore it.
     if (appliedView === "free") freePose = { position: camera.position.clone(), target: controls.target.clone() };
     appliedView = state.view;
     camera.fov = VFOV[state.view];
@@ -64,8 +74,10 @@ function updateCamera() {
   }
   if (state.view === "free") { controls.update(); return; }
   let pose = null;
-  if (state.view === "batter") pose = batterEye(ab.stand);
-  else if (path) pose = state.view === "side" ? sideView(path, camera.aspect) : rideAlong(path, state.t);
+  if (state.view === "catcher") pose = catcherView();
+  else if (state.view === "batter") pose = batterEye(ab.stand);
+  else if (path && state.view === "side") pose = sideView(path, camera.aspect);
+  else if (path) pose = rideAlong(path, state.t, currentPitch(state).release, state.data.pitcher.throws);
   if (!pose) return;
   camera.position.copy(toScene(pose.position));
   camera.lookAt(toScene(pose.target));
@@ -95,6 +107,7 @@ function dispatch(action) {
   }
   const ab = currentAtBat(state);
   const pitch = currentPitch(state);
+  if (ab !== shown.ab) buildStrip(state, (i) => dispatch({ type: "goPitch", index: i }));
   if (pitch !== shown.pitch) { // zone height is per pitch (Statcast sz_top / sz_bot)
     if (zone) scene.remove(zone);
     zone = pitch.sz_top_ft == null ? null : buildZone(pitch.sz_top_ft, pitch.sz_bot_ft);
@@ -107,14 +120,8 @@ function dispatch(action) {
     }
   }
   shown = { ab, pitch };
-  $("atbat").value = String(state.abIndex);
-  for (const m of MODES) {
-    const b = $(`mode-${m}`);
-    b.disabled = m !== "real" && !state.modeAllowed;
-    b.classList.toggle("on", state.mode === m);
-  }
-  for (const v of VIEWS) $(`view-${v}`).classList.toggle("on", state.view === v);
-  for (const v of SPEEDS) $(`speed-${v}`).classList.toggle("on", state.speed === v);
+  [...$("atbats").children].forEach((b, i) => b.classList.toggle("on", i === state.abIndex));
+  $("picker-label").textContent = `${state.data.pitcher.name.split(",")[0]} · ${ab.game_date} · AB ${state.abIndex + 1}/${state.data.at_bats.length}`;
   renderHud(state, pitch);
 }
 
@@ -132,14 +139,24 @@ async function pickPitcher(slug) {
   figure = makePitcher(data.pitcher.throws);
   refreshShadows(); // new figure: redraw even if this at-bat's first pitch has no release
   scene.add(figure);
+  for (const b of $("pitchers").children) b.classList.toggle("on", b.dataset.slug === slug);
+  // ponytail: a plain list; a search box if at-bat lists grow past a few hundred.
+  $("atbats").replaceChildren(...data.at_bats.map((ab, i) => {
+    const b = document.createElement("button");
+    // No outcome in the label: it would spoil the at-bat. (The pitch count is on the strip anyway.)
+    b.innerHTML = `${ab.game_date} · ${ab.top ? "Top" : "Bot"} ${ab.inning} · vs ${ab.stand}HB <span class="sub">· ${ab.pitches.length} pitches</span>`;
+    b.onclick = () => { dispatch({ type: "pickAtBat", index: i }); togglePicker(false); };
+    return b;
+  }));
+  $("ab-count").textContent = `(${data.at_bats.length} held-out)`;
   dispatch({ type: "pickPitcher", slug, data });
-  $("pitcher").value = slug;
-  // ponytail: plain <option> list; a search box if at-bat lists grow past a few hundred.
-  $("atbat").replaceChildren(...state.data.at_bats.map((ab, i) => new Option(
-    // No outcome in the label: it would spoil the at-bat.
-    `${ab.game_date} · ${ab.top ? "Top" : "Bot"} ${ab.inning} · ${ab.stand}HB`,
-    String(i))));
   dispatch({ type: "pickAtBat", index: 0 });
+}
+
+/** Open or close the pitcher / at-bat picker (no argument: toggle). */
+function togglePicker(open = $("picker").hidden) {
+  $("picker").hidden = !open;
+  if (open) $("atbats").children[state.abIndex]?.scrollIntoView({ block: "center" });
 }
 
 // Every action has a key and a button (headless screenshots cannot press keys).
@@ -147,8 +164,9 @@ const KEYS = {
   Space: { type: "replay" }, ArrowRight: { type: "nextPitch" }, ArrowLeft: { type: "prevPitch" },
   KeyR: { type: "setMode", mode: "real" }, KeyS: { type: "setMode", mode: "sim" },
   KeyG: { type: "setMode", mode: "ghost" },
-  Digit1: { type: "setView", view: "batter" }, Digit2: { type: "setView", view: "side" },
-  Digit3: { type: "setView", view: "free" }, Digit4: { type: "setView", view: "ride" },
+  // 1-5: Catcher, Batter, Side, Ride, Free (the order of VIEWS and of the tabs).
+  ...Object.fromEntries(VIEWS.map((view, i) => [`Digit${i + 1}`, { type: "setView", view }])),
+  KeyN: { type: "toggleNoSpin" },
   KeyZ: { type: "setSpeed", speed: 1 }, KeyX: { type: "setSpeed", speed: 0.25 },
   KeyC: { type: "setSpeed", speed: 0.1 },
 };
@@ -156,44 +174,55 @@ const TOD_NAMES = Object.keys(TIMES);
 /** Next time of day: day -> sunset -> night -> day. */
 const cycleTimeOfDay = () => {
   setTimeOfDay(TOD_NAMES[(TOD_NAMES.indexOf(timeOfDay()) + 1) % TOD_NAMES.length]);
-  $("tod").textContent = `${timeOfDay()[0].toUpperCase()}${timeOfDay().slice(1)} (T)`;
+  $("tod").textContent = `${timeOfDay()[0].toUpperCase()}${timeOfDay().slice(1)}`;
 };
 window.addEventListener("keydown", (e) => {
   // Leave browser shortcuts (Ctrl+R, ...) alone, and keys aimed at a focused control: a select
   // uses arrows itself, and Space on a focused button would also click it (a double replay).
   if (!state.data || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (["SELECT", "BUTTON"].includes(e.target.tagName)) return;
+  if (["SELECT", "BUTTON", "SUMMARY"].includes(e.target.tagName)) return;
   if (e.code === "KeyA") return dispatch({ type: "pickAtBat", index: "random", seed: randomSeed() });
   if (e.code === "KeyT") return cycleTimeOfDay();
+  if (e.code === "KeyP") return togglePicker();
+  if (e.code === "Escape") return togglePicker(false);
+  if (e.key === "?") return void ($("help").open = !$("help").open);
   if (KEYS[e.code]) {
     e.preventDefault();
     dispatch(KEYS[e.code]);
   }
 });
 // Drop focus after a click or a pick so the keys work again straight away.
-document.addEventListener("click", (e) => { if (e.target.tagName === "BUTTON") e.target.blur(); });
-document.addEventListener("change", (e) => e.target.blur());
+document.addEventListener("click", (e) => { e.target.closest("button, summary")?.blur(); });
 $("prev").onclick = () => dispatch({ type: "prevPitch" });
 $("replay").onclick = () => dispatch({ type: "replay" });
 $("next").onclick = () => dispatch({ type: "nextPitch" });
-$("random").onclick = () => dispatch({ type: "pickAtBat", index: "random", seed: randomSeed() });
+$("random").onclick = () => {
+  dispatch({ type: "pickAtBat", index: "random", seed: randomSeed() });
+  togglePicker(false);
+};
+$("picker-btn").onclick = () => togglePicker();
+$("nospin").onclick = () => dispatch({ type: "toggleNoSpin" });
 for (const m of MODES) $(`mode-${m}`).onclick = () => dispatch({ type: "setMode", mode: m });
 for (const v of VIEWS) $(`view-${v}`).onclick = () => dispatch({ type: "setView", view: v });
 for (const v of SPEEDS) $(`speed-${v}`).onclick = () => dispatch({ type: "setSpeed", speed: v });
 $("tod").onclick = cycleTimeOfDay;
-$("pitcher").onchange = (e) => pickPitcher(e.target.value);
-$("atbat").onchange = (e) => dispatch({ type: "pickAtBat", index: Number(e.target.value) });
 
-// Initial state from the URL, e.g. ?pitcher=sale-chris&ab=0&pitch=2&t=0.3&mode=ghost (frozen at
-// t, for screenshots); ab=random&seed=N picks a seeded random at-bat.
+// Initial state from the URL, e.g. ?pitcher=sale-chris&ab=0&pitch=2&t=0.3&mode=ghost&nospin=1
+// (frozen at t, for screenshots); ab=random&seed=N picks a seeded random at-bat.
 const q = new URLSearchParams(location.search);
 // ?tod=day|sunset|night (unknown names fall back to day).
 setTimeOfDay(q.get("tod") ?? "day");
-$("tod").textContent = `${timeOfDay()[0].toUpperCase()}${timeOfDay().slice(1)} (T)`;
+$("tod").textContent = `${timeOfDay()[0].toUpperCase()}${timeOfDay().slice(1)}`;
 
 async function start() {
   const index = await loadIndex();
-  $("pitcher").replaceChildren(...index.map((p) => new Option(`${p.name} (${p.throws}HP)`, p.slug)));
+  $("pitchers").replaceChildren(...index.map((p) => {
+    const b = document.createElement("button");
+    b.dataset.slug = p.slug;
+    b.innerHTML = `${p.name} <span class="sub">${p.throws}HP · ${p.n_at_bats} AB</span>`;
+    b.onclick = () => pickPitcher(p.slug);
+    return b;
+  }));
   await pickPitcher(q.get("pitcher") ?? index[0].slug);
   if (q.has("ab")) {
     const ab = q.get("ab");
@@ -211,9 +240,13 @@ async function start() {
   }
   if (q.has("view")) dispatch({ type: "setView", view: q.get("view") });
   if (q.has("speed")) dispatch({ type: "setSpeed", speed: Number(q.get("speed")) });
+  if (q.get("nospin") === "1") dispatch({ type: "toggleNoSpin" });
+  // ?panel=picker|help|nolook: open the picker or the key help, or fold the look card.
+  if (q.get("panel") === "picker") togglePicker(true);
+  if (q.get("panel") === "help") $("help").open = true;
+  if (q.get("panel") === "nolook") $("look").open = false;
   // Freeze at t (no playback) so a headless screenshot catches the ball mid-flight.
-  state = { ...state, playing: false, t: Number(q.get("t") ?? 0) };
-  renderHud(state, currentPitch(state)); // t may already be past landing
+  dispatch({ type: "seek", t: Number(q.get("t") ?? 0) });
   if (fpsBox) benchmark();
 }
 start();
@@ -275,6 +308,9 @@ renderer.setAnimationLoop((now) => {
     updateBall(ball, state.mode === "sim" ? p.sim : p.real, state.t);
     spinBall(ball, p.spin_rpm == null ? null : p.spin_axis_deg, 2 * Math.PI * (p.spin_rpm / 60) * state.t * spinFactor(state.speed));
     updateBall(ghost, state.mode === "ghost" ? p.sim : null, state.t);
+    updateTube(trail, state.mode === "sim" ? p.sim : p.real, state.t);
+    updateTube(ghostTrail, state.mode === "ghost" ? p.sim : null, state.t);
+    updateTube(noSpinLine, state.showNoSpin ? p.nospin : null, state.t);
   }
   if (state.data) updateCamera();
   look.render();

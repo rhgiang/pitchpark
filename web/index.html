@@ -4,44 +4,100 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Batter's Eye</title>
-    <style>
-      html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
-      .panel { position: fixed; left: 12px; color: #fff; font: 14px system-ui, sans-serif;
-        background: rgba(0, 0, 0, 0.55); padding: 8px 10px; border-radius: 6px; }
-      #hud { top: 12px; max-width: 46em; line-height: 1.45; }
-      #hud .count { font-size: 22px; font-weight: 600; }
-      #hud .pitch { font-size: 17px; }
-      #hud .status { color: #ffd27a; }
-      #hud .tunnel { color: #cde; font-size: 13px; }
-      #controls { bottom: 12px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-      #controls select, #controls button { font: 13px system-ui, sans-serif; }
-      #controls button.on { background: #ffd27a; }
-      #controls button:disabled { opacity: 0.55; }
-      #fps { top: 12px; left: auto; right: 12px; font: 13px ui-monospace, monospace; }
-    </style>
   </head>
   <body>
-    <div id="hud" class="panel">Loading…</div>
-    <div id="fps" class="panel" hidden></div>
-    <div id="controls" class="panel">
-      <select id="pitcher" aria-label="Pitcher"></select>
-      <select id="atbat" aria-label="At-bat"></select>
-      <button id="random">Random at-bat (A)</button>
-      <button id="prev">◀ Prev (←)</button>
-      <button id="replay">Throw / replay (Space)</button>
-      <button id="next">Next ▶ (→)</button>
-      <button id="mode-real">Statcast fit (R)</button>
-      <button id="mode-sim">M1 + M3 (S)</button>
-      <button id="mode-ghost">Ghost (G)</button>
-      <button id="view-batter">Batter (1)</button>
-      <button id="view-side">Side (2)</button>
-      <button id="view-free">Free (3)</button>
-      <button id="view-ride">Ride (4)</button>
-      <button id="speed-1">1× (Z)</button>
-      <button id="speed-0.25">0.25× (X)</button>
-      <button id="speed-0.1">0.1× (C)</button>
-      <button id="tod">Day (T)</button>
+    <!-- Broadcast layout (layout A, chosen by Ryan): everything floats on the picture. -->
+    <div id="bug" class="glass">
+      <div class="bug-main">
+        <div id="bug-count" class="cnt">–</div>
+        <div class="meta">
+          <b id="bug-pitch">Loading…</b>
+          <div class="meta-row">
+            <span id="bug-inning"></span>
+            <svg id="bases" class="bases" viewBox="0 0 26 20" aria-label="Runners on base">
+              <rect id="base-2" x="9.5" y="1.5" width="7" height="7" transform="rotate(45 13 5)" />
+              <rect id="base-1" x="16" y="8" width="7" height="7" transform="rotate(45 19.5 11.5)" />
+              <rect id="base-3" x="3" y="8" width="7" height="7" transform="rotate(45 6.5 11.5)" />
+            </svg>
+          </div>
+        </div>
+      </div>
+      <div id="bug-status" class="bug-sub"></div>
     </div>
+
+    <nav id="tabs" class="glass" aria-label="View">
+      <button id="view-catcher" class="tab">Catcher<kbd>1</kbd></button>
+      <button id="view-batter" class="tab">Batter<kbd>2</kbd></button>
+      <button id="view-side" class="tab">Side<kbd>3</kbd></button>
+      <button id="view-ride" class="tab">Ride<kbd>4</kbd></button>
+      <button id="view-free" class="tab">Free<kbd>5</kbd></button>
+      <span class="sep"></span>
+      <button id="tod" class="tab" title="Time of day (T)">Day</button>
+    </nav>
+    <div id="fps" class="glass" hidden></div>
+
+    <div id="picker" class="glass" hidden>
+      <div class="col">
+        <h4>Pitcher</h4>
+        <div id="pitchers" class="list"></div>
+        <button id="random" class="btn wide">Random at-bat <kbd>A</kbd></button>
+      </div>
+      <div class="col grow">
+        <h4>At-bat <span id="ab-count"></span></h4>
+        <div id="atbats" class="list scroll"></div>
+      </div>
+    </div>
+
+    <div id="strip" class="glass">
+      <div id="dots"></div>
+      <span id="result"></span>
+    </div>
+
+    <div id="play" class="glass">
+      <button id="picker-btn" class="btn" title="Pitcher and at-bat (P)"><span id="picker-label">Pitcher</span> ▾</button>
+      <button id="prev" class="btn" title="Previous pitch (←)">◀</button>
+      <button id="replay" class="btn big" title="Throw / replay (Space)">▶ Throw</button>
+      <button id="next" class="btn" title="Next pitch (→)">▶|</button>
+      <div class="seg" role="group" aria-label="Speed">
+        <button id="speed-1" title="Real time (Z)">1×</button>
+        <button id="speed-0.25" title="Quarter speed (X)">¼×</button>
+        <button id="speed-0.1" title="Tenth speed (C)">⅒×</button>
+      </div>
+      <div class="seg" role="group" aria-label="Which pitch flies">
+        <button id="mode-real" title="Statcast fit (R)">Statcast</button>
+        <button id="mode-sim" title="Simulated: M1 + M3 (S)">M1+M3</button>
+        <button id="mode-ghost" title="Both: simulated as a translucent ghost (G)">Both</button>
+      </div>
+      <button id="nospin" class="btn toggle" title="No-spin reference path (N)"><i class="dash"></i>No spin</button>
+    </div>
+
+    <details id="look" class="glass" open>
+      <summary>The look</summary>
+      <div id="look-body"></div>
+    </details>
+
+    <details id="help" class="glass">
+      <summary title="Keys (?)">?</summary>
+      <table>
+        <tr><td><kbd>Space</kbd></td><td>Throw / replay</td></tr>
+        <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Previous / next pitch</td></tr>
+        <tr><td><kbd>1</kbd>–<kbd>5</kbd></td><td>Catcher, Batter, Side, Ride, Free view</td></tr>
+        <tr><td><kbd>Z</kbd> <kbd>X</kbd> <kbd>C</kbd></td><td>Speed 1×, ¼×, ⅒×</td></tr>
+        <tr><td><kbd>R</kbd> <kbd>S</kbd> <kbd>G</kbd></td><td>Statcast fit, M1 + M3, both (ghost)</td></tr>
+        <tr><td><kbd>N</kbd></td><td>No-spin reference path</td></tr>
+        <tr><td><kbd>P</kbd></td><td>Pitcher and at-bat picker</td></tr>
+        <tr><td><kbd>A</kbd></td><td>Random at-bat</td></tr>
+        <tr><td><kbd>T</kbd></td><td>Time of day</td></tr>
+        <tr><td><kbd>?</kbd></td><td>This help</td></tr>
+        <tr><td>Mouse</td><td>Free view: drag to orbit, wheel to zoom</td></tr>
+      </table>
+      <p class="legend">
+        <span class="dot b">B</span> ball <span class="dot s">S</span> strike
+        <span class="dot f">F</span> foul <span class="dot x">X</span> in play
+      </p>
+      <p class="legend"><i class="swatch trail"></i>trail <i class="swatch ghost"></i>M1 + M3 ghost <i class="dash"></i>no spin</p>
+    </details>
+
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

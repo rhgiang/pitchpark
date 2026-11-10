@@ -53,6 +53,34 @@ test("Statcast-fit paths replay the exporter's analytic points and plate time", 
   assert.ok(checked > 0);
 });
 
+test("no-spin paths replay the exporter's RK4 points and end at the plate", () => {
+  let checked = 0;
+  let worstIn = 0;
+  for (const file of files) {
+    for (const p of pitchesOf(file)) {
+      if (!p.nospin) {
+        assert.equal(p.status === "ok", false, "a modelled pitch must have a no-spin path");
+        continue;
+      }
+      // check_nospin comes from the 1 ms RK4 output, not from the 5 ms samples played here.
+      for (const [t, x, y, z] of p.check_nospin) {
+        const s = stateAt(p.nospin, t).p;
+        const d = Math.max(Math.abs(s[0] - x), Math.abs(s[1] - y), Math.abs(s[2] - z));
+        worstIn = Math.max(worstIn, d * 12);
+        assert.ok(d < TOL_FT, `${file.pathname} check_nospin t=${t}: off by ${(d * 12).toFixed(4)} in`);
+      }
+      const T = duration(p.nospin);
+      assert.ok(Math.abs(T - p.plate_nospin[2]) < TOL_S);
+      const end = stateAt(p.nospin, T);
+      assert.ok(end.done && Math.abs(end.p[1] - PLATE_Y_FT) < TOL_FT);
+      assert.ok(Math.abs(end.p[0] - p.plate_nospin[0]) < TOL_FT && Math.abs(end.p[2] - p.plate_nospin[1]) < TOL_FT);
+      checked++;
+    }
+  }
+  console.log(`no-spin truth test: ${checked} pitches, largest check_nospin difference ${worstIn.toFixed(5)} in`);
+  assert.ok(checked > 0);
+});
+
 test("stateAt interpolates linearly and clamps at both ends", () => {
   const path = { t: [0, 1], p: [[0, 10, 0], [2, 0, 4]] };
   assert.deepEqual(stateAt(path, 0.5), { p: [1, 5, 2], done: false });

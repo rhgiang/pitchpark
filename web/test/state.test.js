@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { initialState, reduce, currentPitch, landed, flightEnd, spinFactor } from "../src/state.js";
+import {
+  initialState, reduce, currentPitch, landed, flightEnd, spinFactor, revealed,
+} from "../src/state.js";
 import { duration } from "../src/trajectory.js";
 
 // Synthetic fixture (labelled synthetic in its meta); at-bat 0 = "6-1", at-bat 1 = "28-1".
@@ -108,4 +110,62 @@ test("spin is shown slowed at 1x and at the true rate in slow motion", () => {
   assert.equal(spinFactor(1), 1 / 20);
   assert.equal(spinFactor(0.25), 1);
   assert.equal(spinFactor(0.1), 1);
+});
+
+test("default view is the catcher's", () => {
+  assert.equal(initialState().view, "catcher");
+  for (const v of ["catcher", "batter", "side", "ride", "free"]) {
+    assert.equal(reduce(loaded(), { type: "setView", view: v }).view, v);
+  }
+});
+
+test("pitch strip: goPitch jumps within the at-bat, throws from t = 0, and clamps", () => {
+  let s = run(loaded(), { type: "pickAtBat", index: 0 }, { type: "replay" }, { type: "tick", dt: 0.1 });
+  s = reduce(s, { type: "goPitch", index: 3 });
+  assert.deepEqual([s.abIndex, s.pitchIndex, s.t, s.playing], [0, 3, 0, true]);
+  assert.equal(reduce(s, { type: "goPitch", index: 99 }).pitchIndex, 3); // last pitch
+  assert.equal(reduce(s, { type: "goPitch", index: -2 }).pitchIndex, 0);
+});
+
+test("pitch strip spoiler rule: a result shows only once its pitch has landed or been passed", () => {
+  let s = run(loaded(), { type: "pickAtBat", index: 0 });
+  assert.deepEqual([0, 1, 2, 3].map((i) => revealed(s, i)), [false, false, false, false]);
+  s = run(s, { type: "replay" }, { type: "tick", dt: 0.2 });
+  assert.equal(revealed(s, 0), false); // mid-flight
+  s = run(s, { type: "tick", dt: 1 });
+  assert.equal(revealed(s, 0), true); // landed
+  s = reduce(s, { type: "goPitch", index: 2 });
+  assert.deepEqual([0, 1, 2, 3].map((i) => revealed(s, i)), [true, true, false, false]);
+  s = reduce(s, { type: "goPitch", index: 0 }); // going back keeps what was seen
+  assert.deepEqual([0, 1, 2, 3].map((i) => revealed(s, i)), [true, true, false, false]);
+  s = reduce(s, { type: "pickAtBat", index: 1 }); // a new at-bat starts hidden
+  assert.equal(revealed(s, 0), false);
+});
+
+test("seek freezes playback at a time clamped to the flight", () => {
+  const s = run(loaded(), { type: "pickAtBat", index: 0 }, { type: "replay" }, { type: "seek", t: 99 });
+  assert.deepEqual([s.t, s.playing, landed(s)], [flightEnd(s), false, true]);
+  assert.equal(revealed(s, 0), true);
+});
+
+test("no-spin toggle flips showNoSpin and survives pitch, at-bat and pitcher changes", () => {
+  let s = loaded();
+  assert.equal(s.showNoSpin, false);
+  s = reduce(s, { type: "toggleNoSpin" });
+  assert.equal(s.showNoSpin, true);
+  s = run(s, { type: "nextPitch" }, { type: "pickAtBat", index: 1 },
+    { type: "pickPitcher", slug: "synthetic", data });
+  assert.equal(s.showNoSpin, true);
+  assert.equal(reduce(s, { type: "toggleNoSpin" }).showNoSpin, false);
+});
+
+test("pitch-strip colours: Statcast descriptions map to ball, strike, foul, in play", async () => {
+  const { resultKind } = await import("../src/hud.js");
+  const cases = {
+    ball: "b", blocked_ball: "b", hit_by_pitch: "b", called_strike: "s", swinging_strike: "s",
+    swinging_strike_blocked: "s", foul_tip: "s", missed_bunt: "s", foul: "f", foul_bunt: "f",
+    hit_into_play: "x",
+  };
+  for (const [d, k] of Object.entries(cases)) assert.equal(resultKind(d), k, d);
+  assert.equal(resultKind(null), null);
 });

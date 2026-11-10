@@ -1,13 +1,18 @@
 """Viewer export (M4): a pitcher's held-out at-bats as JSON for the Three.js viewer.
 
 Python is the source of truth; the browser only interpolates the samples written here.
-Layout (schema 1) is documented in the M4 plan, Task 3; every web module reads it.
+Layout (schema 2: schema 1 from the M4 plan, Task 3, plus Task 11's no-spin path and bases) is
+read by every web module.
 
 - "real" is Statcast's 9-parameter constant-acceleration fit, evaluated analytically from
   release to the front of the plate (not raw tracking points).
 - "sim" is M1 + M3: physics.simulate from release_state with the pitch type's calibrated Cd /
   spin efficiency, that game's air density, and the per-pitch push, exactly as M3 scored it
   (seam.fit_pitch_types is the one place those fits live).
+- "nospin" (schema 2) is a reference for seeing the movement: the same release state, the type's
+  calibrated Cd, gravity, and nothing else (spin efficiency 0 removes the Magnus force; no M3
+  push). Real plate minus no-spin plate is the "break vs no spin" (tunnel.break_x_in / _z_in):
+  what spin and seams did to the pitch, as measured against a spinless ball thrown the same way.
 - Held-out games only (validation.split_by_game, seed 0, inside fit_pitch_types).
 - Raw rows give the at-bat skeleton so no pitch or at-bat is dropped: a row with no usable
   tracking is "no_tracking" (no paths), a pitch type M3 skipped is "no_model" (real path only).
@@ -24,7 +29,7 @@ from pitchsim.statcast import _time_to_y, clean, fit_plate_crossing, initial_sta
 from pitchsim.tunneling import (DECISION_Y_FT, approach_angles_deg, perceived_velocity_mph,
                                 separation_in)
 
-SCHEMA = 1
+SCHEMA = 2
 
 
 def _num(x) -> float | None:
@@ -50,8 +55,22 @@ def _path(t: np.ndarray, pos: np.ndarray) -> dict:
     return {"t": np.round(t, 4).tolist(), "p": np.round(pos, 4).tolist()}
 
 
+def _sampled(tr: dict, dt_s: float) -> tuple[dict, list, list]:
+    """A physics.simulate result resampled on the viewer's grid: (path, plate [x, z, t], check).
+
+    check: [t, x, y, z] at 1/4, 1/2, 3/4 of the flight from the 1 ms RK4 output itself, for the
+    viewer's truth test (independent of the 5 ms samples). Times are rounded before evaluating,
+    like check_real: the JSON stores t to 1e-4 s, and at ~130 ft/s 5e-5 s is ~0.08 in.
+    """
+    s = _grid(tr["t"][-1], dt_s)
+    p = np.column_stack([np.interp(s, tr["t"], tr["pos"][:, k]) for k in range(3)])
+    q = np.round(s[-1] * np.array([0.25, 0.5, 0.75]), 4)
+    check = np.column_stack([q] + [np.interp(q, tr["t"], tr["pos"][:, k]) for k in range(3)])
+    return _path(s, p), [_num(p[-1, 0]), _num(p[-1, 2]), _num(s[-1])], np.round(check, 4).tolist()
+
+
 def export_pitcher(raw: pd.DataFrame, rho: pd.Series, dt_s: float = 0.005) -> dict:
-    """One pitcher's held-out at-bats in the viewer's JSON layout (schema 1).
+    """One pitcher's held-out at-bats in the viewer's JSON layout (schema 2).
 
     raw: this pitcher's Statcast rows, uncleaned (rows with no tracking still count).
     rho: air density (lb/ft^3) per row of raw (same index).
@@ -94,6 +113,7 @@ def export_pitcher(raw: pd.DataFrame, rho: pd.Series, dt_s: float = 0.005) -> di
             ptype = _val(r["pitch_type"])
             status = "no_tracking" if i is None else ("ok" if ptype in fits else "no_model")
             real = sim = plate_real = plate_sim = check = None
+            nospin = plate_nospin = check_nospin = None
             path = None
             if i is not None:
                 s = _grid(flight[i], dt_s)
@@ -109,15 +129,16 @@ def export_pitcher(raw: pd.DataFrame, rho: pd.Series, dt_s: float = 0.005) -> di
                 check = np.round(np.column_stack([q, fit_at(i, q)]), 4).tolist()
             if status == "ok":
                 tf = fits[ptype]
-                tr = simulate(rel_pos[i], rel_vel[i], float(test.at[i, "release_spin_rate"]),
-                              float(test.at[i, "spin_axis"]),
-                              PhysicsParams(cd=tf.cd, spin_efficiency=tf.eff,
-                                            rho=float(test.at[i, "rho"])),
+                spin = float(test.at[i, "release_spin_rate"])
+                axis = float(test.at[i, "spin_axis"])
+                rho_i = float(test.at[i, "rho"])
+                tr = simulate(rel_pos[i], rel_vel[i], spin, axis,
+                              PhysicsParams(cd=tf.cd, spin_efficiency=tf.eff, rho=rho_i),
                               extra_acc=push[i])
-                s = _grid(tr["t"][-1], dt_s)
-                p = np.column_stack([np.interp(s, tr["t"], tr["pos"][:, k]) for k in range(3)])
-                sim = _path(s, p)
-                plate_sim = [_num(p[-1, 0]), _num(p[-1, 2]), _num(s[-1])]
+                sim, plate_sim, _ = _sampled(tr, dt_s)
+                tr0 = simulate(rel_pos[i], rel_vel[i], spin, axis,
+                               PhysicsParams(cd=tf.cd, spin_efficiency=0.0, rho=rho_i))
+                nospin, plate_nospin, check_nospin = _sampled(tr0, dt_s)
             sep = None
             if path is not None and prev is not None:
                 try:
@@ -136,12 +157,17 @@ def export_pitcher(raw: pd.DataFrame, rho: pd.Series, dt_s: float = 0.005) -> di
                 "sz_top_ft": _num(r["sz_top"]), "sz_bot_ft": _num(r["sz_bot"]),
                 "description": _val(r["description"]), "events": _val(r["events"]),
                 "real": real, "sim": sim, "plate_real": plate_real, "plate_sim": plate_sim,
-                "check_real": check,
+                "check_real": check, "nospin": nospin, "plate_nospin": plate_nospin,
+                "check_nospin": check_nospin,
+                # Runners on base before the pitch (Statcast on_1b/2b/3b hold the runner's id).
+                "bases": [_val(r.get(c)) is not None for c in ("on_1b", "on_2b", "on_3b")],
                 "tunnel": {"vaa_deg": None if i is None else _num(vaa[i]),
                            "haa_deg": None if i is None else _num(haa[i]),
                            "perceived_mph": _num(perceived_velocity_mph(
                                r["release_speed"], r["release_extension"])),
-                           "sep_prev_in": sep}})
+                           "sep_prev_in": sep,
+                           "break_x_in": _brk(plate_real, plate_nospin, 0),
+                           "break_z_in": _brk(plate_real, plate_nospin, 1)}})
             prev = path
         last_event = ab["events"].dropna()
         at_bats.append({
@@ -168,6 +194,11 @@ def export_pitcher(raw: pd.DataFrame, rho: pd.Series, dt_s: float = 0.005) -> di
                     "throws": str(raw["p_throws"].iloc[0])},
         "pitch_types": pitch_types,
         "at_bats": at_bats}
+
+
+def _brk(real: list | None, nospin: list | None, k: int) -> float | None:
+    """Real minus no-spin plate arrival along x (k=0) or z (k=1), in inches."""
+    return None if nospin is None else _num((real[k] - nospin[k]) * 12)
 
 
 def write_json(obj: dict, path: Path) -> None:

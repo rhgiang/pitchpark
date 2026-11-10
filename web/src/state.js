@@ -4,7 +4,7 @@ import { duration } from "./trajectory.js";
 
 export const MODES = ["real", "sim", "ghost"]; // "Statcast fit", "M1 + M3", both
 export const SPEEDS = [1, 0.25, 0.1];
-export const VIEWS = ["batter", "side", "free", "ride"]; // keys 1-4
+export const VIEWS = ["catcher", "batter", "side", "ride", "free"]; // keys 1-5
 
 // Ball rotation on screen. True spin is ~40 rev/s, which a 60 Hz screen cannot show at 1x (it
 // would alias), so at 1x we show 1/20 of it; in slow motion the true rate is shown (angle =
@@ -15,7 +15,9 @@ export const spinFactor = (speed) => (speed >= 1 ? SLOWED_SPIN_FACTOR : 1);
 export function initialState() {
   return {
     slug: null, data: null, abIndex: 0, pitchIndex: 0,
-    t: 0, playing: false, speed: 1, view: "batter",
+    t: 0, playing: false, speed: 1, view: "catcher",
+    showNoSpin: false, // the "no spin" reference path (export's nospin), toggled with N
+    seen: 0, // pitches of this at-bat whose result may show: landed or passed (see revealed)
     wantMode: "real", // what the user picked; kept across pitches that cannot show it
     mode: "real", // what is shown: wantMode, or "real" when modeAllowed is false
     modeAllowed: false,
@@ -45,14 +47,34 @@ export function landed(s) {
   return shownPaths(s).length === 0 || (s.t > 0 && s.t >= flightEnd(s));
 }
 
+/**
+ * May pitch i of the current at-bat show its result (pitch-strip colour)? Only once it has
+ * landed or been passed; going back to an earlier pitch keeps what was already seen.
+ */
+export const revealed = (s, i) => i < s.seen;
+
 export function reduce(s, a) {
+  const next = step(s, a);
+  if (next === s || !next.data) return next;
+  const seen = next.pitchIndex + (landed(next) ? 1 : 0);
+  return seen > next.seen ? { ...next, seen } : next;
+}
+
+function step(s, a) {
   switch (a.type) {
     case "pickPitcher":
-      return derive({ ...initialState(), speed: s.speed, view: s.view, slug: a.slug, data: a.data });
+      return derive({
+        ...initialState(), speed: s.speed, view: s.view, showNoSpin: s.showNoSpin,
+        slug: a.slug, data: a.data,
+      });
     case "pickAtBat": {
       const n = s.data.at_bats.length;
       const abIndex = a.index === "random" ? Math.floor(mulberry32(a.seed) * n) : a.index;
-      return derive({ ...s, abIndex, pitchIndex: 0, t: 0, playing: false, wantMode: "real" });
+      return derive({ ...s, abIndex, pitchIndex: 0, t: 0, playing: false, wantMode: "real", seen: 0 });
+    }
+    case "goPitch": { // a pitch-strip click: that pitch, thrown from release
+      const last = currentAtBat(s).pitches.length - 1;
+      return derive({ ...s, pitchIndex: Math.min(last, Math.max(0, a.index)), t: 0, playing: true });
     }
     case "nextPitch":
     case "prevPitch": {
@@ -62,6 +84,10 @@ export function reduce(s, a) {
     }
     case "replay":
       return { ...s, t: 0, playing: true };
+    case "seek": // frozen at t (clamped to the flight), e.g. ?t= for screenshots
+      return { ...s, t: Math.min(flightEnd(s), Math.max(0, a.t)), playing: false };
+    case "toggleNoSpin":
+      return { ...s, showNoSpin: !s.showNoSpin };
     case "setMode": // unknown values (e.g. a bad ?mode=) are ignored
       return MODES.includes(a.mode) ? derive({ ...s, wantMode: a.mode }) : s;
     case "setView": // unknown values (e.g. a bad ?view=) are ignored; pitch and t are kept

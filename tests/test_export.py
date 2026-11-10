@@ -128,6 +128,38 @@ def test_sim_matches_m3(exported):
     assert n > 50
 
 
+def test_nospin_path(exported):
+    """No-spin reference: same release, the type's Cd, spin efficiency 0, no push."""
+    raw, _, out = exported
+    df = clean(raw.assign(rho=air_density()))
+    _, test, fits, _ = fit_pitch_types(df, df["rho"])
+    key = test.set_index(["game_pk", "at_bat_number", "pitch_number"]).index
+    n = 0
+    for a, p in _pitches(out):
+        if p["status"] != "ok":
+            continue
+        assert abs(p["nospin"]["p"][-1][1] - FRONT_OF_PLATE_Y) <= 1e-4
+        assert p["nospin"]["t"][-1] == p["plate_nospin"][2] and p["nospin"]["t"][0] == 0
+        i = key.get_loc((a["game_pk"], int(a["id"].split("-")[1]), p["pitch_number"]))
+        rows = test.iloc[[i]]
+        pos, _, t = run_sim(rows, fits[p["pitch_type"]].cd, 0.0, "release")
+        assert np.allclose(p["plate_nospin"], [pos[0, 0], pos[0, 2], t[0]], atol=1e-4)
+        brk = [(p["plate_real"][k] - p["plate_nospin"][k]) * 12 for k in (0, 1)]
+        assert np.allclose([p["tunnel"]["break_x_in"], p["tunnel"]["break_z_in"]], brk,
+                           atol=1e-3)
+        n += 1
+    assert n > 50 and out["meta"]["schema"] == 2
+
+
+def test_nospin_null_without_model(exported):
+    _, _, out = exported
+    others = [p for _, p in _pitches(out) if p["status"] != "ok"]
+    assert {p["status"] for p in others} == {"no_model", "no_tracking"}
+    for p in others:
+        assert p["nospin"] is None and p["plate_nospin"] is None and p["check_nospin"] is None
+        assert p["tunnel"]["break_x_in"] is None and p["tunnel"]["break_z_in"] is None
+
+
 def test_synthetic_flag(exported):
     _, _, out = exported
     assert out["meta"]["synthetic"] is True and "Synthetic" in out["pitcher"]["name"]
