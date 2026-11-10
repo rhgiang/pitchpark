@@ -33,7 +33,7 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enabled = false;
 controls.minDistance = FREE_MIN_DIST_FT;
 controls.maxDistance = FREE_MAX_DIST_FT;
-let freeInit = false;
+let freePose = { position: toScene(FREE_START.position), target: toScene(FREE_START.target) };
 let appliedView = null;
 const VFOV = { batter: BATTER_EYE_VFOV_DEG, side: SIDE_VFOV_DEG, free: FREE_VFOV_DEG, ride: RIDE_VFOV_DEG };
 
@@ -42,14 +42,15 @@ function updateCamera() {
   const ab = currentAtBat(state);
   const path = shownPaths(state)[0]; // none for no_tracking: keep the last pose
   if (state.view !== appliedView) {
+    // Leaving Free: remember the orbit (views 1/2/4 overwrite the camera); entering: restore it.
+    if (appliedView === "free") freePose = { position: camera.position.clone(), target: controls.target.clone() };
     appliedView = state.view;
     camera.fov = VFOV[state.view];
     camera.updateProjectionMatrix();
     controls.enabled = state.view === "free";
-    if (state.view === "free" && !freeInit) { // later visits keep the user's orbit
-      freeInit = true;
-      camera.position.copy(toScene(FREE_START.position));
-      controls.target.copy(toScene(FREE_START.target));
+    if (state.view === "free") { // first visit: FREE_START; later: where the user left it
+      camera.position.copy(freePose.position);
+      controls.target.copy(freePose.target);
     }
   }
   if (state.view === "free") { controls.update(); return; }
@@ -97,8 +98,7 @@ function dispatch(action) {
     b.classList.toggle("on", state.mode === m);
   }
   for (const v of VIEWS) $(`view-${v}`).classList.toggle("on", state.view === v);
-  for (const v of VIEWS) $(`view-${v}`).onclick = () => dispatch({ type: "setView", view: v });
-for (const v of SPEEDS) $(`speed-${v}`).classList.toggle("on", state.speed === v);
+  for (const v of SPEEDS) $(`speed-${v}`).classList.toggle("on", state.speed === v);
   renderHud(state, pitch);
 }
 
@@ -144,6 +144,7 @@ $("replay").onclick = () => dispatch({ type: "replay" });
 $("next").onclick = () => dispatch({ type: "nextPitch" });
 $("random").onclick = () => dispatch({ type: "pickAtBat", index: "random", seed: randomSeed() });
 for (const m of MODES) $(`mode-${m}`).onclick = () => dispatch({ type: "setMode", mode: m });
+for (const v of VIEWS) $(`view-${v}`).onclick = () => dispatch({ type: "setView", view: v });
 for (const v of SPEEDS) $(`speed-${v}`).onclick = () => dispatch({ type: "setSpeed", speed: v });
 $("pitcher").onchange = (e) => pickPitcher(e.target.value);
 $("atbat").onchange = (e) => dispatch({ type: "pickAtBat", index: Number(e.target.value) });

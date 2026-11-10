@@ -28,7 +28,7 @@ function spinLabel(state, pitch) {
   const f = spinFactor(state.speed);
   const shown = state.speed >= 1
     ? `rotation slowed to 1/${Math.round(1 / f)} of true: ${(rps * f).toFixed(1)} rev/s shown`
-    : "rotation at the true rate (slow motion)";
+    : `rotation at the true rate in flight time (${state.speed}x playback)`;
   return `spin ${pitch.spin_rpm.toFixed(0)} rpm = ${rps.toFixed(1)} rev/s, axis ${pitch.spin_axis_deg.toFixed(0)}° (blue rod) · ${shown}`;
 }
 
