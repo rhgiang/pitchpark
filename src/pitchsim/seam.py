@@ -147,6 +147,52 @@ def grade(n_test: int, n_games_test: int, drop: tuple[float, float, float]
     return True, bool(drop[0] >= MIN_DROP_IN and drop[1] > 0)
 
 
+@dataclass
+class TypeFit:
+    """One pitch type's M1 calibration plus its M3 push models, fitted on training games."""
+    cd: float
+    eff: float
+    per: SeamModel
+    fixed: SeamModel
+
+
+def fit_pitch_types(df: pd.DataFrame, rho: np.ndarray, seed: int = 0, eff_min: float = EFF_MIN,
+                    split_seed: int = 0
+                    ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, TypeFit], list[str]]:
+    """Clean, split by game, and fit M1 + M3 per pitch type. Returns (train, test, fits, skipped).
+
+    train/test carry rho and release angles with NaN-feature rows dropped. Types with too few
+    training pitches or no held-out pitches are skipped. This is the one place the fit lives so
+    the viewer export flies pitches with exactly the models M3 scored.
+    """
+    df = add_release_angles(df.assign(rho=np.asarray(rho))).reset_index(drop=True)
+    skipped = []
+    for c in _RAW_FEATURES:
+        k = int(df[c].isna().sum())
+        if k:
+            skipped.append(f"dropped {k} rows with missing {c}")
+    df = df.dropna(subset=_RAW_FEATURES)
+    train_all, test_all = split_by_game(df, seed=split_seed)
+
+    fits = {}
+    for ptype, g in df.groupby("pitch_type"):
+        train = train_all[train_all["pitch_type"] == ptype]
+        test = test_all[test_all["pitch_type"] == ptype]
+        if len(train) < MIN_TRAIN:
+            skipped.append(f"{ptype} (n={len(g)}): fewer than {MIN_TRAIN} training pitches")
+            continue
+        if len(test) == 0:
+            skipped.append(f"{ptype} (n={len(g)}): no pitches in held-out games")
+            continue
+        # Calibrate exactly as M1/M2 (capped sample); the push is fitted on ALL training
+        # pitches with those Cd/eff.
+        cal = train.sample(MAX_TRAIN, random_state=seed) if len(train) > MAX_TRAIN else train
+        cd, eff = calibrate(cal, "release", eff_min)
+        target = push_target(train, cd, eff)
+        fits[ptype] = TypeFit(cd, eff, fit_per_pitch(train, target, seed), fit_fixed(target))
+    return train_all, test_all, fits, skipped
+
+
 def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0, eff_min: float = EFF_MIN,
                      split_seed: int = 0
                      ) -> tuple[pd.DataFrame, pd.DataFrame, list[str], dict[str, pd.DataFrame]]:
@@ -164,31 +210,13 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0, eff_min: 
     clouds[pitch_type]: one row per held-out pitch, signed miss (in) for M1 only and for M1 +
     per-pitch push (dx_m1_in, dz_m1_in, dx_pp_in, dz_pp_in).
     """
-    df = add_release_angles(df.assign(rho=np.asarray(rho))).reset_index(drop=True)
-    skipped = []
-    for c in _RAW_FEATURES:
-        k = int(df[c].isna().sum())
-        if k:
-            skipped.append(f"dropped {k} rows with missing {c}")
-    df = df.dropna(subset=_RAW_FEATURES)
-    train_all, test_all = split_by_game(df, seed=split_seed)
+    train_all, test_all, fits, skipped = fit_pitch_types(df, rho, seed, eff_min, split_seed)
 
     rows, knock, clouds = [], [], {}
-    for ptype, g in df.groupby("pitch_type"):
+    for ptype, tf in fits.items():
         train = train_all[train_all["pitch_type"] == ptype]
         test = test_all[test_all["pitch_type"] == ptype]
-        if len(train) < MIN_TRAIN:
-            skipped.append(f"{ptype} (n={len(g)}): fewer than {MIN_TRAIN} training pitches")
-            continue
-        if len(test) == 0:
-            skipped.append(f"{ptype} (n={len(g)}): no pitches in held-out games")
-            continue
-        # Calibrate exactly as M1/M2 (capped sample); the push is fitted on ALL training
-        # pitches with those Cd/eff.
-        cal = train.sample(MAX_TRAIN, random_state=seed) if len(train) > MAX_TRAIN else train
-        cd, eff = calibrate(cal, "release", eff_min)
-        target = push_target(train, cd, eff)
-        fixed, per = fit_fixed(target), fit_per_pitch(train, target, seed)
+        cd, eff, per, fixed = tf.cd, tf.eff, tf.per, tf.fixed
 
         fit_pos, fit_vel, t_s = fit_plate_crossing(test)
         miss, bias, signed = {}, {}, {}
@@ -206,7 +234,7 @@ def evaluate_pitcher(df: pd.DataFrame, rho: np.ndarray, seed: int = 0, eff_min: 
         graded, passed = grade(len(test), n_games_test, drop)
         rows.append({
             "pitch_type": ptype,
-            "pitch_name": g["pitch_name"].iloc[0] if "pitch_name" in g else ptype,
+            "pitch_name": train["pitch_name"].iloc[0] if "pitch_name" in train else ptype,
             "n_train": len(train), "n_test": len(test), "n_games_test": n_games_test,
             "n_games_train": int(train["game_pk"].nunique()),  # fixed.n_games is 0 = unknown
             "cd": cd, "spin_eff": eff,

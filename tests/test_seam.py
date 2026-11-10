@@ -259,3 +259,13 @@ def test_split_seed(small):
     pd.testing.assert_frame_equal(base, evaluate_pitcher(df, rho, split_seed=0)[0])
     other = evaluate_pitcher(df, rho, split_seed=1)[0]
     assert not other[["n_train", "n_test"]].equals(base[["n_train", "n_test"]])
+
+
+def test_fit_pitch_types_matches_evaluate(evaluated):
+    from pitchsim.seam import fit_pitch_types
+    df = make(n=1500, seed=0, push=_CH_PUSH)
+    _, _, fits, _ = fit_pitch_types(df, np.full(len(df), air_density()))
+    summary = evaluated[0].set_index("pitch_type")
+    assert set(fits) == set(summary.index)
+    for t, f in fits.items():
+        assert (f.cd, f.eff) == (summary.loc[t, "cd"], summary.loc[t, "spin_eff"])
