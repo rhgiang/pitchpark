@@ -1,4 +1,4 @@
-import { currentAtBat, shownPaths } from "./state.js";
+import { currentAtBat, shownPaths, landed } from "./state.js";
 import { inDirt } from "./ball.js";
 
 const MODE_LABEL = { real: "Statcast fit", sim: "M1 + M3", ghost: "Ghost: Statcast fit + M1 + M3 (translucent)" };
@@ -12,10 +12,14 @@ function statusLabel(state, pitch) {
   const label = pitch.status === "no_model"
     ? "Statcast fit · no model for this pitch type"
     : MODE_LABEL[state.mode];
-  return shownPaths(state).some(inDirt) ? `${label} · in the dirt` : label;
+  // Only after landing: "in the dirt" before release would give the pitch away.
+  return landed(state) && shownPaths(state).some(inDirt) ? `${label} · in the dirt` : label;
 }
 
-/** Fill #hud with count, pitch, result, status and tunnel numbers for the current pitch. */
+/**
+ * Fill #hud with count, pitch, result, status and tunnel numbers for the current pitch.
+ * The result (and the at-bat's event) appear only once the pitch has landed: no spoilers.
+ */
 export function renderHud(state, pitch) {
   const el = document.getElementById("hud");
   const ab = currentAtBat(state);
@@ -24,7 +28,7 @@ export function renderHud(state, pitch) {
     return;
   }
   const n = ab.pitches.length;
-  const result = words(pitch.description) + (pitch.events ? ` → ${words(pitch.events)}` : "");
+  const result = !landed(state) ? "…" : words(pitch.description) + (pitch.events ? ` → ${words(pitch.events)}` : "");
   const tn = pitch.tunnel;
   el.innerHTML = `
     <div class="count">${pitch.balls}-${pitch.strikes} · ${ab.outs} out · ${ab.top ? "Top" : "Bot"} ${ab.inning}</div>

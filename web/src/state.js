@@ -25,6 +25,19 @@ export function shownPaths(s) {
   return { real: [p.real], sim: [p.sim], ghost: [p.real, p.sim] }[s.mode];
 }
 
+/** End of the current flight in s: the longest shown path (ghost: real or sim), 0 if none. */
+export function flightEnd(s) {
+  return Math.max(0, ...shownPaths(s).map(duration));
+}
+
+/**
+ * Has the current pitch landed? Gates the result, at-bat event and "in the dirt" note so the HUD
+ * never spoils a pitch before it arrives. A pitch with no flight (no_tracking) counts as landed.
+ */
+export function landed(s) {
+  return shownPaths(s).length === 0 || (s.t > 0 && s.t >= flightEnd(s));
+}
+
 export function reduce(s, a) {
   switch (a.type) {
     case "pickPitcher":
@@ -42,15 +55,14 @@ export function reduce(s, a) {
     }
     case "replay":
       return { ...s, t: 0, playing: true };
-    case "setMode":
-      return derive({ ...s, wantMode: a.mode });
+    case "setMode": // unknown values (e.g. a bad ?mode=) are ignored
+      return MODES.includes(a.mode) ? derive({ ...s, wantMode: a.mode }) : s;
     case "setSpeed":
-      return { ...s, speed: a.speed };
+      return SPEEDS.includes(a.speed) ? { ...s, speed: a.speed } : s;
     case "tick": {
       if (!s.playing) return s;
-      const paths = shownPaths(s);
       // Slow motion scales flight time only; the samples themselves are untouched.
-      const end = Math.max(0, ...paths.map(duration));
+      const end = flightEnd(s);
       const t = s.t + a.dt * s.speed;
       return t >= end ? { ...s, t: end, playing: false } : { ...s, t };
     }

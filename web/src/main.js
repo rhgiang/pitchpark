@@ -37,8 +37,13 @@ let shown = { ab: null, pitch: null }; // what the camera and zone are set up fo
 
 /** Apply an action; refresh the scene set-up and controls when the pitch or at-bat changed. */
 function dispatch(action) {
+  const before = state;
   state = reduce(state, action);
-  if (action.type === "tick") return;
+  if (action.type === "tick") {
+    // The pitch just landed: re-render so the result (and "in the dirt") appears now.
+    if (before.playing && !state.playing) renderHud(state, currentPitch(state));
+    return;
+  }
   const ab = currentAtBat(state);
   const pitch = currentPitch(state);
   if (ab !== shown.ab) { // re-frame for this batter's side
@@ -69,7 +74,8 @@ async function pickPitcher(slug) {
   $("pitcher").value = slug;
   // ponytail: plain <option> list; a search box if at-bat lists grow past a few hundred.
   $("atbat").replaceChildren(...state.data.at_bats.map((ab, i) => new Option(
-    `${ab.game_date} · ${ab.top ? "Top" : "Bot"} ${ab.inning} · ${ab.stand}HB · ${(ab.event ?? "").replaceAll("_", " ")}`,
+    // No outcome in the label: it would spoil the at-bat.
+    `${ab.game_date} · ${ab.top ? "Top" : "Bot"} ${ab.inning} · ${ab.stand}HB`,
     String(i))));
   dispatch({ type: "pickAtBat", index: 0 });
 }
@@ -83,13 +89,19 @@ const KEYS = {
   Digit3: { type: "setSpeed", speed: 0.1 },
 };
 window.addEventListener("keydown", (e) => {
-  if (!state.data || e.target.tagName === "SELECT") return;
+  // Leave browser shortcuts (Ctrl+R, ...) alone, and keys aimed at a focused control: a select
+  // uses arrows itself, and Space on a focused button would also click it (a double replay).
+  if (!state.data || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (["SELECT", "BUTTON"].includes(e.target.tagName)) return;
   if (e.code === "KeyA") return dispatch({ type: "pickAtBat", index: "random", seed: randomSeed() });
   if (KEYS[e.code]) {
     e.preventDefault();
     dispatch(KEYS[e.code]);
   }
 });
+// Drop focus after a click or a pick so the keys work again straight away.
+document.addEventListener("click", (e) => { if (e.target.tagName === "BUTTON") e.target.blur(); });
+document.addEventListener("change", (e) => e.target.blur());
 $("prev").onclick = () => dispatch({ type: "prevPitch" });
 $("replay").onclick = () => dispatch({ type: "replay" });
 $("next").onclick = () => dispatch({ type: "nextPitch" });
@@ -113,10 +125,12 @@ async function start() {
       : { type: "pickAtBat", index: Number(ab) });
   }
   for (let i = 0; i < Number(q.get("pitch") ?? 0); i++) dispatch({ type: "nextPitch" });
+  // Unknown mode/speed values are ignored by the reducer.
   if (q.has("mode")) dispatch({ type: "setMode", mode: q.get("mode") });
   if (q.has("speed")) dispatch({ type: "setSpeed", speed: Number(q.get("speed")) });
   // Freeze at t (no playback) so a headless screenshot catches the ball mid-flight.
   state = { ...state, playing: false, t: Number(q.get("t") ?? 0) };
+  renderHud(state, currentPitch(state)); // t may already be past landing
 }
 start();
 

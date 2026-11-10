@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { initialState, reduce, currentPitch } from "../src/state.js";
+import { initialState, reduce, currentPitch, landed, flightEnd } from "../src/state.js";
+import { duration } from "../src/trajectory.js";
 
 // Synthetic fixture (labelled synthetic in its meta); at-bat 0 = "6-1", at-bat 1 = "28-1".
 const data = JSON.parse(readFileSync(new URL("fixtures/synthetic.json", import.meta.url)));
@@ -51,4 +52,44 @@ test("random at-bat is seeded: same seed, same at-bat", () => {
   assert.equal(pick(7), pick(7));
   const seen = new Set(Array.from({ length: 20 }, (_, i) => pick(i)));
   assert.deepEqual([...seen].sort(), [0, 1]); // both at-bats reachable
+});
+
+test("result is gated: not landed at release or mid-flight, landed once tick reaches the end", () => {
+  let s = run(loaded(), { type: "pickAtBat", index: 0 });
+  assert.equal(landed(s), false); // waiting at release
+  s = run(s, { type: "replay" }, { type: "tick", dt: 0.2 });
+  assert.equal(landed(s), false); // mid-flight
+  s = run(s, { type: "tick", dt: 1 });
+  assert.deepEqual([s.playing, landed(s)], [false, true]);
+  // no_tracking has no flight: its result shows at once.
+  assert.equal(landed(reduce(s, { type: "nextPitch" })), true);
+});
+
+test("ghost choice survives a no_model pitch and returns on the next modelled one", () => {
+  let s = run(loaded(), { type: "pickAtBat", index: 1 }, { type: "setMode", mode: "ghost" },
+    { type: "nextPitch" });
+  assert.equal(s.mode, "real"); // no_model
+  s = reduce(s, { type: "nextPitch" });
+  assert.equal(s.mode, "ghost");
+});
+
+test("prevPitch clamps at the first pitch", () => {
+  const s = run(loaded(), { type: "pickAtBat", index: 0 }, { type: "prevPitch" });
+  assert.equal(s.pitchIndex, 0);
+});
+
+test("tick stops at the longest shown path's end (ghost: max of real and sim)", () => {
+  let s = run(loaded(), { type: "pickAtBat", index: 0 }, { type: "setMode", mode: "ghost" },
+    { type: "replay" });
+  const p = currentPitch(s);
+  const end = Math.max(duration(p.real), duration(p.sim));
+  assert.equal(flightEnd(s), end);
+  s = run(s, { type: "tick", dt: 5 });
+  assert.deepEqual([s.t, s.playing], [end, false]);
+});
+
+test("unknown mode or speed (e.g. from the URL) is ignored", () => {
+  const s = run(loaded(), { type: "pickAtBat", index: 0 });
+  assert.equal(reduce(s, { type: "setMode", mode: "bogus" }), s);
+  assert.equal(reduce(s, { type: "setSpeed", speed: 7 }), s);
 });
