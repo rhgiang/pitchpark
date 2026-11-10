@@ -5,12 +5,23 @@ import { toScene } from "./coords.js";
 // back point of home plate, which is also where the rules measure the rubber from.
 const IN = 1 / 12;
 const PLATE_FRONT_Y_FT = 17 * IN;
-const RUBBER_FRONT_Y_FT = 60.5; // front edge of the rubber
+export const RUBBER_FRONT_Y_FT = 60.5; // front edge of the rubber
 const RUBBER_W_FT = 24 * IN;
 const RUBBER_D_FT = 6 * IN;
 const MOUND_HEIGHT_FT = 10 * IN; // rubber is 10 in above home plate
 const MOUND_CENTRE_Y_FT = 59; // 18 ft circle centred 59 ft from the back of the plate
 const MOUND_RADIUS_FT = 9;
+const MOUND_TOP_RADIUS_FT = 2.5;
+
+/**
+ * Ground height (ft above home plate) at Statcast (x, y), matching the mound cone built below:
+ * flat on top out to 2.5 ft from its centre, then falling linearly to 0 at 9 ft.
+ */
+export function groundHeightFt(x, y) {
+  const r = Math.hypot(x, y - MOUND_CENTRE_Y_FT);
+  const f = (MOUND_RADIUS_FT - r) / (MOUND_RADIUS_FT - MOUND_TOP_RADIUS_FT);
+  return MOUND_HEIGHT_FT * Math.min(1, Math.max(0, f));
+}
 
 /** Ground, home plate, mound and rubber, plain materials. */
 export function buildField() {
@@ -39,7 +50,7 @@ export function buildField() {
 
   // Mound: a low flattened cone; real mounds slope 1 in per ft from 6 in in front of the rubber.
   const mound = new THREE.Mesh(
-    new THREE.CylinderGeometry(2.5, MOUND_RADIUS_FT, MOUND_HEIGHT_FT, 48),
+    new THREE.CylinderGeometry(MOUND_TOP_RADIUS_FT, MOUND_RADIUS_FT, MOUND_HEIGHT_FT, 48),
     new THREE.MeshLambertMaterial({ color: 0xa0704a }),
   );
   mound.position.copy(toScene([0, MOUND_CENTRE_Y_FT, MOUND_HEIGHT_FT / 2]));

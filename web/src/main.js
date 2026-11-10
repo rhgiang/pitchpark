@@ -12,6 +12,7 @@ import {
 } from "./state.js";
 import { makeBall, makeGhost, updateBall, spinBall } from "./ball.js";
 import { renderHud } from "./hud.js";
+import { makePitcher, poseAtRelease } from "./pitcher.js";
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
@@ -25,6 +26,7 @@ const ball = makeBall();
 const ghost = makeGhost();
 scene.add(ball, ghost);
 let zone = null;
+let figure = null; // the pitcher, rebuilt per pitcher (handedness), re-posed per pitch
 
 // Vertical FOV chosen so every pitch's zone, plate arrival and release fit (see cameras.js).
 const camera = new THREE.PerspectiveCamera(BATTER_EYE_VFOV_DEG, 1, 0.05, 2000);
@@ -89,6 +91,11 @@ function dispatch(action) {
     if (zone) scene.remove(zone);
     zone = pitch.sz_top_ft == null ? null : buildZone(pitch.sz_top_ft, pitch.sz_bot_ft);
     if (zone) scene.add(zone);
+    // Each pitch has its own release and arm angle; a no_tracking row may have no release, so
+    // the figure keeps the previous pose (and a missing arm angle keeps the previous one).
+    if (pitch.release?.every(Number.isFinite)) {
+      poseAtRelease(figure, pitch.release, pitch.arm_angle_deg ?? figure.userData.armAngleDeg);
+    }
   }
   shown = { ab, pitch };
   $("atbat").value = String(state.abIndex);
@@ -105,7 +112,11 @@ function dispatch(action) {
 const randomSeed = () => Math.floor(Math.random() * 2 ** 31);
 
 async function pickPitcher(slug) {
-  dispatch({ type: "pickPitcher", slug, data: await loadPitcher(slug) });
+  const data = await loadPitcher(slug);
+  if (figure) scene.remove(figure); // ponytail: old geometry not disposed; small, and only on a pitcher switch
+  figure = makePitcher(data.pitcher.throws);
+  scene.add(figure);
+  dispatch({ type: "pickPitcher", slug, data });
   $("pitcher").value = slug;
   // ponytail: plain <option> list; a search box if at-bat lists grow past a few hundred.
   $("atbat").replaceChildren(...state.data.at_bats.map((ab, i) => new Option(
@@ -165,6 +176,11 @@ async function start() {
   for (let i = 0; i < Number(q.get("pitch") ?? 0); i++) dispatch({ type: "nextPitch" });
   // Unknown mode/speed values are ignored by the reducer.
   if (q.has("mode")) dispatch({ type: "setMode", mode: q.get("mode") });
+  // ?cam=x,y,z,tx,ty,tz (Statcast ft): free-view camera position and target, for close-ups.
+  const cam = (q.get("cam") ?? "").split(",").map(Number);
+  if (cam.length === 6 && cam.every(Number.isFinite)) {
+    freePose = { position: toScene(cam.slice(0, 3)), target: toScene(cam.slice(3)) };
+  }
   if (q.has("view")) dispatch({ type: "setView", view: q.get("view") });
   if (q.has("speed")) dispatch({ type: "setSpeed", speed: Number(q.get("speed")) });
   // Freeze at t (no playback) so a headless screenshot catches the ball mid-flight.
