@@ -92,6 +92,26 @@ Fully simulated at-bats are **not** M4.
 - Nothing synthetic appears in the real-pitcher viewer. Synthetic data, if used for tests, is
   labelled and kept out of `web/` data.
 
+### Changes after the first look review (Ryan, 2026-11-10)
+- **Main view is the catcher's view**, not the batter's: camera centred behind the plate at a
+  crouched catcher's eye height, zone in the middle of the frame, pitcher straight ahead. The
+  batter's eye stays as an alternate view. *(Claude's call: the framing test from Task 4 applies
+  to the catcher's view, which should need a far narrower FOV.)*
+- **Interface: layout A "broadcast" (Ryan picked it from mockups).** Scorebug top-left (count,
+  outs, inning, bases, pitcher, pitch type and speed); view tabs top-right (Catcher, Batter,
+  Side, Ride, Free); pitch strip of clickable dots coloured by result above the playback bar;
+  playback bar bottom-centre (pitcher/at-bat picker button, prev, Throw, next, speed segment,
+  Statcast / M1+M3 / Both segment); collapsible "The look" stats card bottom-right; "?" key help
+  bottom-left. Dark translucent panels, one accent colour. Keys stay, shown in the help.
+- **See the movement:** a fading **trail** behind the ball, and a **"no spin" reference path**:
+  the same release, the pitch type's calibrated drag, gravity, no Magnus and no M3 push,
+  computed in Python and exported (`nospin` path, `plate_nospin`). The gap between the two at
+  the plate is shown as "break vs no spin" (in, x and z) in the stats card. No-model and
+  no-tracking pitches have no no-spin path. Spoiler rule still applies: the trail grows with the
+  ball, the no-spin line can be toggled.
+- **Ride view, release to zone:** starts over the pitcher's throwing shoulder at release and
+  stays behind the ball to the plate, with the zone ahead the whole time and the trail visible.
+
 ## Architecture
 
 - **Python is the source of truth.** `src/pitchsim/export.py` writes JSON; the browser only plays

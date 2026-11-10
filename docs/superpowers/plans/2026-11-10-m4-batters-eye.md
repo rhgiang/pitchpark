@@ -227,6 +227,28 @@
 - [ ] **Step 3:** Frame rate re-check (60 fps target); comparison image again. **Stop for Ryan's look feedback.**
 - [ ] **Step 4:** Commit: `git commit -m "M4: detail pass and intro sweep"`
 
+### Task 11 (runs before Task 9): Catcher's view, broadcast interface, movement aids, ride release-to-zone
+
+Added after Ryan's Task 8 look review; spec "Changes after the first look review" is binding.
+
+**Files:**
+- Modify: `src/pitchsim/export.py`, `tests/test_export.py`, `web/test/fixtures/synthetic.json`
+- Modify: `web/src/cameras.js`, `web/src/state.js`, `web/src/hud.js`, `web/src/ball.js`, `web/src/main.js`, `web/index.html`
+- Create: `web/src/ui.css` (or styles in index.html), `web/src/trail.js`
+- Test: `web/test/cameras.test.js`, `web/test/state.test.js`, `web/test/trajectory.test.js`
+
+**Interfaces:**
+- Export: each pitch gains `nospin: {t, p} | null` and `plate_nospin: [x, z, t] | null`, simulated from the same `release_state` with the type's calibrated Cd, spin efficiency 0 and no push, same air density. Schema version 2. `tunnel` gains `break_x_in`, `break_z_in` = real plate minus no-spin plate (in).
+- `cameras.js`: `catcherView() -> {position, target, vfovDeg}` (centred, x = 0; eye height and depth stated with a source); `rideAlong(path, t, release, throws)` starts over the throwing shoulder at t = 0.
+- State: views `"catcher" | "batter" | "side" | "ride" | "free"`, default `"catcher"`; `showNoSpin: boolean` toggled by an action.
+
+- [ ] **Step 1:** Export: tests `test_nospin_path` (ends at y = 17/12; with spin efficiency 0 and no push, `plate_nospin` equals `validation.run_sim(cd, eff=0)` within 1e-4 ft) and `test_nospin_null_without_model`. Regenerate the fixture and the five real exports.
+- [ ] **Step 2:** Catcher's view: extend the Task 4 framing test to the catcher's view over every exported pitch (zone corners, real/sim/no-spin plate arrivals, release in frame at 1600x900); choose the narrowest vertical FOV that passes; batter's eye keeps its own test.
+- [ ] **Step 3:** Movement aids: trail (grows with the ball, fades, shown in every view, ink-proof like the ball); no-spin line toggle; truth test extended to `nospin` paths.
+- [ ] **Step 4:** Ride view from release: test that at t = 0 the camera is behind and above the release point on the throwing side, and at the end the zone is in frame.
+- [ ] **Step 5:** Broadcast interface (layout A, spec): scorebug, view tabs, pitch strip (clickable, result colours, spoiler rule: a dot shows its result only after that pitch has landed or been passed), playback bar with picker button, segments, collapsible stats card with break vs no spin, "?" help listing keys. State tests for pitch-strip jumps and the no-spin toggle.
+- [ ] **Step 6:** `npm test`, `npm run build`, `pytest tests/test_export.py`; screenshots of each view and the open picker (results/m4/screens/task11-*.png). Commit: `git commit -m "M4: catcher's view, broadcast UI, movement trail, ride from release"`. Stop for Ryan's look feedback before Task 9.
+
 ### Task 10: Checks, results, README
 
 **Files:**
