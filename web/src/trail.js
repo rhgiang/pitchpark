@@ -6,6 +6,7 @@ import * as THREE from "three";
 import { toScene } from "./coords.js";
 import { inkProof } from "./look.js";
 import { BALL_RADIUS_FT } from "./ball.js";
+import { visibleEnd } from "./trajectory.js";
 
 const RING = 6; // vertices around the tube
 
@@ -77,8 +78,7 @@ function build(tube, path) {
   const n = path.t.length;
   u.t = path.t;
   // Balls in the dirt: the trail stops where the ball is hidden (centre below one radius, ball.js).
-  const dirt = path.p.findIndex((q) => q[2] < BALL_RADIUS_FT);
-  u.tEnd = dirt < 0 ? path.t[n - 1] : path.t[dirt];
+  u.tEnd = visibleEnd(path, BALL_RADIUS_FT).t;
   const pts = path.p.map(toScene);
   const pos = new Float32Array(n * RING * 3);
   const at = new Float32Array(n * RING);

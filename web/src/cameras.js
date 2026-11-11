@@ -14,13 +14,15 @@ export const STANCE_X_FT = 2.5;
 export const STANCE_Y_FT = -2.0;
 
 // Aim and field of view, also framing choices: picked (by a grid search over every exported
-// pitch, 2026-11-10) as the narrowest vertical FOV that, at 16:9 and within 95% of the frame,
-// shows every pitch's zone corners, plate arrival (Statcast fit and simulated) and release point
-// for the pitch's own batter side. Needs 66.6 deg; balls in the dirt (plate z down to -0.8 ft,
-// 5.8 ft below the eye at ~3.7 ft away) set it. Checked by test/cameras.test.js.
-export const AIM_YAW_DEG = 16.5; // turned toward the plate (right for a righty, left for a lefty)
-export const AIM_PITCH_DEG = -26; // looking down
-export const BATTER_EYE_VFOV_DEG = 67;
+// pitch and over yaw and pitch, 2026-11-11) as the narrowest vertical FOV that, at 16:9 and
+// within 95% of the frame, shows for the pitch's own batter side every zone corner, the release
+// point, and the end of each visible flight (Statcast fit and simulated): the plate arrival, or,
+// for a ball in the dirt, where it reaches the ground (centre at one radius, where ball.js hides
+// it). Ryan's rule (2026-11-11): only what the viewer can see has to be in frame; the fit's
+// below-ground continuation does not count. Needs 63.1 deg. Checked by test/cameras.test.js.
+export const AIM_YAW_DEG = 20; // turned toward the plate (right for a righty, left for a lefty)
+export const AIM_PITCH_DEG = -24.5; // looking down
+export const BATTER_EYE_VFOV_DEG = 63.5;
 
 /**
  * Batter's-eye camera for batter side `stand` ("R" or "L").
@@ -47,12 +49,13 @@ export function batterEye(stand) {
 // so the eyes are ~3.5 ft up. Not a measurement.
 export const CATCHER_Y_FT = -2.5;
 export const CATCHER_EYE_HEIGHT_FT = 3.5;
-// Aim and FOV: chosen like the batter's eye (grid search over every exported pitch, 2026-11-10,
-// at 16:9 within 95% of the frame: zone corners, release, and Statcast-fit, simulated and
-// no-spin plate arrivals). The plate is only ~4 ft away, so the lowest arrivals (balls in the
-// dirt, no-spin paths of sinkers and changeups) set the bottom edge and the release the top.
-export const CATCHER_AIM_PITCH_DEG = -10.75;
-export const CATCHER_VFOV_DEG = 77;
+// Aim and FOV: chosen like the batter's eye, with the same visible-flight rule (grid search over
+// every exported pitch, 2026-11-11, at 16:9 within 95% of the frame: zone corners, release, and
+// the visible end of the Statcast-fit, simulated and no-spin paths). Needs 69.6 deg. The plate is
+// only ~4 ft away, so the lowest visible arrivals (balls reaching the dirt near the plate) set
+// the bottom edge and the release the top. (Counting the fit below ground needed 76.6 deg.)
+export const CATCHER_AIM_PITCH_DEG = -7.25;
+export const CATCHER_VFOV_DEG = 70;
 
 /**
  * Catcher's-eye camera, the same for both batter sides: on the plate's centre line (x = 0),
@@ -105,15 +108,17 @@ export function sideView(path, aspect = 16 / 9) {
  * out to the throwing side. It then follows the ball, 6 ft back along the flight direction
  * (central difference of the samples) and 1.5 ft up, the sideways offset easing to 0 by the plate,
  * always looking at the middle of the zone.
- * @param release [x, y, z] Statcast release point (ft); throws "R" or "L".
+ * @param release [x, y, z] Statcast release point (ft); unused (the path starts at release), kept
+ *   for the plan's interface. throws "R" or "L".
  * @returns {{position: number[], target: number[]}} Statcast feet; use vertical FOV RIDE_VFOV_DEG.
  */
 export function rideAlong(path, t_s, release, throws) {
   const h = 0.02;
   const p0 = stateAt(path, t_s - h).p;
   const p1 = stateAt(path, t_s + h).p;
-  // The ball, except at t = 0 where it is the release point itself (the path starts there).
-  const ball = t_s <= 0 && release ? release : stateAt(path, t_s).p;
+  // The path itself throughout (not Statcast's release_pos, which differs slightly from the fit
+  // at release and would make the camera jump as playback starts).
+  const ball = stateAt(path, t_s).p;
   const d = p1.map((v, i) => v - p0[i]);
   const n = Math.hypot(...d) || 1;
   const dir = d.map((v) => v / n);

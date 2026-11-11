@@ -79,7 +79,7 @@ export function renderHud(state, pitch) {
   // release, so they show at once.
   $("bug-count").textContent = `${pitch.balls}-${pitch.strikes}`;
   const surname = state.data.pitcher.name.split(",")[0];
-  $("bug-pitch").textContent = `${surname} · ${pitch.pitch_name ?? pitch.pitch_type ?? "Unknown"} ${fmt(pitch.speed_mph, 1)}`;
+  $("bug-pitch").textContent = `${surname} · ${pitch.pitch_name ?? pitch.pitch_type ?? "Unknown"} ${fmt(pitch.speed_mph, 1, " mph")}`;
   $("bug-inning").textContent = `${ab.top ? "Top" : "Bot"} ${ab.inning} · ${ab.outs} out · vs ${ab.stand}HB`;
   (pitch.bases ?? [false, false, false]).forEach((on, i) => $(`base-${i + 1}`).classList.toggle("on", on));
   $("bug-status").innerHTML = statusLabel(state, pitch);
@@ -90,7 +90,9 @@ export function renderHud(state, pitch) {
     const kind = revealed(state, i) ? resultKind(p.description) : null;
     dots[i].className = `dot${kind ? ` ${kind}` : ""}${i === state.pitchIndex ? " cur" : ""}${i > state.pitchIndex ? " ahead" : ""}`;
     dots[i].textContent = kind ? kind.toUpperCase() : String(i + 1);
-    dots[i].title = `Pitch ${i + 1}: ${p.pitch_name ?? p.pitch_type ?? "?"}${kind ? ` · ${words(p.description)}` : ""}`;
+    // Pitch type only for pitches already thrown (the current one is known at release).
+    const name = i <= state.pitchIndex || revealed(state, i) ? `: ${p.pitch_name ?? p.pitch_type ?? "?"}` : "";
+    dots[i].title = `Pitch ${i + 1}${name}${kind ? ` · ${words(p.description)}` : ""}`;
   });
   const last = state.pitchIndex === ab.pitches.length - 1;
   $("result").innerHTML = !done ? "" : cap(words(pitch.description))

@@ -27,3 +27,20 @@ export function stateAt(path, t_s) {
   const f = (t_s - t[lo]) / (t[hi] - t[lo]);
   return { p: p[lo].map((a, i) => a + f * (p[hi][i] - a)), done: false };
 }
+
+/**
+ * Where the visible flight ends: the first time the path's height drops to minZ_ft (linear
+ * between samples; ball.js hides the ball below one radius), else the last sample (the plate).
+ * Balls in the dirt: Statcast's fit carries on below the ground, but nobody sees that part.
+ * @returns {{t: number, p: number[]}} time in s and position in Statcast feet.
+ */
+export function visibleEnd(path, minZ_ft) {
+  const { t, p } = path;
+  for (let k = 0; k < t.length; k++) {
+    if (p[k][2] >= minZ_ft) continue;
+    if (k === 0) return { t: t[0], p: [...p[0]] };
+    const f = (p[k - 1][2] - minZ_ft) / (p[k - 1][2] - p[k][2]);
+    return { t: t[k - 1] + f * (t[k] - t[k - 1]), p: p[k - 1].map((a, i) => a + f * (p[k][i] - a)) };
+  }
+  return { t: t[t.length - 1], p: [...p[p.length - 1]] };
+}

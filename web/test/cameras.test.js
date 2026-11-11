@@ -5,7 +5,8 @@ import { PerspectiveCamera } from "three";
 import {
   batterEye, BATTER_EYE_VFOV_DEG, catcherView, sideView, rideAlong, SIDE_VFOV_DEG, RIDE_VFOV_DEG,
 } from "../src/cameras.js";
-import { stateAt } from "../src/trajectory.js";
+import { stateAt, visibleEnd } from "../src/trajectory.js";
+import { BALL_RADIUS_FT } from "../src/ball.js";
 import { toScene } from "../src/coords.js";
 
 test("a right-handed batter stands on the catcher's left (x < 0), a lefty on the right", () => {
@@ -22,6 +23,7 @@ if (existsSync(dataDir)) {
   }
 }
 
+const flight = { t: [0, 0.2, 0.4], p: [[-1.5, 54, 6], [-1, 27, 4.2], [0, 1.4, 2.5]] };
 const MARGIN = 0.95; // inside 95% of the frame in normalised device coordinates
 const HALF_PLATE_FT = 17 / 24;
 const PLATE_FRONT_Y_FT = 17 / 12;
@@ -36,7 +38,24 @@ function cameraAt(pose, vfovDeg) {
 }
 
 /**
- * Every exported pitch's release, plate arrivals (Statcast fit, simulated, and with `noSpin` the
+ * Points of one pitch that must be in frame (Ryan's rule, 2026-11-11): release and zone corners
+ * always; for each shown path (Statcast fit, simulated, and with `noSpin` the no-spin path) the
+ * end of its visible flight: the plate arrival, or where the ball reaches the ground (centre at one
+ * radius, where ball.js hides it) if it gets there first. Paths are only seen where the ball is.
+ */
+function framingPoints(p, noSpin) {
+  const pts = [p.release];
+  for (const path of [p.real, p.sim, noSpin ? p.nospin : null]) {
+    if (path) pts.push(visibleEnd(path, BALL_RADIUS_FT).p);
+  }
+  for (const z of [p.sz_bot_ft, p.sz_top_ft]) {
+    for (const x of [-HALF_PLATE_FT, HALF_PLATE_FT]) pts.push([x, PLATE_FRONT_Y_FT, z]);
+  }
+  return pts;
+}
+
+/**
+ * Every exported pitch's release, visible path ends (Statcast fit, simulated, and with `noSpin` the
  * no-spin path) and zone corners must project in front of the camera and inside 95% of the frame.
  * cams: {R, L} camera per batter side. Returns [pitches checked, tightest margin in NDC].
  */
@@ -47,13 +66,7 @@ function checkFraming(cams, noSpin) {
     for (const ab of JSON.parse(readFileSync(file, "utf8")).at_bats) {
       for (const p of ab.pitches) {
         if (!p.real) continue; // no_tracking: nothing is drawn
-        const pts = [p.release, [p.plate_real[0], PLATE_FRONT_Y_FT, p.plate_real[1]]];
-        if (p.plate_sim) pts.push([p.plate_sim[0], PLATE_FRONT_Y_FT, p.plate_sim[1]]);
-        if (noSpin && p.plate_nospin) pts.push([p.plate_nospin[0], PLATE_FRONT_Y_FT, p.plate_nospin[1]]);
-        for (const z of [p.sz_bot_ft, p.sz_top_ft]) {
-          for (const x of [-HALF_PLATE_FT, HALF_PLATE_FT]) pts.push([x, PLATE_FRONT_Y_FT, z]);
-        }
-        for (const q of pts) {
+        for (const q of framingPoints(p, noSpin)) {
           const v = toScene(q);
           const inFront = v.clone().applyMatrix4(cams[ab.stand].matrixWorldInverse).z < 0;
           v.project(cams[ab.stand]);
@@ -69,7 +82,24 @@ function checkFraming(cams, noSpin) {
   return [pitches, tightest];
 }
 
-test("batter's eye at 1600x900 frames every pitch's zone, plate arrival and release", () => {
+test("a path in the dirt is framed at its ground contact, not at its below-ground plate arrival", () => {
+  const r = BALL_RADIUS_FT;
+  const dirt = { t: [0, 0.2, 0.4], p: [[-1.5, 54, 6], [-1, 20, 1 + r], [0, PLATE_FRONT_Y_FT, -0.5]] };
+  const end = visibleEnd(dirt, r);
+  // From z = 1 + r to -0.5: one radius is reached 1/(1.5 + r) of the way along the last segment.
+  const f = 1 / (1.5 + r);
+  assert.ok(Math.abs(end.p[2] - r) < 1e-12);
+  assert.ok(Math.abs(end.t - (0.2 + 0.2 * f)) < 1e-12);
+  assert.ok(Math.abs(end.p[1] - (20 + f * (PLATE_FRONT_Y_FT - 20))) < 1e-9);
+  const pitch = { release: dirt.p[0], real: dirt, sim: null, nospin: dirt, sz_bot_ft: 1.6, sz_top_ft: 3.4 };
+  const pts = framingPoints(pitch, true);
+  assert.deepEqual(pts[1], end.p);
+  assert.ok(!pts.some((q) => q[2] < 0), "the below-ground plate arrival must not be checked");
+  // A path that stays up is framed at its plate arrival.
+  assert.deepEqual(visibleEnd(flight, r).p, flight.p[2]);
+});
+
+test("batter's eye at 1600x900 frames every pitch's zone, visible path ends and release", () => {
   const cam = (stand) => cameraAt(batterEye(stand), BATTER_EYE_VFOV_DEG);
   const [n, tightest] = checkFraming({ R: cam("R"), L: cam("L") }, false);
   console.log(`batter framing: ${n} pitches checked, tightest margin ${tightest.toFixed(4)} NDC inside the 95% border`);
@@ -82,7 +112,7 @@ test("catcher's view is centred behind the plate", () => {
   assert.ok(v.position[1] < 0); // behind the back point of the plate
 });
 
-test("catcher's view at 1600x900 frames every pitch's zone, plate arrivals (incl. no spin) and release", () => {
+test("catcher's view at 1600x900 frames every pitch's zone, visible path ends (incl. no spin) and release", () => {
   const v = catcherView();
   const cam = cameraAt(v, v.vfovDeg); // the same for both batter sides
   const [n, tightest] = checkFraming({ R: cam, L: cam }, true);
@@ -90,7 +120,6 @@ test("catcher's view at 1600x900 frames every pitch's zone, plate arrivals (incl
 });
 
 // ---- Task 6: side view and ride-along
-const flight = { t: [0, 0.2, 0.4], p: [[-1.5, 54, 6], [-1, 27, 4.2], [0, 1.4, 2.5]] };
 
 test("side view sits on the first-base side (x > 0) with release and plate in frame", () => {
   const v = sideView(flight);
