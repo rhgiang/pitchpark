@@ -260,6 +260,14 @@ Added after Ryan's Task 9 look review (2026-11-13): he likes the intro sweep; th
 - [ ] **Step 3: World.** Leaf-cluster detail on trees, textured rock under the island, wear on walls and stands, stadium shadows across the field at sunset, contact shading where objects meet the ground.
 - [ ] **Step 4:** Keep: real field geometry, ink-proof ball/ghost/zone/trail/no-spin line, no DoF in pitch views, 60 fps (report ms/frame for umpire, wide, night and intro), all tests passing. Close-up and umpire-view screenshots plus side-by-side comparisons with the courtyard and Messenger references. Commit: `git commit -m "M4: art pass 3, ground and surface realism"`. Stop for Ryan's look review.
 
+### Task 13 (runs before Task 10): Art pass 4, stylised MLB infield clay and grass across the field
+
+Added after Ryan's Task 12 review (2026-11-13): the dirt "looks a little weird"; wants more of the real MLB infield sand/clay texture, blended with the cartoon style so it is neither odd nor too realistic, extended to all dirt (both baselines to first and third, the arc behind the bases, mound, warning track) and to the grass everywhere.
+
+- [ ] **Step 1: Clay.** Replace raw high-frequency noise with stylised structure: 3-tone value grouping (dry light top, mid, darker moist), soft painterly blotches, fine sandy grain quantised into 2-3 tones, groundskeeper drag arcs across the infield, darker clay piled at the grass lip, footpath wear along the baselines and around bases, consistent across every dirt area.
+- [ ] **Step 2: Grass.** Same stylised treatment over all infield and outfield grass: stripe pattern, soft tonal patches, quantised fine detail; no static-like noise.
+- [ ] **Step 3:** Keep everything Task 12 kept (no terrain ink, plate chalk not scuffed toward clay, ink-proof pitch elements, intro unchanged, under ~8 ms/frame). Screenshots of the umpire view, each base area, the mound and the outfield, before/after against Task 12, and side-by-sides with references. Commit: `git commit -m "M4: art pass 4, stylised infield clay and grass"`. Stop for Ryan's look review.
+
 ### Task 10: Checks, results, README
 
 **Files:**
