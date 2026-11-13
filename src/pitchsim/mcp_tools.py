@@ -83,3 +83,50 @@ def plate_error(d: dict) -> dict:
             miss.setdefault(p["pitch_type"], []).append(
                 float(np.hypot(r[0] - s[0], r[1] - s[1])) * 12.0)
     return {t: {"n": len(m), "median_miss_in": _med(m)} for t, m in miss.items()}
+
+
+def compare(a: dict, b: dict) -> dict:
+    """Pitch types both pitchers throw, side by side. Each field is {a, b, diff}, diff = b - a
+    (None if either side has no number). Types only one throws are listed under only_a / only_b.
+    Compare n before trusting a diff: a type thrown a handful of times is noise."""
+    ar_a, ar_b = arsenal(a), arsenal(b)
+    er_a, er_b = plate_error(a), plate_error(b)
+
+    def pair(x, y):
+        return {"a": x, "b": y, "diff": None if x is None or y is None else round(y - x, 2)}
+
+    shared = {}
+    for t in ar_a.keys() & ar_b.keys():
+        row = {k: pair(v, ar_b[t][k]) for k, v in ar_a[t].items()}   # includes n
+        row["median_miss_in"] = pair(er_a.get(t, {}).get("median_miss_in"),
+                                     er_b.get(t, {}).get("median_miss_in"))
+        shared[t] = row
+    return {"a": a["pitcher"]["name"], "b": b["pitcher"]["name"], "shared": shared,
+            "only_a": sorted(ar_a.keys() - ar_b.keys()), "only_b": sorted(ar_b.keys() - ar_a.keys())}
+
+
+def sequence(d: dict, stand: str | None = None, balls: int | None = None,
+             strikes: int | None = None) -> dict:
+    """What he throws next, given the previous pitch type in the at-bat ("start" = first pitch).
+    Per row: n transitions, and for each next type its count n, share p, and median separation
+    (in) at the decision point from the previous pitch (None for "start"). Filters: batter side
+    `stand` ("L"/"R"), and the count the NEXT pitch is thrown in. Observed frequencies, unsmoothed:
+    read n before trusting p."""
+    cells: dict[str, dict[str, list]] = {}
+    for ab in d["at_bats"]:
+        if stand and ab["stand"] != stand:
+            continue
+        prev = None
+        for p in ab["pitches"]:
+            ok = (p["pitch_type"] and (balls is None or p["balls"] == balls)
+                  and (strikes is None or p["strikes"] == strikes))
+            if ok:
+                cells.setdefault(prev["pitch_type"] if prev else "start", {}) \
+                     .setdefault(p["pitch_type"], []).append(p["tunnel"]["sep_prev_in"] if prev else None)
+            prev = p if p["pitch_type"] else None   # untyped pitch breaks the chain
+    out = {}
+    for a, nxt in cells.items():
+        n = sum(len(v) for v in nxt.values())
+        out[a] = {"n": n, "next": {b: {"n": len(v), "p": round(len(v) / n, 3), "median_sep_in": _med(v)}
+                                   for b, v in sorted(nxt.items(), key=lambda kv: -len(kv[1]))}}
+    return out
