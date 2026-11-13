@@ -249,6 +249,17 @@ Added after Ryan's Task 8 look review; spec "Changes after the first look review
 - [ ] **Step 5:** Broadcast interface (layout A, spec): scorebug, view tabs, pitch strip (clickable, result colours, spoiler rule: a dot shows its result only after that pitch has landed or been passed), playback bar with picker button, segments, collapsible stats card with break vs no spin, "?" help listing keys. State tests for pitch-strip jumps and the no-spin toggle.
 - [ ] **Step 6:** `npm test`, `npm run build`, `pytest tests/test_export.py`; screenshots of each view and the open picker (results/m4/screens/task11-*.png). Commit: `git commit -m "M4: catcher's view, broadcast UI, movement trail, ride from release"`. Stop for Ryan's look feedback before Task 9.
 
+### Task 12 (runs before Task 10): Art pass 3, ground and surface realism
+
+Added after Ryan's Task 9 look review (2026-11-13): he likes the intro sweep; the dirt, grass and world "look the same as before". Wants "a bit more realism blended into the cartoon", like the courtyard reference (Atlas + Fable + three.js) and Messenger. Realism comes from texture and light, not new shapes.
+
+**Files:** `web/src/park/*.js`, `web/src/look.js` (split post-processing shaders into `web/src/post.js` if look.js grows further), new texture helpers under `web/src/park/` as needed.
+
+- [ ] **Step 1: Grass.** World-space detail texture (procedural, no copied images) with distance fade: blade-level noise and normal perturbation that catches the sun, mowing stripes with sheen that depends on view direction, colour variation, worn patches (catcher/umpire area, baselines, outfield paths), darker lip at grass/dirt edges.
+- [ ] **Step 2: Dirt.** Granular clay texture and normals, rake lines, darker moist areas around the plate and mound, cleat marks and scuffs in the batter's boxes and at the pitcher's landing spot, irregular grass/dirt edges, chalk lines slightly rough and scuffed.
+- [ ] **Step 3: World.** Leaf-cluster detail on trees, textured rock under the island, wear on walls and stands, stadium shadows across the field at sunset, contact shading where objects meet the ground.
+- [ ] **Step 4:** Keep: real field geometry, ink-proof ball/ghost/zone/trail/no-spin line, no DoF in pitch views, 60 fps (report ms/frame for umpire, wide, night and intro), all tests passing. Close-up and umpire-view screenshots plus side-by-side comparisons with the courtyard and Messenger references. Commit: `git commit -m "M4: art pass 3, ground and surface realism"`. Stop for Ryan's look review.
+
 ### Task 10: Checks, results, README
 
 **Files:**
