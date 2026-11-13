@@ -95,7 +95,9 @@ Fully simulated at-bats are **not** M4.
 ### Changes after the first look review (Ryan, 2026-11-10)
 - **Main view is the catcher's view**, not the batter's: camera centred behind the plate at a
   crouched catcher's eye height, zone in the middle of the frame, pitcher straight ahead. The
-  batter's eye stays as an alternate view. *(Claude's call: the framing test from Task 4 applies
+  batter's eye stays as an alternate view. **Update (Ryan, 2026-11-12):** the main view sits at the home-plate
+  umpire's spot, (0, -5.0, 4.75) ft, aim -15 deg, vertical FOV 44 deg (narrowest that frames every
+  visible pitch), chosen from a side-by-side with the catcher's eye (70 deg) and 4.5 ft back (35 deg). *(Claude's call: the framing test from Task 4 applies
   to the catcher's view, which should need a far narrower FOV.)*
 - **Interface: layout A "broadcast" (Ryan picked it from mockups).** Scorebug top-left (count,
   outs, inning, bases, pitcher, pitch type and speed); view tabs top-right (Catcher, Batter,
