@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { PALETTE, makeToonMaterial, lampMaterial, makeGlowSprite, noOutline } from "../look.js";
+import { PALETTE, makeToonMaterial, lampMaterial, makeGlowSprite, noOutline, terrain } from "../look.js";
 import { sweep, frameAt, radialFrame, box, place, textTexture, shadeOf } from "./build.js";
 import {
   POLE_R, POLE_L, ISLAND, polar, fenceDistFt, normals, rng, BLEACHER_GAP_FT,
@@ -189,12 +189,12 @@ function battersEye() {
 /** Bullpens: two mounds and plates per side in the gap behind the fence. */
 function bullpens() {
   const g = new THREE.Group();
-  const dirt = makeToonMaterial(PALETTE.dirtLight);
+  const dirt = makeToonMaterial(PALETTE.dirtLight, { surface: "ground" });
   const white = makeToonMaterial(PALETTE.chalk);
   for (const s of [-1, 1]) for (const dr of [-6, 6]) {
     const mound = polar(s * 27, fenceDistFt(27) + BLEACHER_GAP_FT / 2 + dr);
     const plate = polar(s * 36, fenceDistFt(36) + BLEACHER_GAP_FT / 2 + dr);
-    const m = new THREE.Mesh(new THREE.CylinderGeometry(2.5, 8, 0.83, 24).translate(0, 0.42, 0), dirt);
+    const m = terrain(new THREE.Mesh(new THREE.CylinderGeometry(2.5, 8, 0.83, 24).translate(0, 0.42, 0), dirt));
     m.position.set(mound[0], 0, -mound[1]);
     m.receiveShadow = true;
     g.add(m, box(white, 2, 0.06, 0.5, mound[0], 0.83, -mound[1]), box(white, 1.4, 0.05, 1.4, plate[0], 0.01, -plate[1]));
@@ -325,7 +325,7 @@ function islandRock(centre, radius, depth, seed) {
     for (let j = 0; j < 3; j++) col.push(...shadeOf(band, s));
   }
   geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
-  const m = new THREE.Mesh(geo, makeToonMaterial(0xffffff, { vertexColors: true }));
+  const m = new THREE.Mesh(geo, makeToonMaterial(0xffffff, { vertexColors: true, surface: "rock" }));
   m.position.set(centre[0], 0, -centre[1]);
   m.castShadow = true;
   return m;

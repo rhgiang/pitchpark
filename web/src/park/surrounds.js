@@ -286,7 +286,7 @@ function bushesAndRocks(bushes, rocks) {
   const rock = new THREE.DodecahedronGeometry(1, 0).scale(1.2, 0.75, 1).translate(0, 0.45, 0);
   return [
     instances(bush, toon(0xffffff, "foliage"), bushes),
-    instances(rock, toon(0xffffff), rocks),
+    instances(rock, toon(0xffffff, "rock"), rocks),
   ];
 }
 
@@ -323,7 +323,7 @@ function waterfall({ p, dir }) {
 function hangingRocks(centre, sites) {
   const geo = new THREE.ConeGeometry(1, 2.4, 5, 1).rotateX(Math.PI).toNonIndexed();
   geo.computeVertexNormals();
-  return instances(geo, toon(0xffffff, "none"), sites.map((s) => ({ ...s, p: [centre[0] + s.p[0], centre[1] + s.p[1]] })), { cast: false });
+  return instances(geo, toon(0xffffff, "rock"), sites.map((s) => ({ ...s, p: [centre[0] + s.p[0], centre[1] + s.p[1]] })), { cast: false });
 }
 
 /**

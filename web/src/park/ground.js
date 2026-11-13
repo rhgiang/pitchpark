@@ -1,8 +1,8 @@
 import * as THREE from "three";
-import { PALETTE, makeToonMaterial } from "../look.js";
+import { PALETTE, makeToonMaterial, terrain } from "../look.js";
 import {
   BASES, BASE_SIZE_FT, MOUND_CENTRE_Y_FT, ISLAND, fieldBoundary, polar,
-  normals, BLEACHER_GAP_FT, BATTERS_EYE_HALF_DEG, fenceDistFt, rng,
+  normals, BLEACHER_GAP_FT, BATTERS_EYE_HALF_DEG, fenceDistFt, rng, resample,
 } from "./layout.js";
 
 // The ground is painted, not modelled: one canvas painter draws grass stripes, dirt, chalk,
@@ -64,6 +64,58 @@ function contactShade(ctx, pts, widthFt, a = 0.05, close = false) {
     poly(ctx, pts, close);
     ctx.stroke();
   }
+}
+
+/**
+ * Smooth 1-D noise of arc length s (ft), roughly in [-1, 1]: three sines with seeded phases,
+ * wavelengths 7.3, 2.9 and 1.3 ft. Edges cut by a groundskeeper wander at about these scales.
+ */
+function wobble(R) {
+  const w = [[7.3, 0.5], [2.9, 0.32], [1.3, 0.18]].map(([L, a]) => [(2 * Math.PI) / L, a, R() * 2 * Math.PI]);
+  return (s) => w.reduce((v, [f, a, p]) => v + a * Math.sin(f * s + p), 0);
+}
+
+/**
+ * A closed outline made irregular: resampled every 0.25 ft and pushed along its normals by up to
+ * `amp` ft. Grass/dirt edges are cut by hand and trodden, never perfect circles; the wobble
+ * averages to zero, so the shapes keep their real sizes.
+ */
+function ragged(pts, amp, R) {
+  const q = resample([...pts, pts[0]], 0.25);
+  const n = normals(q), w = wobble(R);
+  return q.map((p, i) => [p[0] + n[i][0] * amp * w(i * 0.25), p[1] + n[i][1] * amp * w(i * 0.25)]);
+}
+
+/** Points round a circle (Statcast ft), about every 0.5 ft. */
+function circle([x, y], r) {
+  const n = Math.max(24, Math.ceil((2 * Math.PI * r) / 0.5));
+  return Array.from({ length: n }, (_, i) => [x + r * Math.cos((2 * Math.PI * i) / n), y + r * Math.sin((2 * Math.PI * i) / n)]);
+}
+
+/**
+ * The lip where grass meets clay: a soft darker band (the grass edge is thicker and casts a
+ * little shade; the clay beside it is damper and lower) and a thin dark line right at the cut.
+ * This replaces an ink outline: the edge reads through colour, as on a real field.
+ */
+function lip(ctx, pts) {
+  ctx.lineJoin = "round";
+  for (const [w, a] of [[1.6, 0.08], [0.8, 0.08], [0.35, 0.07]]) { // soft: widest faintest
+    ctx.strokeStyle = `rgba(35,55,20,${a})`; ctx.lineWidth = w;
+    poly(ctx, pts); ctx.stroke();
+  }
+}
+
+/**
+ * Worn turf: many small translucent straw and bare-soil dots scattered round `c` (ellipse radii
+ * rx, ry ft), denser in the middle, where players stand and walk.
+ */
+function wear(ctx, R, [x, y], rx, ry, n, a = 0.07) {
+  for (let i = 0; i < n; i++) {
+    const t = R() * 2 * Math.PI, r = Math.sqrt(R()) * R(); // concentrated toward the centre
+    ctx.globalAlpha = a * (0.5 + R());
+    disc(ctx, [x + Math.cos(t) * r * rx, y + Math.sin(t) * r * ry], 0.2 + R() * 0.8, R() < 0.8 ? 0xb9b064 : 0xa88a5a);
+  }
+  ctx.globalAlpha = 1;
 }
 
 /**
@@ -172,30 +224,45 @@ function paint(ctx, plan) {
   ctx.beginPath(); ctx.arc(0, 0, 60, Math.PI * 1.25, Math.PI * 1.75); ctx.lineTo(0, 0); ctx.closePath(); ctx.fill();
 
   // Infield dirt: everything within 95 ft of the front of the rubber (60.5 ft), between the
-  // foul lines (with 4 ft of dirt outside them for the base paths).
-  ctx.fillStyle = hex(PALETTE.dirt);
-  ctx.save();
+  // foul lines (with 4 ft of dirt outside them for the base paths). Edges are ragged (see ragged).
   const o = 4 * Math.SQRT1_2; // 4 ft off a 45 deg line
-  poly(ctx, [[0, -6], [-141.4 - o, 141.4 - o], [0, 300], [141.4 + o, 141.4 - o]]); ctx.clip();
-  disc(ctx, [0, 60.5], 95, PALETTE.dirt);
-  ctx.restore();
+  const skinClip = ragged([[0, -6], [-141.4 - o, 141.4 - o], [0, 300], [141.4 + o, 141.4 - o]], 0.15, R);
+  const skinArc = ragged(circle([0, 60.5], 95), 0.2, R);
+  ctx.fillStyle = hex(PALETTE.dirt);
+  ctx.save(); poly(ctx, skinClip); ctx.clip(); poly(ctx, skinArc); ctx.fill(); ctx.restore();
   // Infield grass: the diamond inside the base paths (3 ft each side of the base lines).
   const k = 3 * Math.SQRT2;
+  const diamond = ragged([[0, k], [BASES.first[0] - k, BASES.first[1]], [0, BASES.second[1] - k], [BASES.third[0] + k, BASES.third[1]]], 0.15, R);
   ctx.fillStyle = hex(PALETTE.grass);
-  poly(ctx, [[0, k], [BASES.first[0] - k, BASES.first[1]], [0, BASES.second[1] - k], [BASES.third[0] + k, BASES.third[1]]]);
-  ctx.fill();
+  poly(ctx, diamond); ctx.fill();
   ctx.save(); ctx.clip();
   ctx.rotate(Math.PI / 4);
   ctx.fillStyle = hex(PALETTE.grassMow);
   for (let i = 0; i < 8; i++) for (let j = 0; j < 8; j++) if ((i + j) % 2) ctx.fillRect(i * 11.25, j * 11.25, 11.25, 11.25);
   ctx.restore();
-  // Dirt circles: home plate (26 ft across, OBR Appendix 2) and the mound (18 ft).
-  disc(ctx, [0, 0.7], 13, PALETTE.dirt);
-  disc(ctx, [0, MOUND_CENTRE_Y_FT], 9, PALETTE.dirtLight);
-  // Grass edges get a thin darker lip, as a lip of grass casts on the dirt.
-  ctx.strokeStyle = "rgba(60,40,20,0.18)";
-  ctx.lineWidth = 0.6;
-  ctx.beginPath(); ctx.arc(0, 0.7, 13, 0, 2 * Math.PI); ctx.stroke();
+  // Worn turf: the outfielders' spots, the coaches' boxes and where the corner infielders creep
+  // onto the grass.
+  for (const p of [[-150, 265], [0, 305], [150, 265]]) wear(ctx, R, p, 12, 9, 420);
+  for (const s of [-1, 1]) {
+    wear(ctx, R, [s * 63.6, 35.4], 9, 9, 260, 0.1);
+    wear(ctx, R, [s * 52, 70], 6, 6, 120);
+  }
+  // Lips where grass meets clay, in place of ink (see lip). The home circle covers where the
+  // diamond's and base paths' edges run into it, so it is painted after these.
+  lip(ctx, diamond);
+  ctx.save(); poly(ctx, skinClip); ctx.clip(); lip(ctx, skinArc); ctx.restore();
+  ctx.save(); poly(ctx, skinArc); ctx.clip(); lip(ctx, skinClip); ctx.restore();
+  // Dirt circles: home plate (26 ft across, OBR Appendix 2) and the mound (18 ft; the painted
+  // clay runs a few inches past the modelled mound's foot, so no grass shows under its rim).
+  const homeCircle = ragged(circle([0, 0.7], 13), 0.15, R);
+  const moundCircle = ragged(circle([0, MOUND_CENTRE_Y_FT], 9.25), 0.12, R);
+  ctx.fillStyle = hex(PALETTE.dirt); poly(ctx, homeCircle); ctx.fill();
+  ctx.fillStyle = hex(PALETTE.dirtLight); poly(ctx, moundCircle); ctx.fill();
+  for (const pts of [homeCircle, moundCircle]) lip(ctx, pts);
+
+  // Damp, darker clay hugging home plate (watered and tamped round its edges) and the rubber.
+  contactShade(ctx, [[-8.5 * IN, 17 * IN], [8.5 * IN, 17 * IN], [8.5 * IN, 8.5 * IN], [0, 0], [-8.5 * IN, 8.5 * IN]], 0.9, 0.06, true);
+  contactShade(ctx, [[-1, 60.5], [1, 60.5], [1, 61], [-1, 61]], 0.9, 0.06, true);
 
   // On-deck circles (5 ft across), between home and the dugouts.
   for (const s of [-1, 1]) {
@@ -268,12 +335,12 @@ function layer(plan, [x0, x1, y0, y1], px, order, disc = false) {
   const m = makeToonMaterial(0xffffff, {
     surface: "ground", map: tex, polygonOffset: order > 0, polygonOffsetFactor: -order, polygonOffsetUnits: -2 * order,
   });
-  // Placed in the geometry, with the mesh at the origin: the three coplanar layers then share one
-  // object ID in the outline pre-pass (look.js), so where they overlap they draw no false ink.
+  // Placed in the geometry, with the mesh at the origin. All three layers are terrain (one shared
+  // ID in the outline pre-pass, look.js), so where they overlap they draw no false ink.
   const geo = (disc ? new THREE.CircleGeometry(w / 2, 96) : new THREE.PlaneGeometry(w, h))
     .rotateX(-Math.PI / 2) // plane's +y -> scene -z = Statcast +y
     .translate((x0 + x1) / 2, 0, -(y0 + y1) / 2);
-  const mesh = new THREE.Mesh(geo, m);
+  const mesh = terrain(new THREE.Mesh(geo, m));
   mesh.receiveShadow = true;
   return mesh;
 }

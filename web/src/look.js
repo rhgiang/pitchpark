@@ -5,6 +5,7 @@ import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { SURFACE_KINDS, SURFACE_GLSL } from "./surface.js";
 
 /*
  * The look: one palette, toon materials, outlines, sky and time of day. Everything visible is
@@ -83,46 +84,12 @@ function patch(src, ...pairs) {
   return src;
 }
 
-/*
- * Painted surface texture, generated in the shader from world position (no image assets): every
- * toon surface gets low-frequency mottling (stains, sun-bleaching) and fine grain, so flat colour
- * reads as painted plaster, wood or foliage, as in the hand-painted references. World space, not
- * UVs: the swept stands and instanced props have none, and the pattern then never stretches.
- * Kinds (the SURFACE define): 0 none, 1 plaster/concrete (mottling, grime toward the ground,
- * hairline cracks), 2 foliage (big light/dark clumps), 3 wood (grain along x and z), 4 ground
- * (soft patches and grain over the painted canvas).
- */
-const SURFACE_KINDS = { none: 0, plaster: 1, foliage: 2, wood: 3, ground: 4 };
-const SURFACE_GLSL = /* glsl */`
-  float sHash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
-  float sNoise(vec3 p) {
-    vec3 i = floor(p), f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(mix(sHash(i), sHash(i + vec3(1, 0, 0)), f.x), mix(sHash(i + vec3(0, 1, 0)), sHash(i + vec3(1, 1, 0)), f.x), f.y),
-               mix(mix(sHash(i + vec3(0, 0, 1)), sHash(i + vec3(1, 0, 1)), f.x), mix(sHash(i + vec3(0, 1, 1)), sHash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
-  }
-  float surfaceTone(vec3 w) {
-    // Three noise lookups at most per pixel: this runs on every toon pixel, under heavy tree overdraw.
-    float big = sNoise(w * 0.09); // ~10 ft stains
-    float fine = sNoise(w * 1.7); // ~0.6 ft grain
-    #if SURFACE == 1
-      float crack = 1.0 - 0.2 * (1.0 - smoothstep(0.0, 0.007, abs(sNoise(w * vec3(0.21, 0.09, 0.21)) - 0.5)))
-        * step(0.7, big);
-      float grime = mix(0.86, 1.0, smoothstep(0.0, 7.0, w.y)); // splash and dirt at the foot of walls
-      return (0.9 + 0.18 * big + 0.07 * fine) * crack * grime;
-    #elif SURFACE == 2
-      return 0.82 + 0.3 * big + 0.08 * fine;
-    #elif SURFACE == 3
-      float grain = sNoise(vec3(w.x * 0.4, w.y * 7.0, w.z * 0.4));
-      return 0.84 + 0.2 * grain + 0.06 * fine;
-    #elif SURFACE == 4
-      return 0.92 + 0.12 * big + 0.06 * fine;
-    #else
-      return 1.0;
-    #endif
-  }`;
+// Painted surface texture (plaster, foliage, wood, ground, rock): see surface.js.
+// Direction toward the key light (world), for the ground's bump (surface.js groundSurface).
+const sunDir = { value: new THREE.Vector3(0, 1, 0) };
 
 function addParkShading(shader) {
+  shader.uniforms.uSunDir = sunDir;
   shader.uniforms.uFlood = flood;
   shader.uniforms.uFloodMin = floodMin;
   shader.uniforms.uPools = pools;
@@ -141,9 +108,18 @@ function addParkShading(shader) {
       uniform vec4 uFlood;
       uniform float uFloodMin, uPoolAmt;
       uniform vec3 uPools[${MAX_POOLS}];
+      uniform vec3 uSunDir;
       ${SURFACE_GLSL}`],
-    ["#include <color_fragment>", "#include <color_fragment>\ndiffuseColor.rgb *= surfaceTone(vParkW);"],
+    ["#include <color_fragment>", `#include <color_fragment>
+      #if SURFACE == 4
+        diffuseColor.rgb = groundSurface(diffuseColor.rgb, vParkW);
+      #else
+        diffuseColor.rgb *= surfaceTone(vParkW);
+      #endif`],
     ["#include <lights_fragment_end>", `#include <lights_fragment_end>
+      #if SURFACE == 4
+        reflectedLight.directDiffuse *= groundLight; // the ground's small relief (surface.js)
+      #endif
       reflectedLight.directDiffuse *= mix(1.0, uFloodMin,
         smoothstep(uFlood.z, uFlood.w, distance(vParkW.xz, uFlood.xy)));
       float pool = 0.0;
@@ -182,7 +158,7 @@ export function setParkLighting(opts = {}) {
  * the night falloff and floodlight pools.
  * @param color hex or THREE.Color (use PALETTE)
  * @param extra other MeshToonMaterial parameters (map, vertexColors, side, ...), plus
- *   `surface`: "plaster" (default), "foliage", "wood", "ground" or "none" (see SURFACE_GLSL).
+ *   `surface`: "plaster" (default), "foliage", "wood", "ground", "rock" or "none" (surface.js).
  */
 export function makeToonMaterial(color, { surface = "plaster", ...extra } = {}) {
   const m = new THREE.MeshToonMaterial({ color, gradientMap: toonRamp(), ...extra });
@@ -234,6 +210,30 @@ export function inkProof(obj) {
   return obj;
 }
 
+/*
+ * Terrain: the ground and what is shaped from it (painted ground, mound, plate, rubber, bullpen
+ * mounds). A real mound has no line round it; ground features should meet through colour,
+ * texture and contact shading, not ink (Ryan, 2026-11-13). Terrain writes TERRAIN_ID as its
+ * object ID in the outline pre-pass, and the edge pass draws no ink on terrain pixels except
+ * against the sky (the island's rim). Objects standing on terrain (pitcher, bases, walls) are
+ * still inked, on their own side of the line.
+ */
+export const TERRAIN_ID = -1;
+
+/** Mark every mesh under obj as terrain (a per-vertex objId = TERRAIN_ID, read by the pre-pass). */
+export function terrain(obj) {
+  obj.traverse((o) => {
+    if (!o.isMesh) return;
+    o.userData.terrain = true;
+    const n = o.geometry.attributes.position.count;
+    o.geometry.setAttribute("objId", new THREE.Float32BufferAttribute(new Float32Array(n).fill(TERRAIN_ID), 1));
+  });
+  return obj;
+}
+
+/** Whether mesh was marked by terrain(). */
+export const isTerrain = (mesh) => mesh.userData.terrain === true;
+
 /** Layer 1 only: drawn, but not outlined (sky, glows, the strike zone, the ball, nets). */
 export function noOutline(obj) {
   obj.traverse((o) => o.layers.set(1));
@@ -261,7 +261,8 @@ function makeNormalDepthMaterial(far) {
           inst = float(gl_InstanceID);
         #endif
         vId = fract(sin(dot(modelMatrix[3].xyz, vec3(12.9898, 78.233, 37.719))
-          + dot(modelMatrix[0].xyz, vec3(3.17, 5.71, 7.13)) + inst * 0.6180339 + objId * 0.7548776) * 43758.5453);`]);
+          + dot(modelMatrix[0].xyz, vec3(3.17, 5.71, 7.13)) + inst * 0.6180339 + objId * 0.7548776) * 43758.5453);
+        if (objId < -0.5) vId = -1.0; // terrain (TERRAIN_ID): one shared, negative ID`]);
     s.fragmentShader = patch(s.fragmentShader,
       ["#include <packing>", "#include <packing>\nvarying float vViewZ;\nflat varying float vId;\nuniform float uFar;"],
       ["gl_FragColor = vec4( packNormalToRGB( normal ), diffuseColor.a );",
@@ -382,7 +383,11 @@ const EDGE_SHADER = {
       // Lines stay to the far side of the island, thinning past uFade.x and fading by uFade.y.
       // Varied weight, as with a brush: silhouettes and object outlines full strength, creases
       // inside one object (normal edges) lighter.
-      float edge = max(max(depthEdge, objectEdge), 0.7 * normalEdge) * (1.0 - 0.6 * smoothstep(uFade.x, uFade.y, distFt));
+      float edge = max(max(depthEdge, objectEdge), 0.7 * normalEdge);
+      // Terrain (b = TERRAIN_ID): no ink where ground meets ground (the mound, the plate, the
+      // painted layers); only its silhouette against the sky, so the island keeps its rim.
+      if (c.b < 0.0) edge = step(1.0, max(max(l.a, r.a), max(d.a, u.a)));
+      edge *= 1.0 - 0.6 * smoothstep(uFade.x, uFade.y, distFt);
       // Ink takes a little of the colour under it (as hand-inked lines do), so lines on dark
       // surfaces stay dark and lines on cream read as warm brown-grey.
       vec3 ink = mix(uInk, col * 0.3, 0.2);
@@ -518,9 +523,10 @@ export const TIMES = {
   sunset: {
     top: 0x4a3b80, mid: 0xc8708f, horizon: 0xffbe7d, below: 0xf2a27e,
     cloud: 0xffc6a6, cloudShade: 0xa9628f, cover: 0.5, stars: 0,
-    // Setting over centre field: low sun behind the pitcher, so the bowl faces into it (a sun
-    // behind home would put the whole infield in the stands' shadow).
-    sun: [-80, 10], sunColor: 0xffb070, sunIntensity: 2.6, sunSize: 0.0016,
+    // Setting over left-centre field: low, behind the pitcher's glove side, so the bowl faces
+    // into it and the left-field stands and light towers throw long shadows across the
+    // outfield toward the infield (a sun behind home would put the whole infield in shadow).
+    sun: [-128, 9], sunColor: 0xffb070, sunIntensity: 2.6, sunSize: 0.0016,
     sky: 0xf0b4c0, ground: 0xb08070, ambient: 1.5,
     fog: 0xf0a47e, fogDensity: 0.0003, ink: 0x3a2433, floodMin: 1, lamps: true,
     shadowTint: [0.92, 0.9, 1.08], lightTint: [1.08, 1.0, 0.9], sat: 1.05, bloom: 0.6,
@@ -561,6 +567,7 @@ export function setTimeOfDay(name) {
   u.uSunDir.value.copy(dirFrom(name === "night" ? MOON : T.sun));
   u.uSunColor.value.set(name === "night" ? 0xeef2ff : T.sunColor);
   u.uSunSize.value = T.sunSize;
+  sunDir.value.copy(dirFrom(T.sun));
   look.sun.position.copy(dirFrom(T.sun).multiplyScalar(1500)).add(look.sun.target.position);
   look.sun.color.set(T.sunColor);
   look.sun.intensity = T.sunIntensity;

@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { toScene } from "./coords.js";
-import { PALETTE, makeToonMaterial, inkProof } from "./look.js";
+import { PALETTE, makeToonMaterial, inkProof, terrain } from "./look.js";
 
 // Geometry from the Official Baseball Rules (2.01-2.02, Appendix 2). Statcast's y = 0 is the
 // back point of home plate, which is also where the rules measure the rubber from.
@@ -38,7 +38,9 @@ export function buildField() {
   const shape = new THREE.Shape(outline.map(([x, y]) => new THREE.Vector2(x, y)));
   const plate = new THREE.Mesh(
     new THREE.ShapeGeometry(shape),
-    makeToonMaterial(PALETTE.chalk),
+    // Pulled in front of the painted ground in the depth test: the home-plate ground layer is
+    // itself offset toward the camera (park/ground.js), and would otherwise hide the plate.
+    makeToonMaterial(PALETTE.chalk, { surface: "ground", polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 }),
   );
   // Shape is drawn in Statcast (x, y); lay it flat: shape y -> Statcast y -> scene -z.
   plate.rotation.x = -Math.PI / 2;
@@ -48,18 +50,19 @@ export function buildField() {
   // Mound: a low flattened cone; real mounds slope 1 in per ft from 6 in in front of the rubber.
   const mound = new THREE.Mesh(
     new THREE.CylinderGeometry(MOUND_TOP_RADIUS_FT, MOUND_RADIUS_FT, MOUND_HEIGHT_FT, 48),
-    makeToonMaterial(PALETTE.dirtLight),
+    makeToonMaterial(PALETTE.dirtLight, { surface: "ground" }),
   );
   mound.position.copy(toScene([0, MOUND_CENTRE_Y_FT, MOUND_HEIGHT_FT / 2]));
   g.add(mound);
 
   const rubber = new THREE.Mesh(
     new THREE.BoxGeometry(RUBBER_W_FT, 0.05, RUBBER_D_FT),
-    makeToonMaterial(PALETTE.chalk),
+    makeToonMaterial(PALETTE.chalk, { surface: "ground" }),
   );
   rubber.position.copy(toScene([0, RUBBER_FRONT_Y_FT + RUBBER_D_FT / 2, MOUND_HEIGHT_FT + 0.025]));
   g.add(rubber);
-  for (const m of [plate, mound, rubber]) m.receiveShadow = true;
+  // Terrain: textured like the ground round them and never inked against it (look.js terrain()).
+  for (const m of [plate, mound, rubber]) terrain(m).receiveShadow = true;
   return g;
 }
 

@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { normals } from "./layout.js";
+import { isTerrain, TERRAIN_ID } from "../look.js";
 
 // Small geometry helpers shared by the park modules. Statcast (x, y) -> scene (x, -y).
 
@@ -136,7 +137,7 @@ export function mergeStatic(root) {
     if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh || animated.has(o) || o.layers.mask !== 1) return;
     if (Array.isArray(m) || m.map || m.transparent || !m.isMeshToonMaterial) return;
     const key = m.userData.shared ? m.uuid : [m.color.getHex(), m.emissive.getHex(), m.emissiveIntensity,
-      m.defines?.SURFACE, m.vertexColors, m.side, o.castShadow, o.receiveShadow].join("|");
+      m.defines?.SURFACE, m.vertexColors, m.side, o.castShadow, o.receiveShadow, isTerrain(o)].join("|");
     if (!groups.has(key)) groups.set(key, { material: m, cast: o.castShadow, receive: o.receiveShadow, list: [] });
     groups.get(key).list.push(o);
   });
@@ -149,13 +150,15 @@ export function mergeStatic(root) {
         if (!["position", "normal", ...(material.vertexColors ? ["color"] : [])].includes(name)) g.deleteAttribute(name);
       }
       g.applyMatrix4(o.matrixWorld);
-      g.setAttribute("objId", new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count).fill(id++), 1));
+      // Terrain keeps its shared ID (no ink between pieces of ground: look.js terrain()).
+      g.setAttribute("objId", new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count).fill(isTerrain(o) ? TERRAIN_ID : id++), 1));
       return g;
     });
     const merged = mergeGeometries(geos);
     if (!merged) continue; // attribute mismatch: leave those meshes as they are
     for (const o of list) o.removeFromParent();
     const mesh = new THREE.Mesh(merged, material);
+    if (isTerrain(list[0])) mesh.userData.terrain = true;
     mesh.castShadow = cast;
     mesh.receiveShadow = receive;
     root.add(mesh);
