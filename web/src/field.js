@@ -63,6 +63,8 @@ export function buildField() {
   g.add(rubber);
   // Terrain: textured like the ground round them and never inked against it (look.js terrain()).
   for (const m of [plate, mound, rubber]) terrain(m).receiveShadow = true;
+  // The plate and rubber stay white: no scuffing toward clay (surface.js CHALK_CLEAN).
+  for (const m of [plate, rubber]) m.material.defines.CHALK_CLEAN = 1;
   return g;
 }
 

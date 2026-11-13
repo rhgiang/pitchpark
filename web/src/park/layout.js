@@ -123,3 +123,40 @@ export const ISLAND = { centre: [0, 165], radiusFt: 560 };
 // Outfield: bleachers start this far behind the fence; the gap holds the bullpens.
 export const BLEACHER_GAP_FT = 32;
 export const BATTERS_EYE_HALF_DEG = 9; // centre-field batter's eye: no seats in |angle| < 9 deg
+
+/*
+ * Chalk lines, as centre-line segments [a, b, kind] in Statcast ft. The ground shader draws them
+ * analytically (surface.js), not into the painted canvas: a 3 in line is only 1.5 texels of the
+ * field canvas and came out blurred and uneven. Analytic lines stay sharp up close and fade
+ * smoothly far away. Kinds set how each wears (see surface.js).
+ */
+export const CHALK = { foul: 0, box: 1, catcher: 2, other: 3 };
+export const CHALK_WIDTH_FT = 3 / 12; // 3 in lines
+export function chalkSegments() {
+  const segs = [];
+  const add = (a, b, kind) => segs.push([a, b, kind]);
+  const rect = (x0, y0, x1, y1, kind) => {
+    add([x0, y0], [x1, y0], kind); add([x1, y0], [x1, y1], kind);
+    add([x1, y1], [x0, y1], kind); add([x0, y1], [x0, y0], kind);
+  };
+  // Foul lines, from where they leave the batter's boxes to the poles.
+  for (const s of [-1, 1]) add(polar(s * 45, 5.25), polar(s * 45, fenceDistFt(45)), CHALK.foul);
+  // Batter's boxes: 4 x 6 ft, inner line 6 in off the 17 in plate, centred on its middle.
+  const xi = 8.5 / 12 + 0.5, ymid = 17 / 24;
+  for (const s of [-1, 1]) rect(s * xi, ymid - 3, s * (xi + 4), ymid + 3, CHALK.box);
+  // Catcher's box: 43 in wide, 8 ft back from the batter's boxes.
+  const cw = 21.5 / 12, y0 = ymid - 3;
+  add([-cw, y0], [-cw, y0 - 8], CHALK.catcher); add([cw, y0], [cw, y0 - 8], CHALK.catcher);
+  add([-cw, y0 - 8], [cw, y0 - 8], CHALK.catcher);
+  // Running lane: the last 45 ft to first base, 3 ft outside the line.
+  const lane0 = polar(45, 45), lane1 = polar(45, 90), off = [3 * Math.SQRT1_2, -3 * Math.SQRT1_2];
+  const out = (p) => [p[0] + off[0], p[1] + off[1]];
+  add(out(lane0), out(lane1), CHALK.other); add(lane0, out(lane0), CHALK.other);
+  // Coach's boxes: 20 x 10 ft, 15 ft outside the base lines (art: approximate placement).
+  for (const s of [-1, 1]) {
+    const at = (a, b) => [Math.SQRT1_2 * s * (a + b), Math.SQRT1_2 * (a - b)]; // a along, b out
+    const c = [at(60, 15), at(80, 15), at(80, 25), at(60, 25)];
+    c.forEach((p, i) => add(p, c[(i + 1) % 4], CHALK.other));
+  }
+  return segs;
+}

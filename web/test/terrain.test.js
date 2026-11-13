@@ -45,3 +45,11 @@ test("mergeStatic keeps terrain as terrain and objects as distinct positive IDs"
   assert.deepEqual(ids(t), [TERRAIN_ID]);
   assert.ok(ids(o).length === 2 && ids(o).every((v) => v > 0));
 });
+
+test("field: plate and rubber chalk is never scuffed toward clay (CHALK_CLEAN), the mound is clay", () => {
+  const meshes = [];
+  buildField().traverse((o) => o.isMesh && meshes.push(o));
+  const clean = meshes.filter((m) => m.material.defines.CHALK_CLEAN);
+  assert.equal(clean.length, 2);
+  assert.ok(meshes.every((m) => m.material.defines.SURFACE === 4)); // all on the ground shader
+});

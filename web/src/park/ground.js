@@ -25,20 +25,6 @@ function poly(ctx, pts, close = true) {
   if (close) ctx.closePath();
 }
 
-function line(ctx, a, b, w, color = PALETTE.chalk) {
-  ctx.strokeStyle = hex(color);
-  ctx.lineWidth = w;
-  ctx.lineCap = "butt";
-  poly(ctx, [a, b], false);
-  ctx.stroke();
-}
-
-function rect(ctx, x0, y0, x1, y1, w) {
-  ctx.strokeStyle = hex(PALETTE.chalk);
-  ctx.lineWidth = w;
-  ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
-}
-
 function disc(ctx, [x, y], r, color) {
   ctx.fillStyle = typeof color === "string" ? color : hex(color);
   ctx.beginPath();
@@ -93,15 +79,24 @@ function circle([x, y], r) {
 }
 
 /**
- * The lip where grass meets clay: a soft darker band (the grass edge is thicker and casts a
- * little shade; the clay beside it is damper and lower) and a thin dark line right at the cut.
- * This replaces an ink outline: the edge reads through colour, as on a real field.
+ * The lip where grass meets clay, in place of an ink line. On the clay side, a band of darker,
+ * damper clay ~1.5 ft wide: infield mix washes and is swept against the grass edge and builds up
+ * there (groundskeepers call it the lip). On the grass side, a narrow darker shade: the edge
+ * turf is thicker and shades itself. `dirtInside`: whether the clay is inside the outline.
  */
-function lip(ctx, pts) {
+function lip(ctx, pts, dirtInside) {
   ctx.lineJoin = "round";
-  for (const [w, a] of [[1.6, 0.08], [0.8, 0.08], [0.35, 0.07]]) { // soft: widest faintest
-    ctx.strokeStyle = `rgba(35,55,20,${a})`; ctx.lineWidth = w;
-    poly(ctx, pts); ctx.stroke();
+  for (const [clay, bands] of [[true, [[3.2, 0.07], [1.8, 0.09], [0.7, 0.1]]], [false, [[1.4, 0.07], [0.6, 0.07]]]]) {
+    ctx.save();
+    poly(ctx, pts);
+    if (clay === dirtInside) ctx.clip();
+    else { ctx.rect(-3000, -3000, 6000, 6000); ctx.clip("evenodd"); } // everything outside pts
+    for (const [w, a] of bands) { // soft: widest faintest
+      ctx.strokeStyle = clay ? `rgba(110,48,22,${a})` : `rgba(35,55,20,${a})`;
+      ctx.lineWidth = w;
+      poly(ctx, pts); ctx.stroke();
+    }
+    ctx.restore();
   }
 }
 
@@ -214,11 +209,14 @@ function paint(ctx, plan) {
   ctx.fillStyle = hex(PALETTE.grassFoul);
   poly(ctx, [[0, 0], [500, 500], [500, -500], [-500, -500], [-500, 500]]); ctx.fill();
 
-  // Warning track: 15 ft of dirt inside every wall.
-  ctx.strokeStyle = hex(PALETTE.dirtDark);
-  ctx.lineWidth = 30;
+  // Warning track: 15 ft of dirt inside every wall (a 30 ft stroke on the wall line, clipped).
+  // Its grass edge gets the same lip as the infield: a shade on the grass side, painted under a
+  // wider stroke, and darker clay along the track's inner edge, painted over and trimmed back.
   ctx.lineJoin = "round";
-  poly(ctx, boundary); ctx.stroke();
+  for (const [style, w] of [["rgba(35,55,20,0.12)", 33], [hex(PALETTE.dirtDark), 30], ["rgba(110,48,22,0.14)", 30], [hex(PALETTE.dirtDark), 27]]) {
+    ctx.strokeStyle = style; ctx.lineWidth = w;
+    poly(ctx, boundary); ctx.stroke();
+  }
   // Dirt behind home plate, up to the backstop.
   ctx.fillStyle = hex(PALETTE.dirt);
   ctx.beginPath(); ctx.arc(0, 0, 60, Math.PI * 1.25, Math.PI * 1.75); ctx.lineTo(0, 0); ctx.closePath(); ctx.fill();
@@ -249,16 +247,16 @@ function paint(ctx, plan) {
   }
   // Lips where grass meets clay, in place of ink (see lip). The home circle covers where the
   // diamond's and base paths' edges run into it, so it is painted after these.
-  lip(ctx, diamond);
-  ctx.save(); poly(ctx, skinClip); ctx.clip(); lip(ctx, skinArc); ctx.restore();
-  ctx.save(); poly(ctx, skinArc); ctx.clip(); lip(ctx, skinClip); ctx.restore();
+  lip(ctx, diamond, false);
+  ctx.save(); poly(ctx, skinClip); ctx.clip(); lip(ctx, skinArc, true); ctx.restore();
+  ctx.save(); poly(ctx, skinArc); ctx.clip(); lip(ctx, skinClip, true); ctx.restore();
   // Dirt circles: home plate (26 ft across, OBR Appendix 2) and the mound (18 ft; the painted
   // clay runs a few inches past the modelled mound's foot, so no grass shows under its rim).
   const homeCircle = ragged(circle([0, 0.7], 13), 0.15, R);
   const moundCircle = ragged(circle([0, MOUND_CENTRE_Y_FT], 9.25), 0.12, R);
   ctx.fillStyle = hex(PALETTE.dirt); poly(ctx, homeCircle); ctx.fill();
   ctx.fillStyle = hex(PALETTE.dirtLight); poly(ctx, moundCircle); ctx.fill();
-  for (const pts of [homeCircle, moundCircle]) lip(ctx, pts);
+  for (const pts of [homeCircle, moundCircle]) lip(ctx, pts, true);
 
   // Damp, darker clay hugging home plate (watered and tamped round its edges) and the rubber.
   contactShade(ctx, [[-8.5 * IN, 17 * IN], [8.5 * IN, 17 * IN], [8.5 * IN, 8.5 * IN], [0, 0], [-8.5 * IN, 8.5 * IN]], 0.9, 0.06, true);
@@ -270,27 +268,7 @@ function paint(ctx, plan) {
     disc(ctx, [s * 37, -8], 2.3, PALETTE.teal);
   }
 
-  // ---- chalk (3-4 in lines) ----
-  const W = 4 * IN;
-  // Foul lines from where they leave the batter's boxes to the poles.
-  for (const s of [-1, 1]) line(ctx, polar(s * 45, 5.25), polar(s * 45, fenceDistFt(45)), W);
-  // Batter's boxes: 4 x 6 ft, inner line 6 in from the plate, centred on the plate's middle.
-  for (const s of [-1, 1]) rect(ctx, s > 0 ? 1.208 : -5.208, -2.29, s > 0 ? 5.208 : -1.208, 3.71, 3 * IN);
-  // Catcher's box: 43 in wide, 8 ft back from the batter's boxes.
-  const cw = 21.5 * IN;
-  line(ctx, [-cw, -2.29], [-cw, -10.29], 3 * IN); line(ctx, [cw, -2.29], [cw, -10.29], 3 * IN);
-  line(ctx, [-cw, -10.29], [cw, -10.29], 3 * IN);
-  // Running lane: the last 45 ft to first base, 3 ft outside the line.
-  const lane0 = polar(45, 45), lane1 = polar(45, 90);
-  const off = [3 * Math.SQRT1_2, -3 * Math.SQRT1_2];
-  line(ctx, [lane0[0] + off[0], lane0[1] + off[1]], [lane1[0] + off[0], lane1[1] + off[1]], W);
-  line(ctx, lane0, [lane0[0] + off[0], lane0[1] + off[1]], W);
-  // Coach's boxes: 20 x 10 ft, 15 ft outside the base lines (art: approximate placement).
-  for (const s of [-1, 1]) {
-    const at = (a, b) => [Math.SQRT1_2 * s * (a + b), Math.SQRT1_2 * (a - b)]; // a along, b out
-    ctx.strokeStyle = hex(PALETTE.chalk); ctx.lineWidth = W;
-    poly(ctx, [at(60, 15), at(80, 15), at(80, 25), at(60, 25)]); ctx.stroke();
-  }
+  // Chalk lines are not painted here: the ground shader draws them (park/layout.js chalkSegments).
 
   // Contact shading at the foot of every wall, and a soft ring round the mound and bases.
   contactShade(ctx, boundary, 14, 0.07, true);
