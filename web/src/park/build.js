@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { normals } from "./layout.js";
 
 // Small geometry helpers shared by the park modules. Statcast (x, y) -> scene (x, -y).
@@ -113,4 +114,50 @@ export function textTexture(text, { w = 256, h = 128, bg = null, fg = "#fff", fo
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 8;
   return t;
+}
+
+/*
+ * Merge the park's static meshes, one merged mesh per material look, to cut draw calls: the art
+ * pass adds hundreds of small boxes (gate, kiosks, posts, shelters), and each draw costs CPU time in
+ * both the outline pre-pass and the main pass whatever its size. Skipped: instanced, skinned and
+ * textured meshes, other layers (not outlined / ink-proof), transparent ones, shared materials that
+ * time of day recolours (look.js marks them userData.shared; they merge by identity), and anything
+ * under an object with an animation tick. Each source mesh keeps its own object ID as a vertex
+ * attribute (objId), which the outline pre-pass (look.js) uses, so merged objects still get their
+ * outlines where they meet.
+ */
+export function mergeStatic(root) {
+  root.updateMatrixWorld(true);
+  const groups = new Map();
+  const animated = new Set();
+  root.traverse((o) => { if (o.userData.tick) o.traverse((c) => animated.add(c)); });
+  root.traverse((o) => {
+    const m = o.material;
+    if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh || animated.has(o) || o.layers.mask !== 1) return;
+    if (Array.isArray(m) || m.map || m.transparent || !m.isMeshToonMaterial) return;
+    const key = m.userData.shared ? m.uuid : [m.color.getHex(), m.emissive.getHex(), m.emissiveIntensity,
+      m.defines?.SURFACE, m.vertexColors, m.side, o.castShadow, o.receiveShadow].join("|");
+    if (!groups.has(key)) groups.set(key, { material: m, cast: o.castShadow, receive: o.receiveShadow, list: [] });
+    groups.get(key).list.push(o);
+  });
+  let id = 1;
+  for (const { material, cast, receive, list } of groups.values()) {
+    if (list.length < 2) continue;
+    const geos = list.map((o) => {
+      let g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+      for (const name of Object.keys(g.attributes)) {
+        if (!["position", "normal", ...(material.vertexColors ? ["color"] : [])].includes(name)) g.deleteAttribute(name);
+      }
+      g.applyMatrix4(o.matrixWorld);
+      g.setAttribute("objId", new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count).fill(id++), 1));
+      return g;
+    });
+    const merged = mergeGeometries(geos);
+    if (!merged) continue; // attribute mismatch: leave those meshes as they are
+    for (const o of list) o.removeFromParent();
+    const mesh = new THREE.Mesh(merged, material);
+    mesh.castShadow = cast;
+    mesh.receiveShadow = receive;
+    root.add(mesh);
+  }
 }

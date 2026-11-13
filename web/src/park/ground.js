@@ -100,6 +100,48 @@ function paint(ctx, plan) {
   ctx.fillStyle = hex(PALETTE.water);
   ctx.beginPath(); ctx.ellipse(...pond, rx - 7, ry - 7, 0, 0, 2 * Math.PI); ctx.fill();
 
+  // Worn paving: darker and lighter flagstone patches and a few hairline cracks over the plaza.
+  for (const q of plan.mainOuter) {
+    if (R() < 0.5) continue;
+    ctx.globalAlpha = 0.12;
+    disc(ctx, [q[0] + (R() - 0.5) * 50, q[1] + (R() - 0.5) * 50], 3 + R() * 7, R() < 0.5 ? PALETTE.concreteShade : PALETTE.cream);
+    ctx.globalAlpha = 0.25;
+    ctx.strokeStyle = hex(PALETTE.concreteShade); ctx.lineWidth = 0.35;
+    const c0 = [q[0] + (R() - 0.5) * 50, q[1] + (R() - 0.5) * 50];
+    poly(ctx, [c0, [c0[0] + (R() - 0.5) * 8, c0[1] + (R() - 0.5) * 8], [c0[0] + (R() - 0.5) * 14, c0[1] + (R() - 0.5) * 14]], false);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  // Gate forecourt, the path to the gazebo, the car park (asphalt with bay lines) and the stream.
+  if (plan.gate) {
+    ctx.fillStyle = hex(PALETTE.paving);
+    ctx.fillRect(plan.gate.p[0] - 60, plan.gate.p[1] - 60, 120, 70);
+    ctx.lineWidth = 16; ctx.strokeStyle = hex(PALETTE.paving);
+    poly(ctx, [plan.pond.p, plan.gazebo], false); ctx.stroke();
+    disc(ctx, plan.gazebo, 24, PALETTE.paving);
+    const { c, w, h } = plan.lot;
+    ctx.fillStyle = "#8d8f8a";
+    ctx.fillRect(c[0] - w / 2, c[1] - h / 2, w, h);
+    ctx.strokeStyle = hex(PALETTE.chalk); ctx.lineWidth = 0.4;
+    for (let r = 0; r < 4; r++) for (let k = 0; k <= 7; k++) {
+      const x = c[0] - w / 2 + 4 + k * 16, y = c[1] - h / 2 + 2 + r * 19;
+      poly(ctx, [[x, y], [x, y + 15]], false); ctx.stroke();
+    }
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.strokeStyle = hex(PALETTE.waterLight); ctx.lineWidth = 15;
+    poly(ctx, plan.stream, false); ctx.stroke();
+    ctx.strokeStyle = hex(PALETTE.water); ctx.lineWidth = 9;
+    poly(ctx, plan.stream, false); ctx.stroke();
+    // Flower beds: clusters of coral, mustard, cream and pink dots round the fountains and gazebo.
+    const flowers = [PALETTE.coral, PALETTE.mustard, PALETTE.cream, 0xd98aa0];
+    for (const centre of [...plan.fountains, plan.gazebo, plan.gate.p]) {
+      for (let i = 0; i < 160; i++) {
+        const a = R() * 2 * Math.PI, r = 17 + R() * 8;
+        disc(ctx, [centre[0] + Math.cos(a) * r, centre[1] + Math.sin(a) * r * (centre === plan.gate.p ? 0.4 : 1) - (centre === plan.gate.p ? 52 : 0)], 0.6 + R() * 0.6, flowers[Math.floor(R() * 4)]);
+      }
+    }
+  }
+
   // Baked contact shadows: round the stands and under every tree and prop.
   contactShade(ctx, plan.mainOuter, 24, 0.06);
   for (const b of plan.bleacherOuter) contactShade(ctx, b, 20, 0.06);
@@ -224,12 +266,14 @@ function layer(plan, [x0, x1, y0, y1], px, order, disc = false) {
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 8;
   const m = makeToonMaterial(0xffffff, {
-    map: tex, polygonOffset: order > 0, polygonOffsetFactor: -order, polygonOffsetUnits: -2 * order,
+    surface: "ground", map: tex, polygonOffset: order > 0, polygonOffsetFactor: -order, polygonOffsetUnits: -2 * order,
   });
-  const geo = disc ? new THREE.CircleGeometry(w / 2, 96) : new THREE.PlaneGeometry(w, h);
+  // Placed in the geometry, with the mesh at the origin: the three coplanar layers then share one
+  // object ID in the outline pre-pass (look.js), so where they overlap they draw no false ink.
+  const geo = (disc ? new THREE.CircleGeometry(w / 2, 96) : new THREE.PlaneGeometry(w, h))
+    .rotateX(-Math.PI / 2) // plane's +y -> scene -z = Statcast +y
+    .translate((x0 + x1) / 2, 0, -(y0 + y1) / 2);
   const mesh = new THREE.Mesh(geo, m);
-  mesh.rotation.x = -Math.PI / 2; // plane's +y -> scene -z = Statcast +y
-  mesh.position.set((x0 + x1) / 2, 0, -(y0 + y1) / 2);
   mesh.receiveShadow = true;
   return mesh;
 }

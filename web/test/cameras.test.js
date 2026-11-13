@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { PerspectiveCamera } from "three";
 import {
-  batterEye, BATTER_EYE_VFOV_DEG, catcherView, sideView, rideAlong, SIDE_VFOV_DEG, RIDE_VFOV_DEG,
+  batterEye, BATTER_EYE_VFOV_DEG, umpireView, sideView, rideAlong, SIDE_VFOV_DEG, RIDE_VFOV_DEG, introSweep, INTRO_S,
 } from "../src/cameras.js";
 import { stateAt, visibleEnd } from "../src/trajectory.js";
 import { BALL_RADIUS_FT } from "../src/ball.js";
@@ -105,18 +105,20 @@ test("batter's eye at 1600x900 frames every pitch's zone, visible path ends and 
   console.log(`batter framing: ${n} pitches checked, tightest margin ${tightest.toFixed(4)} NDC inside the 95% border`);
 });
 
-test("catcher's view is centred behind the plate", () => {
-  const v = catcherView();
-  assert.equal(v.position[0], 0);
+test("umpire's view is centred behind the plate at the umpire's spot, aim -15 deg, vfov 44 deg", () => {
+  const v = umpireView();
+  assert.deepEqual(v.position, [0, -5.0, 4.75]);
   assert.equal(v.target[0], 0);
-  assert.ok(v.position[1] < 0); // behind the back point of the plate
+  const d = v.target.map((x, i) => x - v.position[i]);
+  assert.ok(Math.abs(Math.atan2(d[2], d[1]) * 180 / Math.PI + 15) < 1e-9);
+  assert.equal(v.vfovDeg, 44);
 });
 
-test("catcher's view at 1600x900 frames every pitch's zone, visible path ends (incl. no spin) and release", () => {
-  const v = catcherView();
+test("umpire's view at 1600x900 frames every pitch's zone, visible path ends (incl. no spin) and release", () => {
+  const v = umpireView();
   const cam = cameraAt(v, v.vfovDeg); // the same for both batter sides
   const [n, tightest] = checkFraming({ R: cam, L: cam }, true);
-  console.log(`catcher framing: ${n} pitches checked, vfov ${v.vfovDeg} deg, tightest margin ${tightest.toFixed(4)} NDC inside the 95% border`);
+  console.log(`umpire framing: ${n} pitches checked, vfov ${v.vfovDeg} deg, tightest margin ${tightest.toFixed(4)} NDC inside the 95% border`);
 });
 
 // ---- Task 6: side view and ride-along
@@ -167,4 +169,39 @@ test("ride-along at mid-flight is behind (larger y) and above the ball, looking 
   assert.ok(v.position[1] > ball[1]);
   assert.ok(v.position[2] > ball[2]);
   assert.ok(v.target[1] < ball[1]); // looks toward the plate
+});
+
+// ---- Task 9: intro sweep
+
+test("intro sweep ends exactly at the umpire's view (and holds there after the end)", () => {
+  const u = umpireView();
+  for (const t of [INTRO_S, INTRO_S + 5]) {
+    const v = introSweep(t);
+    for (let i = 0; i < 3; i++) {
+      assert.ok(Math.abs(v.position[i] - u.position[i]) < 1e-9);
+      assert.ok(Math.abs(v.target[i] - u.target[i]) < 1e-9);
+    }
+    assert.equal(v.vfovDeg, u.vfovDeg);
+  }
+});
+
+test("intro sweep starts out over the whole island and only ever closes in on the plate", () => {
+  const start = introSweep(0).position;
+  assert.ok(Math.hypot(start[0], start[1]) > 1000 && start[2] > 400, `${start}`);
+  let prev = Infinity;
+  for (let t = 0; t <= INTRO_S; t += INTRO_S / 400) {
+    const d = Math.hypot(...introSweep(t).position);
+    assert.ok(d <= prev + 1e-9, `moved away from the plate at t = ${t}`);
+    prev = d;
+  }
+});
+
+test("intro sweep clears the stands: over them (55-175 ft from home) it stays above roof or net", () => {
+  for (let t = 0; t <= INTRO_S; t += INTRO_S / 2000) {
+    const [x, y, z] = introSweep(t).position;
+    const r = Math.hypot(x, y);
+    // Roof and upper deck top out at 93 ft (100 to 160 ft out); lower bowl and backstop net, 32 ft.
+    if (r > 100 && r < 175) assert.ok(z > 100, `t = ${t}: ${z.toFixed(1)} ft up at ${r.toFixed(0)} ft`);
+    else if (r > 55 && r <= 100) assert.ok(z > 40, `t = ${t}: ${z.toFixed(1)} ft up at ${r.toFixed(0)} ft`);
+  }
 });

@@ -7,7 +7,7 @@ import { inDirt } from "./ball.js";
 
 const MODE_LABEL = { real: "Statcast fit", sim: "M1 + M3", ghost: "Statcast fit + M1 + M3 ghost" };
 const VIEW_LABEL = {
-  catcher: "Catcher's view", batter: "Batter's eye", side: "Side view (first-base side)",
+  umpire: "Umpire's view", batter: "Batter's eye", side: "Side view (first-base side)",
   ride: "Riding with the ball", free: "Free camera: drag to orbit, wheel to zoom",
 };
 

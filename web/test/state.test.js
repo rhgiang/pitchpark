@@ -112,9 +112,9 @@ test("spin is shown slowed at 1x and at the true rate in slow motion", () => {
   assert.equal(spinFactor(0.1), 1);
 });
 
-test("default view is the catcher's", () => {
-  assert.equal(initialState().view, "catcher");
-  for (const v of ["catcher", "batter", "side", "ride", "free"]) {
+test("default view is the umpire's", () => {
+  assert.equal(initialState().view, "umpire");
+  for (const v of ["umpire", "batter", "side", "ride", "free"]) {
     assert.equal(reduce(loaded(), { type: "setView", view: v }).view, v);
   }
 });

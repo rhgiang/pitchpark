@@ -4,6 +4,7 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { SMAAPass } from "three/examples/jsm/postprocessing/SMAAPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 
 /*
  * The look: one palette, toon materials, outlines, sky and time of day. Everything visible is
@@ -14,10 +15,13 @@ import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
  *   1. Normal + depth pass: the outlined objects (layer 0) drawn with one override material that
  *      writes the view-space normal (rgb) and view depth (a) to a float target.
  *   2. RenderPass: the scene as usual (toon materials, fog, sky dome, shadows).
- *   3. Edge pass: ink where the depth or the normal changes abruptly (see EDGE_SHADER).
- *   4. SMAA (Jimenez et al. 2012): post-process anti-aliasing; MSAA would be lost on the
+ *   3. Edge pass: ink where the depth, the normal or the object changes abruptly, plus a cheap
+ *      ambient occlusion and the colour grade, all from the same buffers (see EDGE_SHADER).
+ *   4. Depth of field (intro sweep only; it would blur the ball in the pitch views).
+ *   5. Bloom (UnrealBloomPass): only what is brighter than white glows (lamps, lit windows, sun).
+ *   6. SMAA (Jimenez et al. 2012): post-process anti-aliasing; MSAA would be lost on the
  *      composer's render targets anyway, and SMAA also smooths the drawn ink lines.
- *   5. OutputPass: linear -> sRGB (no tone mapping: the palette is meant to come out as written).
+ *   7. OutputPass: linear -> sRGB (no tone mapping: the palette is meant to come out as written).
  */
 
 /** The palette (sRGB hex). Park, pitcher and sky all take their colours from here. */
@@ -61,6 +65,11 @@ function toonRamp() {
 const parkLight = { centreFt: [0, 170], floodRadiiFt: [330, 560], shadowHalfFt: 450 };
 const flood = { value: new THREE.Vector4(0, -170, 330, 560) }; // scene x, z, r0, r1
 const floodMin = { value: 1 };
+// Floodlight pools (night only): each tower lights an elliptical-ish patch, so the field and
+// stands at night read as pools of light with dimmer gaps, not one flat wash. Scene x, z, radius.
+const MAX_POOLS = 8;
+const pools = { value: Array.from({ length: MAX_POOLS }, () => new THREE.Vector3(0, 0, 0)) };
+const poolAmt = { value: 0 }; // 0 by day, 1 at night
 
 /**
  * Apply [find, replace] pairs to shader source, throwing if any `find` is missing: a three.js
@@ -74,34 +83,92 @@ function patch(src, ...pairs) {
   return src;
 }
 
-function addFloodFalloff(shader) {
+/*
+ * Painted surface texture, generated in the shader from world position (no image assets): every
+ * toon surface gets low-frequency mottling (stains, sun-bleaching) and fine grain, so flat colour
+ * reads as painted plaster, wood or foliage, as in the hand-painted references. World space, not
+ * UVs: the swept stands and instanced props have none, and the pattern then never stretches.
+ * Kinds (the SURFACE define): 0 none, 1 plaster/concrete (mottling, grime toward the ground,
+ * hairline cracks), 2 foliage (big light/dark clumps), 3 wood (grain along x and z), 4 ground
+ * (soft patches and grain over the painted canvas).
+ */
+const SURFACE_KINDS = { none: 0, plaster: 1, foliage: 2, wood: 3, ground: 4 };
+const SURFACE_GLSL = /* glsl */`
+  float sHash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+  float sNoise(vec3 p) {
+    vec3 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(sHash(i), sHash(i + vec3(1, 0, 0)), f.x), mix(sHash(i + vec3(0, 1, 0)), sHash(i + vec3(1, 1, 0)), f.x), f.y),
+               mix(mix(sHash(i + vec3(0, 0, 1)), sHash(i + vec3(1, 0, 1)), f.x), mix(sHash(i + vec3(0, 1, 1)), sHash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+  }
+  float surfaceTone(vec3 w) {
+    // Three noise lookups at most per pixel: this runs on every toon pixel, under heavy tree overdraw.
+    float big = sNoise(w * 0.09); // ~10 ft stains
+    float fine = sNoise(w * 1.7); // ~0.6 ft grain
+    #if SURFACE == 1
+      float crack = 1.0 - 0.2 * (1.0 - smoothstep(0.0, 0.007, abs(sNoise(w * vec3(0.21, 0.09, 0.21)) - 0.5)))
+        * step(0.7, big);
+      float grime = mix(0.86, 1.0, smoothstep(0.0, 7.0, w.y)); // splash and dirt at the foot of walls
+      return (0.9 + 0.18 * big + 0.07 * fine) * crack * grime;
+    #elif SURFACE == 2
+      return 0.82 + 0.3 * big + 0.08 * fine;
+    #elif SURFACE == 3
+      float grain = sNoise(vec3(w.x * 0.4, w.y * 7.0, w.z * 0.4));
+      return 0.84 + 0.2 * grain + 0.06 * fine;
+    #elif SURFACE == 4
+      return 0.92 + 0.12 * big + 0.06 * fine;
+    #else
+      return 1.0;
+    #endif
+  }`;
+
+function addParkShading(shader) {
   shader.uniforms.uFlood = flood;
   shader.uniforms.uFloodMin = floodMin;
+  shader.uniforms.uPools = pools;
+  shader.uniforms.uPoolAmt = poolAmt;
   shader.vertexShader = patch(shader.vertexShader,
-    ["#include <common>", "#include <common>\nvarying vec2 vParkXZ;"],
+    ["#include <common>", "#include <common>\nvarying vec3 vParkW;"],
     ["#include <project_vertex>", `#include <project_vertex>
       vec4 parkW = vec4(transformed, 1.0);
       #ifdef USE_INSTANCING
         parkW = instanceMatrix * parkW;
       #endif
-      vParkXZ = (modelMatrix * parkW).xz;`]);
+      vParkW = (modelMatrix * parkW).xyz;`]);
   shader.fragmentShader = patch(shader.fragmentShader,
-    ["#include <common>", "#include <common>\nvarying vec2 vParkXZ;\nuniform vec4 uFlood;\nuniform float uFloodMin;"],
+    ["#include <common>", `#include <common>
+      varying vec3 vParkW;
+      uniform vec4 uFlood;
+      uniform float uFloodMin, uPoolAmt;
+      uniform vec3 uPools[${MAX_POOLS}];
+      ${SURFACE_GLSL}`],
+    ["#include <color_fragment>", "#include <color_fragment>\ndiffuseColor.rgb *= surfaceTone(vParkW);"],
     ["#include <lights_fragment_end>", `#include <lights_fragment_end>
       reflectedLight.directDiffuse *= mix(1.0, uFloodMin,
-        smoothstep(uFlood.z, uFlood.w, distance(vParkXZ, uFlood.xy)));`]);
+        smoothstep(uFlood.z, uFlood.w, distance(vParkW.xz, uFlood.xy)));
+      float pool = 0.0;
+      for (int i = 0; i < ${MAX_POOLS}; i++)
+        pool = max(pool, 1.0 - smoothstep(0.35 * uPools[i].z, uPools[i].z, distance(vParkW.xz, uPools[i].xy)));
+      reflectedLight.directDiffuse *= mix(1.0, 0.45 + 0.85 * pool, uPoolAmt);`]);
 }
 
 /**
  * Lighting numbers that depend on the park, in Statcast feet; any omitted keep their value.
  * centreFt: middle of the bowl (night falloff centre, sun aim); floodRadiiFt: [r0, r1], full
- * floodlight inside r0, faded out by r1; shadowHalfFt: half-width of the sun's shadow box.
+ * floodlight inside r0, faded out by r1; shadowHalfFt: half-width of the sun's shadow box;
+ * poolsFt: up to 8 night floodlight pools, [x, y, radius] each (where the towers aim).
  * Works before or after initLook.
  */
 export function setParkLighting(opts = {}) {
   for (const k of ["centreFt", "floodRadiiFt", "shadowHalfFt"]) if (opts[k] !== undefined) parkLight[k] = opts[k];
   const [x, y] = parkLight.centreFt;
   flood.value.set(x, -y, ...parkLight.floodRadiiFt);
+  if (opts.poolsFt) {
+    pools.value.forEach((v, i) => {
+      const p = opts.poolsFt[i];
+      v.set(p ? p[0] : 0, p ? -p[1] : 0, p ? p[2] : 0); // radius 0: no pool
+    });
+  }
   if (!look.sun) return; // initLook reads parkLight when it runs
   look.sun.target.position.set(x, 0, -y);
   const h = parkLight.shadowHalfFt;
@@ -111,15 +178,24 @@ export function setParkLighting(opts = {}) {
 }
 
 /**
- * A toon material in the park's style: the shared two-tone ramp, fog, the night falloff.
+ * A toon material in the park's style: the shared two-tone ramp, painted surface texture, fog,
+ * the night falloff and floodlight pools.
  * @param color hex or THREE.Color (use PALETTE)
- * @param extra other MeshToonMaterial parameters (map, vertexColors, side, ...)
+ * @param extra other MeshToonMaterial parameters (map, vertexColors, side, ...), plus
+ *   `surface`: "plaster" (default), "foliage", "wood", "ground" or "none" (see SURFACE_GLSL).
  */
-export function makeToonMaterial(color, extra = {}) {
+export function makeToonMaterial(color, { surface = "plaster", ...extra } = {}) {
   const m = new THREE.MeshToonMaterial({ color, gradientMap: toonRamp(), ...extra });
-  m.onBeforeCompile = addFloodFalloff;
+  m.defines = { SURFACE: SURFACE_KINDS[surface] ?? 1 };
+  m.onBeforeCompile = addParkShading;
   return m;
 }
+
+// Windows: dark by day; at night most glow warm (lit rooms and concourses), the rest stay dark.
+export const windowMaterial = makeToonMaterial(PALETTE.navy, { surface: "none" });
+export const windowLitMaterial = makeToonMaterial(PALETTE.navy, { surface: "none" });
+// setTimeOfDay recolours these two, so a mesh merge (park/build.js) must keep them by identity.
+windowMaterial.userData.shared = windowLitMaterial.userData.shared = true;
 
 // Lamps on the light towers: pale by day, glowing at night (setTimeOfDay switches them).
 export const lampMaterial = new THREE.MeshBasicMaterial({ color: PALETTE.lampOff });
@@ -166,19 +242,30 @@ export function noOutline(obj) {
 
 // ---------- outlines ----------
 
-// Normal + depth for the edge pass. Writes view-space normal and view depth / far.
+// Normal, object ID and depth for the edge pass: rg = view-space normal x, y (z is recovered as
+// +sqrt(1 - x^2 - y^2): DoubleSide flips every visible face toward the camera), b = an object ID,
+// a = view depth / far. The ID is a hash of the object's model matrix and, for instanced meshes,
+// the instance index (no per-object uniforms needed), so a window on a wall, a sign on a fascia or
+// one tree in front of another gets a line even where the depth step is too small to see.
 // transparent + NoBlending: keeps three from forcing alpha to 1 (it does for opaque materials).
 function makeNormalDepthMaterial(far) {
   const m = new THREE.MeshNormalMaterial({ side: THREE.DoubleSide, transparent: true, blending: THREE.NoBlending });
   m.onBeforeCompile = (s) => {
     s.uniforms.uFar = { value: far };
     s.vertexShader = patch(s.vertexShader,
-      ["#include <common>", "#include <common>\nvarying float vViewZ;"],
-      ["#include <project_vertex>", "#include <project_vertex>\nvViewZ = -mvPosition.z;"]);
+      ["#include <common>", "#include <common>\nvarying float vViewZ;\nflat varying float vId;\n// Merged park meshes carry one ID per source object (park/build.js mergeStatic); 0 elsewhere.\nattribute float objId;"],
+      ["#include <project_vertex>", `#include <project_vertex>
+        vViewZ = -mvPosition.z;
+        float inst = 0.0;
+        #ifdef USE_INSTANCING
+          inst = float(gl_InstanceID);
+        #endif
+        vId = fract(sin(dot(modelMatrix[3].xyz, vec3(12.9898, 78.233, 37.719))
+          + dot(modelMatrix[0].xyz, vec3(3.17, 5.71, 7.13)) + inst * 0.6180339 + objId * 0.7548776) * 43758.5453);`]);
     s.fragmentShader = patch(s.fragmentShader,
-      ["#include <packing>", "#include <packing>\nvarying float vViewZ;\nuniform float uFar;"],
+      ["#include <packing>", "#include <packing>\nvarying float vViewZ;\nflat varying float vId;\nuniform float uFar;"],
       ["gl_FragColor = vec4( packNormalToRGB( normal ), diffuseColor.a );",
-        "gl_FragColor = vec4( normal, vViewZ / uFar );"]);
+        "gl_FragColor = vec4( normal.xy, vId, vViewZ / uFar );"]);
   };
   return m;
 }
@@ -206,7 +293,10 @@ const EDGE_SHADER = {
     uScale: { value: 1 }, // line width multiplier (1 at 900 px tall)
     uInk: { value: new THREE.Color(PALETTE.ink) },
     uFar: { value: 1 },
-    uFade: { value: new THREE.Vector2(180, 1100) }, // ft: full lines until 180, gone by 1100
+    uFade: { value: new THREE.Vector2(260, 2200) }, // ft: 2 px lines until 260, then 1 px, 40% by 2200
+    uAO: { value: 0.35 }, // how dark the screen-space occlusion gets in creases and at contacts
+    uShadowTint: { value: new THREE.Color(1, 1, 1) }, uLightTint: { value: new THREE.Color(1, 1, 1) },
+    uSat: { value: 1 }, uVignette: { value: 0.2 },
   },
   vertexShader: /* glsl */`
     varying vec2 vUv;
@@ -215,10 +305,11 @@ const EDGE_SHADER = {
     uniform sampler2D tDiffuse, tND;
     uniform vec2 uTexel, uFade;
     uniform vec3 uInk;
-    uniform float uFar, uScale;
+    uniform float uFar, uScale, uAO, uSat, uVignette;
+    uniform vec3 uShadowTint, uLightTint;
     varying vec2 vUv;
     vec4 c0; // the centre sample; an ink-proof neighbour (a < 0) reads as the centre
-    vec4 nd(vec2 o) { vec4 v = texture2D(tND, vUv + o * uTexel * uScale); return v.a < 0.0 ? c0 : v; }
+    vec4 nd(vec2 o) { vec4 v = textureLod(tND, vUv + o * uTexel * uScale, 0.0); return v.a < 0.0 ? c0 : v; }
     float inv(float a) { return 1.0 / max(a, 1e-6); }
     // Near-side silhouette / ridge strength at step k px along both axes.
     float ridge(float iz, float k) {
@@ -226,26 +317,112 @@ const EDGE_SHADER = {
       float sy = inv(nd(vec2(0.0, -k)).a) + inv(nd(vec2(0.0, k)).a) - 2.0 * iz;
       return max(-sx, -sy) / iz;
     }
+    vec3 nrm(vec4 v) { return vec3(v.xy, sqrt(max(0.0, 1.0 - dot(v.xy, v.xy)))); }
+    // Another object in front of this pixel's object, or level with it, at step k px: ink on the
+    // nearer side only (as with the depth ridge), so a window on a wall gets its line, not the wall.
+    float idOne(vec2 o) {
+      vec4 n = nd(o);
+      return n.a < 1.0 && abs(n.b - c0.b) > 1e-3 && c0.a <= n.a * 1.0005 ? 1.0 : 0.0;
+    }
+    float idEdge(float k) {
+      return max(max(idOne(vec2(k, 0.0)), idOne(vec2(-k, 0.0))), max(idOne(vec2(0.0, k)), idOne(vec2(0.0, -k))));
+    }
+    /*
+     * Cheap ambient occlusion from the same normal/depth buffer (no extra scene pass): in four
+     * directions, a pixel whose neighbours ~3 ft away are on average nearer than it, in 1/z, sits in
+     * a concave spot (a crease, the foot of a wall, under a seat) and is darkened. 1/z is affine on
+     * any plane, so flat ground at a grazing angle stays clean. Neighbours more than ~10 ft nearer
+     * are a different object in front, not a crease, and are ignored (no dark halos).
+     */
+    float occlusion(float iz, float distFt) {
+      float rpx = clamp(3000.0 / distFt, 2.0, 26.0);
+      float occ = 0.0;
+      for (int i = 0; i < 4; i++) {
+        float a = float(i) * 0.785398;
+        vec2 d = vec2(cos(a), sin(a)) * rpx;
+        // Raw samples: skip sky and ink-proof pixels (ball, zone) rather than substituting.
+        vec4 p = textureLod(tND, vUv + d * uTexel * uScale, 0.0), m = textureLod(tND, vUv - d * uTexel * uScale, 0.0);
+        if (p.a >= 1.0 || m.a >= 1.0 || p.a < 0.0 || m.a < 0.0) continue;
+        float conc = (inv(p.a) + inv(m.a) - 2.0 * iz) / iz;
+        float jump = max(c0.a - p.a, c0.a - m.a) * uFar;
+        occ += smoothstep(0.004, 0.05, conc) * (1.0 - smoothstep(6.0, 14.0, jump));
+      }
+      return occ * 0.25;
+    }
+    /** Warm, consistent grade: a little saturation, cool shadows, warm lights, a soft vignette. */
+    vec3 grade(vec3 col) {
+      float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+      col = mix(vec3(lum), col, uSat);
+      col *= mix(uShadowTint, uLightTint, smoothstep(0.03, 0.5, lum));
+      return col * (1.0 - uVignette * smoothstep(0.35, 0.95, length((vUv - 0.5) * vec2(1.3, 1.0))));
+    }
     void main() {
       vec3 col = texture2D(tDiffuse, vUv).rgb;
       c0 = texture2D(tND, vUv);
-      if (c0.a < 0.0) { gl_FragColor = vec4(col, 1.0); return; } // ball / ghost / zone: no ink
+      if (c0.a < 0.0) { gl_FragColor = vec4(col, 1.0); return; } // ball / ghost / zone: no ink, no grade
       vec4 c = c0;
-      if (c.a >= 1.0) { gl_FragColor = vec4(col, 1.0); return; } // sky: no line
+      if (c.a >= 1.0) { gl_FragColor = vec4(grade(col), 1.0); return; } // sky: no line
       float iz = inv(c.a);
-      float depthEdge = smoothstep(0.02, 0.06, max(ridge(iz, 1.0), ridge(iz, 2.0)));
+      float distFt = c.a * uFar;
+      col *= 1.0 - uAO * occlusion(iz, distFt) * (1.0 - smoothstep(400.0, 1200.0, distFt));
+      // Line width: 2 px near, 1 px far (fewer samples), so far crowds and seats stay legible.
+      float far = step(uFade.x, distFt);
+      float depthEdge = smoothstep(0.02, 0.06, max(ridge(iz, 1.0), ridge(iz, 2.0 - far)));
+      // Object edges only near: at range every seat and spectator is its own object, and inking
+      // each one turns the stands to mush (depth edges still outline the bowl there).
+      float objectEdge = max(idEdge(1.0), idEdge(2.0 - far)) * (1.0 - smoothstep(140.0, 320.0, distFt));
       vec4 l = nd(vec2(-1.0, 0.0)), r = nd(vec2(1.0, 0.0)), d = nd(vec2(0.0, -1.0)), u = nd(vec2(0.0, 1.0));
       // Normals only compared with neighbours on the same surface patch (not across the sky).
       float nDiff = 0.0;
+      vec3 cn = nrm(c);
       if (max(max(l.a, r.a), max(d.a, u.a)) < 1.0)
-        nDiff = max(max(1.0 - dot(c.xyz, l.xyz), 1.0 - dot(c.xyz, r.xyz)),
-                    max(1.0 - dot(c.xyz, d.xyz), 1.0 - dot(c.xyz, u.xyz)));
+        nDiff = max(max(1.0 - dot(cn, nrm(l)), 1.0 - dot(cn, nrm(r))),
+                    max(1.0 - dot(cn, nrm(d)), 1.0 - dot(cn, nrm(u))));
       float normalEdge = smoothstep(0.15, 0.35, nDiff);
-      float edge = max(depthEdge, normalEdge) * (1.0 - smoothstep(uFade.x, uFade.y, c.a * uFar));
+      // Lines stay to the far side of the island, thinning past uFade.x and fading by uFade.y.
+      // Varied weight, as with a brush: silhouettes and object outlines full strength, creases
+      // inside one object (normal edges) lighter.
+      float edge = max(max(depthEdge, objectEdge), 0.7 * normalEdge) * (1.0 - 0.6 * smoothstep(uFade.x, uFade.y, distFt));
       // Ink takes a little of the colour under it (as hand-inked lines do), so lines on dark
       // surfaces stay dark and lines on cream read as warm brown-grey.
-      vec3 ink = mix(uInk, col * 0.3, 0.3);
-      gl_FragColor = vec4(mix(col, ink, edge), 1.0);
+      vec3 ink = mix(uInk, col * 0.3, 0.2);
+      gl_FragColor = vec4(grade(mix(col, ink, edge)), 1.0);
+    }`,
+};
+
+/*
+ * Depth of field, for the intro sweep only (never in the pitch views: it would blur the ball). A
+ * disc blur whose radius grows with distance from the focus plane, read from the same depth buffer
+ * as the ink, so the wide shot looks like a tilt-shift miniature (as the cricket clip's does).
+ * 16 taps on a golden-angle spiral (Vogel disc).
+ */
+const DOF_SHADER = {
+  uniforms: {
+    tDiffuse: { value: null }, tND: { value: null }, uTexel: { value: new THREE.Vector2() },
+    uFar: { value: 1 }, uFocus: { value: 100 }, uMaxPx: { value: 0 },
+  },
+  vertexShader: EDGE_SHADER.vertexShader,
+  fragmentShader: /* glsl */`
+    uniform sampler2D tDiffuse, tND;
+    uniform vec2 uTexel;
+    uniform float uFar, uFocus, uMaxPx;
+    varying vec2 vUv;
+    float blurPx(vec2 uv) {
+      float a = textureLod(tND, uv, 0.0).a;
+      float z = (a < 0.0 ? uFocus / uFar : a) * uFar; // ink-proof pixels: in focus
+      return uMaxPx * clamp(abs(z - uFocus) / (uFocus * 0.6), 0.0, 1.0);
+    }
+    void main() {
+      float r = blurPx(vUv);
+      vec3 sum = texture2D(tDiffuse, vUv).rgb;
+      float w = 1.0;
+      for (int i = 1; i < 16; i++) {
+        float k = float(i);
+        vec2 o = vec2(cos(k * 2.39996), sin(k * 2.39996)) * sqrt(k / 16.0) * r * uTexel;
+        sum += textureLod(tDiffuse, vUv + o, 0.0).rgb;
+        w += 1.0;
+      }
+      gl_FragColor = vec4(sum / w, 1.0);
     }`,
 };
 
@@ -298,7 +475,7 @@ const SKY_SHADER = {
       // Sun / moon: a flat disc and one flat halo ring.
       float s = dot(d, normalize(uSunDir));
       col = mix(col, mix(col, uSunColor, 0.35), step(1.0 - uSunSize * 4.0, s));
-      col = mix(col, uSunColor, step(1.0 - uSunSize, s));
+      col = mix(col, uSunColor * 1.8, step(1.0 - uSunSize, s)); // > 1: blooms
       // Clouds on a plane above (and, thinner, below) the island.
       float ah = abs(h);
       vec2 p = d.xz / (ah + 0.12) * vec2(0.55, 1.6);
@@ -335,6 +512,8 @@ export const TIMES = {
     sun: [150, 55], sunColor: 0xfff4e0, sunIntensity: 2.0, sunSize: 0.0012,
     sky: 0xd8f0ff, ground: 0x8a9a6a, ambient: 1.35,
     fog: 0xb4e6da, fogDensity: 0.00022, ink: 0x22303a, floodMin: 1, lamps: false,
+    // Grade: shadows pulled cool, lights warm (the courtyard reference's sunlit warmth).
+    shadowTint: [0.93, 0.97, 1.06], lightTint: [1.06, 1.02, 0.94], sat: 1.06, bloom: 0.35,
   },
   sunset: {
     top: 0x4a3b80, mid: 0xc8708f, horizon: 0xffbe7d, below: 0xf2a27e,
@@ -344,6 +523,7 @@ export const TIMES = {
     sun: [-80, 10], sunColor: 0xffb070, sunIntensity: 2.6, sunSize: 0.0016,
     sky: 0xf0b4c0, ground: 0xb08070, ambient: 1.5,
     fog: 0xf0a47e, fogDensity: 0.0003, ink: 0x3a2433, floodMin: 1, lamps: true,
+    shadowTint: [0.92, 0.9, 1.08], lightTint: [1.08, 1.0, 0.9], sat: 1.05, bloom: 0.6,
   },
   night: {
     top: 0x070d22, mid: 0x14204a, horizon: 0x2b3f6e, below: 0x1a2648,
@@ -352,6 +532,7 @@ export const TIMES = {
     sky: 0x5a6ea8, ground: 0x1c2438, ambient: 0.5,
     fog: 0x1f2d55, fogDensity: 0.0003, ink: 0x05070d, floodMin: 0.05, lamps: true,
     fill: [90, 45], fillIntensity: 1.1, // floodlights from behind home too, so faces toward the plate aren't black
+    shadowTint: [0.88, 0.95, 1.12], lightTint: [1.06, 1.02, 0.94], sat: 1.08, bloom: 0.75, pools: true,
   },
 };
 // At night the "sun" uniform draws the moon; the key light is the floodlights, from high above
@@ -392,8 +573,16 @@ export function setTimeOfDay(name) {
   look.renderer.setClearColor(T.fog, 1);
   look.edge.uniforms.uInk.value.set(T.ink);
   floodMin.value = T.floodMin;
-  lampMaterial.color.set(T.lamps ? PALETTE.lampOn : PALETTE.lampOff);
-  glowMaterial.opacity = name === "night" ? 0.7 : T.lamps ? 0.35 : 0;
+  // Lit lamps and windows are brighter than white, which is what the bloom pass picks up.
+  lampMaterial.color.set(T.lamps ? PALETTE.lampOn : PALETTE.lampOff).multiplyScalar(T.lamps ? 3 : 1);
+  windowLitMaterial.emissive.set(name === "night" ? 0xffb85c : T.lamps ? 0x8a5a30 : 0x000000);
+  windowLitMaterial.emissiveIntensity = name === "night" ? 1.6 : 1;
+  poolAmt.value = T.pools ? 1 : 0;
+  const e = look.edge.uniforms;
+  e.uShadowTint.value.setRGB(...T.shadowTint); e.uLightTint.value.setRGB(...T.lightTint);
+  e.uSat.value = T.sat;
+  look.bloom.strength = T.bloom;
+  glowMaterial.opacity = name === "night" ? 0.15 : T.lamps ? 0.12 : 0; // bloom does most of the glow
   look.timeOfDay = name;
   refreshShadows();
 }
@@ -408,7 +597,8 @@ export const timeOfDay = () => look.timeOfDay;
 
 /**
  * Set up lights, fog, sky and the post-processing chain for `scene` seen by `camera`.
- * @returns {{render: () => void, setSize: (w: number, h: number) => void}}
+ * @returns {{render: () => void, setSize: (w: number, h: number) => void,
+ *   setFocus: (focusFt: number | null, maxPx?: number) => void}} setFocus: depth of field (intro only)
  */
 export function initLook(renderer, scene, camera) {
   Object.assign(look, { renderer, scene, camera });
@@ -465,6 +655,15 @@ export function initLook(renderer, scene, camera) {
   look.edge.uniforms.tND.value = nd.texture;
   look.edge.uniforms.uFar.value = camera.far;
   composer.addPass(look.edge);
+  look.dof = new ShaderPass(DOF_SHADER);
+  look.dof.uniforms.tND.value = nd.texture;
+  look.dof.uniforms.uFar.value = camera.far;
+  look.dof.enabled = false;
+  composer.addPass(look.dof);
+  // Threshold 1.2: only what is well brighter than white blooms (lit lamps x3, lit windows, the
+  // sun disc), not sunlit chalk or the white strike zone.
+  look.bloom = new UnrealBloomPass(new THREE.Vector2(size.x, size.y), 0.35, 0.5, 1.2);
+  composer.addPass(look.bloom);
   composer.addPass(new SMAAPass());
   composer.addPass(new OutputPass());
 
@@ -477,6 +676,15 @@ export function initLook(renderer, scene, camera) {
       nd.setSize(s.x, s.y);
       look.edge.uniforms.uTexel.value.set(1 / s.x, 1 / s.y);
       look.edge.uniforms.uScale.value = Math.max(1, s.y / 900);
+      look.dof.uniforms.uTexel.value.set(1 / s.x, 1 / s.y);
+    },
+    /** Depth of field focused at focusFt (ft from the camera), blurring up to maxPx; null: off. */
+    setFocus(focusFt, maxPx = 6) {
+      look.dof.enabled = focusFt != null;
+      if (focusFt == null) return;
+      const s = renderer.getDrawingBufferSize(new THREE.Vector2());
+      look.dof.uniforms.uFocus.value = focusFt;
+      look.dof.uniforms.uMaxPx.value = maxPx * Math.max(1, s.y / 900);
     },
     render() {
       look.sky.position.copy(camera.position); // the sky is infinitely far: it follows the camera

@@ -4,7 +4,7 @@ import { duration } from "./trajectory.js";
 
 export const MODES = ["real", "sim", "ghost"]; // "Statcast fit", "M1 + M3", both
 export const SPEEDS = [1, 0.25, 0.1];
-export const VIEWS = ["catcher", "batter", "side", "ride", "free"]; // keys 1-5
+export const VIEWS = ["umpire", "batter", "side", "ride", "free"]; // keys 1-5
 
 // Ball rotation on screen. True spin is ~40 rev/s, which a 60 Hz screen cannot show at 1x (it
 // would alias), so at 1x we show 1/20 of it; in slow motion the true rate is shown (angle =
@@ -15,7 +15,7 @@ export const spinFactor = (speed) => (speed >= 1 ? SLOWED_SPIN_FACTOR : 1);
 export function initialState() {
   return {
     slug: null, data: null, abIndex: 0, pitchIndex: 0,
-    t: 0, playing: false, speed: 1, view: "catcher",
+    t: 0, playing: false, speed: 1, view: "umpire",
     showNoSpin: false, // the "no spin" reference path (export's nospin), toggled with N
     seen: 0, // pitches of this at-bat whose result may show: landed or passed (see revealed)
     wantMode: "real", // what the user picked; kept across pitches that cannot show it

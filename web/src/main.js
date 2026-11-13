@@ -4,8 +4,8 @@ import { toScene } from "./coords.js";
 import { buildField, buildZone } from "./field.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
-  batterEye, catcherView, sideView, rideAlong, BATTER_EYE_VFOV_DEG, CATCHER_VFOV_DEG, SIDE_VFOV_DEG,
-  RIDE_VFOV_DEG, FREE_VFOV_DEG, FREE_START, FREE_MIN_DIST_FT, FREE_MAX_DIST_FT,
+  batterEye, umpireView, sideView, rideAlong, BATTER_EYE_VFOV_DEG, UMPIRE_VFOV_DEG, SIDE_VFOV_DEG,
+  RIDE_VFOV_DEG, FREE_VFOV_DEG, FREE_START, FREE_MIN_DIST_FT, FREE_MAX_DIST_FT, introSweep, INTRO_S,
 } from "./cameras.js";
 import { loadIndex, loadPitcher } from "./data.js";
 import {
@@ -24,7 +24,8 @@ renderer.setPixelRatio(window.devicePixelRatio);
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.add(buildPark()); // swappable: see park/index.js
+const park = buildPark(); // swappable: see park/index.js
+scene.add(park);
 scene.add(buildField());
 // The ball is tiny on screen: an outline would swamp it, and no line may cross it (inkProof).
 const ball = inkProof(makeBall());
@@ -40,7 +41,7 @@ let figure = null; // the pitcher, rebuilt per pitcher (handedness), re-posed pe
 
 // Vertical FOV chosen so every pitch's zone, plate arrival and release fit (see cameras.js).
 // Far plane 6000 ft: the free camera can pull back to the whole floating island (~1300 ft across).
-const camera = new THREE.PerspectiveCamera(CATCHER_VFOV_DEG, 1, 0.05, 6000);
+const camera = new THREE.PerspectiveCamera(UMPIRE_VFOV_DEG, 1, 0.05, 6000);
 camera.layers.enable(1); // layer 1: drawn but not outlined (look.js)
 camera.layers.enable(2); // layer 2: not outlined and never inked over (look.js)
 const look = initLook(renderer, scene, camera);
@@ -52,7 +53,7 @@ controls.maxDistance = FREE_MAX_DIST_FT;
 let freePose = { position: toScene(FREE_START.position), target: toScene(FREE_START.target) };
 let appliedView = null;
 const VFOV = {
-  catcher: CATCHER_VFOV_DEG, batter: BATTER_EYE_VFOV_DEG, side: SIDE_VFOV_DEG, free: FREE_VFOV_DEG,
+  umpire: UMPIRE_VFOV_DEG, batter: BATTER_EYE_VFOV_DEG, side: SIDE_VFOV_DEG, free: FREE_VFOV_DEG,
   ride: RIDE_VFOV_DEG,
 };
 
@@ -74,7 +75,7 @@ function updateCamera() {
   }
   if (state.view === "free") { controls.update(); return; }
   let pose = null;
-  if (state.view === "catcher") pose = catcherView();
+  if (state.view === "umpire") pose = umpireView();
   else if (state.view === "batter") pose = batterEye(ab.stand);
   else if (path && state.view === "side") pose = sideView(path, camera.aspect);
   else if (path) pose = rideAlong(path, state.t, currentPitch(state).release, state.data.pitcher.throws);
@@ -82,6 +83,39 @@ function updateCamera() {
   camera.position.copy(toScene(pose.position));
   camera.lookAt(toScene(pose.target));
 }
+
+/*
+ * Intro sweep (cameras.js introSweep): plays on load and on I, from the whole island down to the
+ * umpire's view; any key, click or wheel skips it. Depth of field only here (look.setFocus), easing
+ * to none by the end so the hand-over to the pitch view is sharp. The HUD panels fade out meanwhile.
+ * intro = { t, frozen } while it runs, null otherwise.
+ */
+let intro = null;
+function startIntro(t = 0, frozen = false) {
+  if (state.data && state.view !== "umpire") dispatch({ type: "setView", view: "umpire" });
+  intro = { t, frozen };
+  controls.enabled = false;
+  document.body.classList.add("intro");
+}
+function endIntro() {
+  intro = null;
+  look.setFocus(null);
+  appliedView = null; // re-apply the view's FOV and controls
+  document.body.classList.remove("intro");
+}
+/** Advance the intro by dt s and pose the camera; ends it after INTRO_S. */
+function updateIntro(dt) {
+  if (!intro.frozen) intro.t += dt;
+  if (intro.t >= INTRO_S && !intro.frozen) return endIntro();
+  const pose = introSweep(intro.t);
+  camera.fov = pose.vfovDeg;
+  camera.updateProjectionMatrix();
+  camera.position.copy(toScene(pose.position));
+  camera.lookAt(toScene(pose.target));
+  const focus = Math.hypot(...pose.position.map((v, i) => v - pose.target[i]));
+  look.setFocus(focus, 7 * (1 - Math.min(1, intro.t / INTRO_S)) ** 2);
+}
+for (const ev of ["pointerdown", "wheel"]) window.addEventListener(ev, () => { if (intro && !intro.frozen) endIntro(); });
 
 function resize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -164,7 +198,7 @@ const KEYS = {
   Space: { type: "replay" }, ArrowRight: { type: "nextPitch" }, ArrowLeft: { type: "prevPitch" },
   KeyR: { type: "setMode", mode: "real" }, KeyS: { type: "setMode", mode: "sim" },
   KeyG: { type: "setMode", mode: "ghost" },
-  // 1-5: Catcher, Batter, Side, Ride, Free (the order of VIEWS and of the tabs).
+  // 1-5: Umpire, Batter, Side, Ride, Free (the order of VIEWS and of the tabs).
   ...Object.fromEntries(VIEWS.map((view, i) => [`Digit${i + 1}`, { type: "setView", view }])),
   KeyN: { type: "toggleNoSpin" },
   KeyZ: { type: "setSpeed", speed: 1 }, KeyX: { type: "setSpeed", speed: 0.25 },
@@ -180,6 +214,8 @@ window.addEventListener("keydown", (e) => {
   // Leave browser shortcuts (Ctrl+R, ...) alone, and keys aimed at a focused control: a select
   // uses arrows itself, and Space on a focused button would also click it (a double replay).
   if (!state.data || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (intro && !intro.frozen) { e.preventDefault(); return endIntro(); } // any key skips the intro
+  if (e.code === "KeyI") return startIntro();
   if (["SELECT", "BUTTON", "SUMMARY"].includes(e.target.tagName)) return;
   if (e.code === "KeyA") return dispatch({ type: "pickAtBat", index: "random", seed: randomSeed() });
   if (e.code === "KeyT") return cycleTimeOfDay();
@@ -239,6 +275,11 @@ async function start() {
     freePose = { position: toScene(cam.slice(0, 3)), target: toScene(cam.slice(3)) };
   }
   if (q.has("view")) dispatch({ type: "setView", view: q.get("view") });
+  // The intro plays on load unless a view was asked for or ?intro=off; ?intro=<s> holds that frame
+  // of it (for screenshots).
+  const iq = q.get("intro");
+  if (iq !== null && iq !== "off" && Number.isFinite(Number(iq))) startIntro(Number(iq), true);
+  else if (iq === null && !q.has("view")) startIntro();
   if (q.has("speed")) dispatch({ type: "setSpeed", speed: Number(q.get("speed")) });
   if (q.get("nospin") === "1") dispatch({ type: "toggleNoSpin" });
   // ?panel=picker|help|nolook: open the picker or the key help, or fold the look card.
@@ -277,7 +318,7 @@ function countFrame(now) {
  */
 let burst = "";
 function benchmark() {
-  updateCamera();
+  if (intro) updateIntro(0); else updateCamera();
   look.render(); // warm-up: shaders compiled, shadow map drawn
   const px = new Uint8Array(4);
   const t0 = performance.now();
@@ -289,8 +330,21 @@ function benchmark() {
   look.render(); // one frame that also redraws the shadow map (happens on each pitch change)
   gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
   const shadowMs = performance.now() - t1;
-  console.log(`render burst (${state.view}, ${timeOfDay()}): ${ms.toFixed(2)} ms/frame; with shadow redraw ${shadowMs.toFixed(1)} ms`);
+  renderer.info.reset();
+  look.render(); // one more, to count what a frame draws (all passes)
+  const { calls, triangles } = renderer.info.render;
+  console.log(`render burst (${state.view}, ${timeOfDay()}): ${ms.toFixed(2)} ms/frame; with shadow redraw ${shadowMs.toFixed(1)} ms; ${calls} draws, ${(triangles / 1e6).toFixed(2)} M tris`);
   burst = `<br>burst: ${ms.toFixed(2)} ms/frame (${(1000 / ms).toFixed(0)} fps if GPU-bound)`;
+}
+
+/** What the park's scoreboard shows: the count before the current pitch, and the pitch. */
+function boardInfo() {
+  const ab = currentAtBat(state), p = currentPitch(state);
+  if (!p) return null;
+  return {
+    balls: p.balls, strikes: p.strikes, outs: ab.outs, inning: ab.inning, top: ab.top,
+    pitcher: state.data.pitcher.name.split(",")[0], pitch: p.pitch_name ?? p.pitch_type, mph: p.speed_mph ?? null,
+  };
 }
 
 let last = null;
@@ -312,6 +366,8 @@ renderer.setAnimationLoop((now) => {
     updateTube(ghostTrail, state.mode === "ghost" ? p.sim : null, state.t);
     updateTube(noSpinLine, state.showNoSpin ? p.nospin : null, state.t);
   }
-  if (state.data) updateCamera();
+  if (intro) updateIntro(dt);
+  else if (state.data) updateCamera();
+  park.userData.update?.({ timeS: now / 1000, board: boardInfo() });
   look.render();
 });

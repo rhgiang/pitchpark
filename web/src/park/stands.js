@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { PALETTE, makeToonMaterial, noOutline } from "../look.js";
+import { PALETTE, makeToonMaterial, noOutline, windowMaterial, windowLitMaterial } from "../look.js";
 import { sweep, cap, frameAt, box, place } from "./build.js";
 import {
   foulWallPath, fencePath, resample, normals, polar, fenceDistFt, rng, BACKSTOP_FT,
@@ -68,6 +68,17 @@ const BLEACHERS = [
   [[BLEACH_ROWS.end[0] + 3, BLEACH_ROWS.end[1] + 4], [BLEACH_ROWS.end[0] + 3, 0], PALETTE.cream, 1, 0.65],
 ];
 export const BLEACHER_DEPTH_FT = BLEACH_ROWS.end[0] + 3;
+// Bleacher canopy: a striped slab on the back wall's line, sloping up toward the field so the
+// coral/cream ring runs round the outfield too (the cricket park's striped ring frames the whole
+// oval). Front edge 32 ft up, high enough to see the crowd under it from home plate.
+const BLEACH_ROOF = [
+  [[BLEACHER_DEPTH_FT + 1, 36], [8, 33], PALETTE.coral],
+  [[8, 33], [8, 31.8], PALETTE.coral],
+  [[8, 31.8], [BLEACHER_DEPTH_FT + 1, 34.8], PALETTE.coral, 0.7, 0.7],
+];
+// Frieze: a band of coral and cream blocks just under the top of each outer wall, the stadium's
+// "crown" seen from the plaza and the wide shots. [s, h0, h1] per wall, see buildStands.
+const FRIEZE = (s, h0, h1) => [[[s + 0.4, h0], [s + 0.4, h1], PALETTE.coral], [[s + 0.4, h1], [s, h1], PALETTE.cream]];
 // Outfield fence: dark green padded wall with a yellow home-run line along the top.
 const FENCE = [
   [[0, 0], [0, FENCE_HEIGHT_FT - 0.4], PALETTE.wall, 0.7, 1],
@@ -211,8 +222,8 @@ function backstop() {
  *   rows at heights `rows`.
  */
 function facades(walls) {
-  const pil = [], win = [];
-  for (const { path, s, top, rows } of walls) {
+  const pil = [], win = [], arch = [];
+  for (const { path, s, top, rows, arches } of walls) {
     const n = normals(path);
     const line = resample(path.map((p, i) => [p[0] + n[i][0] * s, p[1] + n[i][1] * s]), 8);
     const ln = normals(line);
@@ -220,17 +231,36 @@ function facades(walls) {
       if (i === 0 || i === line.length - 1) return;
       const yaw = Math.atan2(ln[i][0], -ln[i][1]);
       if (i % 4 === 0) pil.push({ p, yaw, h: top });
-      else for (const h of rows) win.push({ p, yaw, h });
+      else {
+        for (const h of rows) win.push({ p, yaw, h });
+        if (arches) arch.push({ p, yaw });
+      }
     });
   }
   const pm = new THREE.InstancedMesh(new THREE.BoxGeometry(2.4, 1, 2.2).translate(0, 0.5, 0),
     makeToonMaterial(PALETTE.concrete), pil.length);
   pil.forEach((q, i) => place(pm, i, [q.p[0], 0, -q.p[1]], q.yaw, [1, q.h, 1]));
-  const wm = new THREE.InstancedMesh(new THREE.BoxGeometry(4.2, 5, 1.2), makeToonMaterial(PALETTE.navy), win.length);
-  win.forEach((q, i) => place(wm, i, [q.p[0], q.h, -q.p[1]], q.yaw));
+  // Windows and the ground-floor arcade: about two thirds "lit" (they glow at night, look.js), the
+  // rest stay dark, so the facade at night is a scatter of warm windows, not a uniform grid.
+  const R = rng(5);
+  const lit = [], dark = [];
+  for (const q of win) (R() < 0.65 ? lit : dark).push(q);
+  const winGeo = new THREE.BoxGeometry(4.2, 5, 1.2);
+  // An arch: a 6 x 7 ft opening with a round top (radius 3 ft), its front 0.6 ft proud of the wall.
+  const archGeo = mergeGeometries([
+    new THREE.BoxGeometry(6, 7, 1.2).translate(0, 3.5, 0),
+    new THREE.CylinderGeometry(3, 3, 1.2, 12, 1, false, 0, Math.PI).rotateX(Math.PI / 2).rotateZ(Math.PI / 2).translate(0, 7, 0),
+  ].map((g) => g.toNonIndexed()));
+  const out = [pm];
+  for (const [list, geo, mat] of [[lit, winGeo, windowLitMaterial], [dark, winGeo, windowMaterial], [arch, archGeo, windowLitMaterial]]) {
+    const m = new THREE.InstancedMesh(geo, mat, list.length);
+    list.forEach((q, i) => place(m, i, [q.p[0], q.h ?? 0, -q.p[1]], q.yaw));
+    m.receiveShadow = true;
+    out.push(m);
+  }
   pm.castShadow = true;
-  pm.receiveShadow = wm.receiveShadow = true;
-  return [pm, wm];
+  pm.receiveShadow = true;
+  return out;
 }
 
 /** All the seating, walls, dugouts and backstop. */
@@ -244,6 +274,11 @@ export function buildStands() {
   const upperOutline = [[64, 0], ...outline(UPPER).slice(0, -1)];
   g.add(mesh(cap(upper, 0, upperOutline, PALETTE.cream), mat), mesh(cap(upper, upper.length - 1, upperOutline, PALETTE.cream), mat));
   g.add(mesh(sweep(upper, ROOF, { stripe: 3, stripeHex: PALETTE.cream }), mat));
+  const fw0 = foulWallPath();
+  g.add(mesh(sweep(upper, FRIEZE(MAIN_DEPTH_FT, 70, 76), { stripe: 1, stripeHex: PALETTE.cream }), mat, false));
+  for (const side of [[fw0[1], fw0[2]], [fw0.at(-3), fw0.at(-2)]]) {
+    g.add(mesh(sweep(resample(side, 4), FRIEZE(64, 26, 30), { stripe: 1, stripeHex: PALETTE.cream }), mat, false));
+  }
   // Fence, plus the short corner walls from each pole into foul ground.
   const fence = fencePath(0.5);
   g.add(mesh(sweep(fence, FENCE), mat));
@@ -255,6 +290,17 @@ export function buildStands() {
     g.add(mesh(sweep(p, BLEACHERS), mat));
     const o = outline(BLEACHERS).concat([[BLEACHER_DEPTH_FT, 0]]);
     g.add(mesh(cap(p, 0, o, PALETTE.cream), mat), mesh(cap(p, p.length - 1, o, PALETTE.cream), mat));
+    g.add(mesh(sweep(p, BLEACH_ROOF, { stripe: 2, stripeHex: PALETTE.cream }), mat));
+    g.add(mesh(sweep(p, FRIEZE(BLEACHER_DEPTH_FT, 22, 26), { stripe: 1, stripeHex: PALETTE.cream }), mat, false));
+    // Canopy posts on the back wall, one per 24 ft.
+    const n = normals(p);
+    for (let i = 3; i < p.length - 2; i += 6) {
+      const q = [p[i][0] + n[i][0] * (BLEACHER_DEPTH_FT - 1), p[i][1] + n[i][1] * (BLEACHER_DEPTH_FT - 1)];
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 36, 8).translate(0, 18, 0), makeToonMaterial(PALETTE.steel));
+      post.position.set(q[0], 0, -q[1]);
+      post.castShadow = true;
+      g.add(post);
+    }
   }
 
   // Seats, coloured by deck so the bowl reads in bands from afar (as the cricket park's do):
@@ -272,10 +318,10 @@ export function buildStands() {
   g.add(...seatsAndCrowd(seats, 11));
   const fw = foulWallPath();
   g.add(...facades([
-    { path: upper, s: MAIN_DEPTH_FT, top: 86, rows: [10, 22, 46, 58, 70] },
-    { path: resample([fw[1], fw[2]], 4), s: 64, top: 34, rows: [10, 22] },
-    { path: resample([fw.at(-3), fw.at(-2)], 4), s: 64, top: 34, rows: [10, 22] },
-    ...bleacherPaths().map((b) => ({ path: resample(b, 4), s: BLEACHER_DEPTH_FT, top: BLEACH_ROWS.end[1] + 4, rows: [8, 18] })),
+    { path: upper, s: MAIN_DEPTH_FT, top: 86, rows: [16, 28, 46, 58], arches: true },
+    { path: resample([fw[1], fw[2]], 4), s: 64, top: 34, rows: [16], arches: true },
+    { path: resample([fw.at(-3), fw.at(-2)], 4), s: 64, top: 34, rows: [16], arches: true },
+    ...bleacherPaths().map((b) => ({ path: resample(b, 4), s: BLEACHER_DEPTH_FT, top: BLEACH_ROWS.end[1] + 4, rows: [16], arches: true })),
   ]));
   g.add(dugout(1), dugout(-1), backstop());
   g.userData.seatCount = seats.length;

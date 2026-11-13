@@ -38,7 +38,56 @@ function lightTower([x, y], heightFt, lampSlots) {
   return g;
 }
 
-/** Scoreboard on legs above the right-centre bleachers. Decorative only: no numbers shown. */
+/**
+ * What the scoreboard shows, from the viewer's state (main.js passes it each frame): the count,
+ * outs and inning before the current pitch, the pitcher, pitch type and speed (all known at
+ * release, as in the scorebug). Runs and hits are left blank: the export has no score, and the
+ * board must not invent one.
+ * @param info {{balls, strikes, outs, inning, top, pitcher, pitch, mph}} or null (no data yet)
+ * @returns {string[]} text lines, also used as the "has it changed" key
+ */
+export function boardLines(info) {
+  if (!info) return ["", "", ""];
+  return [
+    `${info.top ? "TOP" : "BOT"} ${info.inning}`,
+    `${info.balls}-${info.strikes}-${info.outs}`,
+    `${(info.pitcher ?? "").toUpperCase()} · ${(info.pitch ?? "").toUpperCase()}${info.mph == null ? "" : ` · ${info.mph.toFixed(1)} MPH`}`,
+  ];
+}
+
+/** Paint the scoreboard face: title, innings with the current one lit, B/S/O lamps, pitch line. */
+function drawBoard(x, info) {
+  x.fillStyle = "#1d3550"; x.fillRect(0, 0, 1024, 500);
+  x.fillStyle = "#f2c14e"; x.font = "bold 64px sans-serif"; x.textAlign = "center";
+  x.fillText("PITCHSIM PARK", 512, 82);
+  x.font = "bold 34px sans-serif";
+  ["1", "2", "3", "4", "5", "6", "7", "8", "9", "R", "H", "E"].forEach((t, i) => {
+    x.fillStyle = info && i === info.inning - 1 ? "#f2c14e" : "#f4ead2";
+    x.fillText(t, 250 + i * 62, 160);
+  });
+  for (let r = 0; r < 2; r++) for (let i = 0; i < 12; i++) {
+    // The current half-inning's box glows; the rest stay blank (no score in the data).
+    const on = info && i === info.inning - 1 && r === (info.top ? 0 : 1);
+    x.fillStyle = on ? "#3fa7a0" : "#2a4a6b";
+    x.fillRect(226 + i * 62, 185 + r * 70, 48, 54);
+  }
+  x.fillStyle = "#f4ead2"; x.textAlign = "left";
+  x.fillText("AWAY", 40, 225); x.fillText("HOME", 40, 295);
+  const lit = info ? [info.balls, info.strikes, info.outs] : [0, 0, 0];
+  const on = ["#3fbf7f", "#e5604b", "#f2c14e"];
+  ["BALL", "STRIKE", "OUT"].forEach((t, i) => {
+    x.fillStyle = "#f4ead2";
+    x.fillText(t, 40 + i * 330, 380);
+    for (let k = 0; k < [3, 2, 2][i]; k++) { // lamps: 3 balls, 2 strikes, 2 outs (as on real boards)
+      x.beginPath(); x.arc(185 + i * 330 + k * 36, 368, 13, 0, 7);
+      x.fillStyle = k < lit[i] ? on[i] : "#2a4a6b"; x.fill();
+    }
+  });
+  x.font = "bold 36px sans-serif"; x.fillStyle = "#f2c14e"; x.textAlign = "center";
+  x.fillText(boardLines(info)[2], 512, 460);
+}
+
+/** Scoreboard on legs above the right-centre bleachers, showing the live count (update()). */
 function scoreboard(angleDeg, r) {
   const f = radialFrame(angleDeg, r);
   const steel = makeToonMaterial(PALETTE.steel);
@@ -49,26 +98,50 @@ function scoreboard(angleDeg, r) {
   const c = document.createElement("canvas");
   c.width = 1024; c.height = 500;
   const x = c.getContext("2d");
-  x.fillStyle = "#1d3550"; x.fillRect(0, 0, 1024, 500);
-  x.fillStyle = "#f2c14e"; x.font = "bold 64px sans-serif"; x.textAlign = "center";
-  x.fillText("PITCHSIM PARK", 512, 82);
-  x.font = "bold 34px sans-serif"; x.fillStyle = "#f4ead2";
-  ["1", "2", "3", "4", "5", "6", "7", "8", "9", "R", "H", "E"].forEach((t, i) => x.fillText(t, 250 + i * 62, 160));
-  x.fillStyle = "#2a4a6b";
-  for (let r = 0; r < 2; r++) for (let i = 0; i < 12; i++) x.fillRect(226 + i * 62, 185 + r * 70, 48, 54);
-  x.fillStyle = "#f4ead2"; x.textAlign = "left";
-  x.fillText("AWAY", 40, 225); x.fillText("HOME", 40, 295);
-  ["BALL", "STRIKE", "OUT"].forEach((t, i) => {
-    x.fillText(t, 70 + i * 330, 410);
-    for (let k = 0; k < 3; k++) { x.beginPath(); x.arc(200 + i * 330 + k * 34, 398, 12, 0, 7); x.fillStyle = "#2a4a6b"; x.fill(); }
-    x.fillStyle = "#f4ead2";
-  });
+  drawBoard(x, null);
+  const tex = Object.assign(new THREE.CanvasTexture(c), { colorSpace: THREE.SRGBColorSpace, anisotropy: 8 });
+  // Emissive map: the board is a lit screen, readable at night too (and its bright bits bloom).
   const face = new THREE.Mesh(new THREE.PlaneGeometry(74, 34),
-    makeToonMaterial(0xffffff, { map: Object.assign(new THREE.CanvasTexture(c), { colorSpace: THREE.SRGBColorSpace, anisotropy: 8 }) }));
+    makeToonMaterial(0xffffff, { map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.35, surface: "none" }));
   face.position.set(0, 65, -2.05);
   face.rotation.y = Math.PI; // face home (local -z)
   f.add(face);
+  let key = null;
+  f.userData.setBoard = (info) => {
+    const k = JSON.stringify(info);
+    if (k === key) return; // redraw the canvas only when something changed
+    key = k;
+    drawBoard(x, info);
+    tex.needsUpdate = true;
+  };
   return f;
+}
+
+/**
+ * Outfield wall advertising, in the park's own words (no real brands): panels along the fence
+ * away from the distance numbers and the centre-field batter's eye (kept dark for hitters).
+ */
+function wallAds() {
+  const g = new THREE.Group();
+  const words = ["PITCHSIM", "RK4 PHYSICS", "SEAM WAKE", "TUNNEL VISION", "HELD-OUT", "SPIN AXIS", "STATCAST FIT", "M1 · M2 · M3"];
+  const cols = [["#e5604b", "#f4ead2"], ["#f2c14e", "#2a4a6b"], ["#f4ead2", "#2a4a6b"], ["#3fa7a0", "#f4ead2"]];
+  let k = 0;
+  for (const side of [-1, 1]) for (let a = 13; a <= 41; a += 4.6) {
+    if (Math.abs(a - 22.5) < 3) continue; // the gap numbers
+    const ang = side * a;
+    const a0 = polar(ang - 0.5, fenceDistFt(ang - 0.5)), a1 = polar(ang + 0.5, fenceDistFt(ang + 0.5));
+    const f = frameAt(polar(ang, fenceDistFt(ang) - 0.3), [a1[0] - a0[0], a1[1] - a0[1]]);
+    const [bg, fg] = cols[k % cols.length];
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(22, 4.6),
+      // Polygon offset: 0.3 ft off a wall 400 ft away is below the depth buffer's resolution.
+      makeToonMaterial(0xffffff, { surface: "none", polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8,
+        map: textTexture(words[k % words.length], { w: 640, h: 134, bg, fg, font: "bold 64px sans-serif" }) }));
+    m.position.set(0, 3.3, 0);
+    f.add(m);
+    g.add(f);
+    k++;
+  }
+  return g;
 }
 
 /** Foul pole: tall yellow pole with a screen on the fair side. */
@@ -126,6 +199,17 @@ function bullpens() {
     m.receiveShadow = true;
     g.add(m, box(white, 2, 0.06, 0.5, mound[0], 0.83, -mound[1]), box(white, 1.4, 0.05, 1.4, plate[0], 0.01, -plate[1]));
   }
+  // A shelter with a bench against each pen's back (bleacher) wall: navy roof on steel posts.
+  for (const s of [-1, 1]) {
+    const q0 = polar(s * 29, fenceDistFt(29) + BLEACHER_GAP_FT - 4), q1 = polar(s * 33, fenceDistFt(33) + BLEACHER_GAP_FT - 4);
+    const f = frameAt([(q0[0] + q1[0]) / 2, (q0[1] + q1[1]) / 2], [q1[0] - q0[0], q1[1] - q0[1]]);
+    const steel = makeToonMaterial(PALETTE.steel);
+    for (const x of [-11, 11]) for (const z of [-2.5, 2.5]) f.add(box(steel, 0.4, 8, 0.4, x, 0, z));
+    f.add(box(makeToonMaterial(PALETTE.navy), 25, 0.6, 7, 0, 8, 0));
+    f.add(box(makeToonMaterial(PALETTE.coral), 25.2, 0.8, 0.3, 0, 7.6, s > 0 ? -3.6 : 3.6));
+    f.add(box(makeToonMaterial(0xb07a4a, { surface: "wood" }), 20, 1.6, 1.6, 0, 0, 0));
+    g.add(f);
+  }
   return g;
 }
 
@@ -135,11 +219,16 @@ function trees(list) {
   const conifer = mergeGeometries([cone(0.5, 0.5, 0.18), cone(0.38, 0.42, 0.45), cone(0.25, 0.34, 0.7)]);
   const round = new THREE.IcosahedronGeometry(0.36, 1).scale(1, 0.9, 1).translate(0, 0.62, 0);
   const trunk = new THREE.CylinderGeometry(0.05, 0.07, 0.4, 6).translate(0, 0.2, 0);
-  const kinds = { conifer: list.filter((t) => t.kind === "conifer"), round: list.filter((t) => t.kind === "round") };
+  // Chunky "cluster" canopies (three blobs, the cricket clip's voxel-ish trees) and tall poplars,
+  // so the island is not one repeated tree.
+  const blob = (r, x, y, z) => new THREE.IcosahedronGeometry(r, 0).translate(x, y, z);
+  const cluster = mergeGeometries([blob(0.3, 0, 0.62, 0), blob(0.24, 0.2, 0.5, 0.1), blob(0.22, -0.18, 0.52, -0.08), blob(0.2, 0.02, 0.8, 0.05)]);
+  const poplar = new THREE.ConeGeometry(0.16, 0.95, 6).scale(1, 1, 1).translate(0, 0.3 + 0.47, 0);
+  const kinds = Object.fromEntries(["conifer", "round", "cluster", "poplar"].map((k) => [k, list.filter((t) => t.kind === k)]));
   const out = [];
   const c = new THREE.Color();
-  for (const [k, geo] of [["conifer", conifer], ["round", round]]) {
-    const inst = new THREE.InstancedMesh(geo, makeToonMaterial(0xffffff), kinds[k].length);
+  for (const [k, geo] of [["conifer", conifer], ["round", round], ["cluster", cluster], ["poplar", poplar]]) {
+    const inst = new THREE.InstancedMesh(geo, makeToonMaterial(0xffffff, { surface: "foliage" }), kinds[k].length);
     kinds[k].forEach((t, i) => {
       place(inst, i, [t.p[0], t.y ?? 0, -t.p[1]], t.yaw, t.h);
       inst.setColorAt(i, c.set(t.color));
@@ -147,7 +236,7 @@ function trees(list) {
     inst.castShadow = inst.receiveShadow = true;
     out.push(inst);
   }
-  const tr = new THREE.InstancedMesh(trunk, makeToonMaterial(PALETTE.trunk), list.length);
+  const tr = new THREE.InstancedMesh(trunk, makeToonMaterial(PALETTE.trunk, { surface: "wood" }), list.length);
   list.forEach((t, i) => place(tr, i, [t.p[0], t.y ?? 0, -t.p[1]], 0, t.h));
   tr.castShadow = true;
   out.push(tr);
@@ -190,24 +279,16 @@ function kiosk({ p, yaw }) {
   return g;
 }
 
-/** Pennants along the roof's front edge. */
-function flags(path) {
+/** Pennants along the roof's front edge: their poles and flags join the park's waving flags. */
+function roofFlags(path, flags, poles) {
   const n = normals(path);
-  const pts = path.filter((_, i) => i % 8 === 4).map((p, k) => ({ p, n: n[path.indexOf(p)], k }));
-  const poleG = new THREE.CylinderGeometry(0.15, 0.15, 10, 5).translate(0, 5, 0);
-  const flagG = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 10, 0), new THREE.Vector3(0, 7, 0), new THREE.Vector3(5, 8.5, 0)]);
-  flagG.computeVertexNormals();
-  const poles = new THREE.InstancedMesh(poleG, makeToonMaterial(PALETTE.steelLight), pts.length);
-  const fl = new THREE.InstancedMesh(flagG, makeToonMaterial(0xffffff, { side: THREE.DoubleSide }), pts.length);
-  const c = new THREE.Color();
   const cols = [PALETTE.mustard, PALETTE.teal, PALETTE.coral, PALETTE.cream];
-  pts.forEach(({ p, n: nn, k }, i) => {
-    const q = [p[0] + nn[0] * 57, p[1] + nn[1] * 57];
-    place(poles, i, [q[0], 92.5, -q[1]]);
-    place(fl, i, [q[0], 92.5, -q[1]], 0.6);
-    fl.setColorAt(i, c.set(cols[k % cols.length]));
+  path.forEach((p, i) => {
+    if (i % 8 !== 4) return;
+    const q = [p[0] + n[i][0] * 57, p[1] + n[i][1] * 57];
+    poles.push({ p: q, y: 92.5, s: [1, 10, 1] });
+    flags.push({ base: [q[0], 92.5 + 9.8, -q[1]], yaw: 0.6, len: 5, h: 3, color: cols[(i >> 3) % cols.length], pennant: true });
   });
-  return [poles, fl];
 }
 
 /**
@@ -226,7 +307,9 @@ function islandRock(centre, radius, depth, seed) {
     if (!jit.has(key)) jit.set(key, [R(), R()]);
     const [a, b] = jit.get(key);
     const top = y > -0.01;
-    const t = -y / depth; // 0 at the top, 1 at the tip
+    // 0 at the top, 1 at the tip. Clamped: float error can put the tip ring a hair past 1, and a
+    // negative base to a fractional power is NaN (three's "computeBoundingSphere: radius is NaN").
+    const t = Math.min(1, -y / depth);
     const profile = t < 0.15 ? 1 - 0.15 * t : 0.98 * (1 - (t - 0.15) / 0.85) ** 1.4 + 0.03;
     const k = top ? 1 : profile * (1 + (a - 0.5) * 0.22);
     pos.setXYZ(i, x * k, top ? -0.3 : y + (b - 0.5) * depth * 0.05, z * k);
@@ -271,7 +354,7 @@ function islets() {
  * Props, given the plan (tree / umbrella / kiosk placements) and the light towers' sites.
  * @returns {THREE.Group}
  */
-export function buildProps(plan) {
+export function buildProps(plan, flags, poles) {
   const g = new THREE.Group();
   const lampSlots = [];
   for (const t of plan.towers) g.add(lightTower(t.p, t.h, lampSlots));
@@ -285,9 +368,12 @@ export function buildProps(plan) {
   });
   g.add(lamps);
   g.add(foulPole(POLE_R, 1), foulPole(POLE_L, -1));
-  g.add(scoreboard(24, fenceDistFt(24) + BLEACHER_GAP_FT + plan.bleacherDepth + 20));
-  g.add(distanceMarkers(), battersEye(), bullpens());
-  g.add(...trees(plan.trees), ...umbrellas(plan.umbrellas), ...plan.kiosks.map(kiosk), ...flags(plan.roofPath));
+  const board = scoreboard(24, fenceDistFt(24) + BLEACHER_GAP_FT + plan.bleacherDepth + 20);
+  g.userData.setBoard = board.userData.setBoard;
+  g.add(board);
+  g.add(distanceMarkers(), battersEye(), bullpens(), wallAds());
+  g.add(...trees(plan.trees), ...umbrellas(plan.umbrellas), ...plan.kiosks.map(kiosk));
+  roofFlags(plan.roofPath, flags, poles);
   g.add(islandRock(ISLAND.centre, ISLAND.radiusFt, 460, 3), islets());
   for (const b of plan.banners) {
     const f = frameAt(b.p, b.dir);

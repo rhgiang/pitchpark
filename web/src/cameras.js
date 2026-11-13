@@ -39,40 +39,38 @@ export function batterEye(stand) {
   return { position, target: position.map((v, i) => v + 10 * dir[i]) };
 }
 
-// Catcher's view (the main view): centred behind the plate at a crouched catcher's eye.
-// Depth: the catcher must stay in the catcher's box until the pitch is released (OBR 5.02(a)); the
-// box starts at the batter's boxes' back line, y ~ -2.3 ft (see above), so his feet are just
-// behind it and his eyes, leaning forward over them, are at about y = -2.5 ft.
-// Height: an estimate from Drillis & Contini (1966) segment proportions for a 6 ft 1 in catcher
-// (MLB catchers average about that): in a deep crouch his hips are ~1.2 ft up (shins ~45 deg), and
-// hip-to-eye is ~0.41 x stature = 2.5 ft, ~2.35 ft tall with the torso leaning ~20 deg forward,
-// so the eyes are ~3.5 ft up. Not a measurement.
-export const CATCHER_Y_FT = -2.5;
-export const CATCHER_EYE_HEIGHT_FT = 3.5;
-// Aim and FOV: chosen like the batter's eye, with the same visible-flight rule (grid search over
-// every exported pitch, 2026-11-11, at 16:9 within 95% of the frame: zone corners, release, and
-// the visible end of the Statcast-fit, simulated and no-spin paths). Needs 69.6 deg. The plate is
-// only ~4 ft away, so the lowest visible arrivals (balls reaching the dirt near the plate) set
-// the bottom edge and the release the top. (Counting the fit below ground needed 76.6 deg.)
-export const CATCHER_AIM_PITCH_DEG = -7.25;
-export const CATCHER_VFOV_DEG = 70;
+// Umpire's view (the main view; Ryan, 2026-11-12): a standing home-plate umpire looking over the
+// catcher. Picked by Ryan from a side-by-side with the catcher's eye (70 deg FOV) and 4.5 ft back.
+// Depth: the catcher's eyes are at about y = -2.5 ft (he must stay in the catcher's box, which starts
+// at the batter's boxes' back line, y ~ -2.3 ft, OBR 5.02(a)); the umpire stands about 2.5 ft behind
+// him -> y = -5.0 ft. Height: standing eye height is ~0.936 x stature (Drillis & Contini 1966); for a
+// ~6 ft 1 in umpire that is ~5.7 ft, less ~1 ft for the knees-bent "slot" stance he takes to see over
+// the catcher's head -> 4.75 ft. Estimates, not measurements.
+export const UMPIRE_Y_FT = -5.0;
+export const UMPIRE_EYE_HEIGHT_FT = 4.75;
+// Aim and FOV: framing choices with the same visible-flight rule as the batter's eye (every exported
+// pitch, 16:9, within 95% of the frame: zone corners, release, and the visible end of the
+// Statcast-fit, simulated and no-spin paths). 44 deg is the narrowest that passes at this aim
+// (controller's grid search, 2026-11-12); checked by test/cameras.test.js.
+export const UMPIRE_AIM_PITCH_DEG = -15;
+export const UMPIRE_VFOV_DEG = 44;
 
 /**
- * Catcher's-eye camera, the same for both batter sides: on the plate's centre line (x = 0),
+ * Umpire's-eye camera, the same for both batter sides: on the plate's centre line (x = 0),
  * looking straight out at the pitcher, tilted down so the zone sits mid-frame.
  * @returns {{position: number[], target: number[], vfovDeg: number}} Statcast feet.
  */
-export function catcherView() {
-  const pitch = (CATCHER_AIM_PITCH_DEG * Math.PI) / 180;
-  const position = [0, CATCHER_Y_FT, CATCHER_EYE_HEIGHT_FT];
+export function umpireView() {
+  const pitch = (UMPIRE_AIM_PITCH_DEG * Math.PI) / 180;
+  const position = [0, UMPIRE_Y_FT, UMPIRE_EYE_HEIGHT_FT];
   return {
     position,
-    target: [0, CATCHER_Y_FT + 10 * Math.cos(pitch), CATCHER_EYE_HEIGHT_FT + 10 * Math.sin(pitch)],
-    vfovDeg: CATCHER_VFOV_DEG,
+    target: [0, UMPIRE_Y_FT + 10 * Math.cos(pitch), UMPIRE_EYE_HEIGHT_FT + 10 * Math.sin(pitch)],
+    vfovDeg: UMPIRE_VFOV_DEG,
   };
 }
 
-// Other views. Vertical FOVs are framing choices (the batter's eye needs 67 deg; these do not).
+// Other views. Vertical FOVs are framing choices (the batter's eye needs 63.5 deg; these do not).
 export const SIDE_VFOV_DEG = 35;
 export const RIDE_VFOV_DEG = 60;
 export const FREE_VFOV_DEG = 50;
@@ -135,3 +133,38 @@ export function rideAlong(path, t_s, release, throws) {
 export const FREE_START = { position: [35, -18, 16], target: [0, 27, 4] };
 export const FREE_MIN_DIST_FT = 2;
 export const FREE_MAX_DIST_FT = 2200; // out to the whole floating island (~1300 ft across); far plane is 6000
+
+/*
+ * Intro sweep (the cricket clip's wide-to-low move): from high over the whole floating island down
+ * to the umpire's spot, played on load and on a key. A path in polar coordinates about home plate:
+ * - distance r falls geometrically (log-linear) from 1400 ft to the umpire's 5 ft, so the move
+ *   feels even at every scale (each second covers the same *ratio* of distance);
+ * - height falls likewise but on e^3, so it stays high until the last third and only drops once
+ *   it is inside the stands (it must clear the 93 ft roof behind home, then the 32 ft net);
+ * - the bearing swings from the left-field side round to straight behind home, settling early;
+ * - the aim slides from the middle of the park to the umpire's aim point.
+ * e is a smootherstep of t / INTRO_S (zero speed and acceleration at both ends).
+ */
+export const INTRO_S = 9;
+const INTRO_START = { rFt: 1400, hFt: 650, bearingDeg: 300, vfovDeg: 50, aim: [0, 170, 0] };
+
+/**
+ * Camera pose t s into the intro sweep (clamped to [0, INTRO_S]); at INTRO_S it is umpireView().
+ * @returns {{position: number[], target: number[], vfovDeg: number}} Statcast feet.
+ */
+export function introSweep(t) {
+  const u = umpireView();
+  const x = Math.min(1, Math.max(0, t / INTRO_S));
+  const e = x * x * x * (x * (6 * x - 15) + 10); // smootherstep
+  if (e >= 1) return u;
+  const r0 = Math.hypot(u.position[0], u.position[1]); // 5 ft behind the plate
+  const r = INTRO_START.rFt * (r0 / INTRO_START.rFt) ** e;
+  const h = INTRO_START.hFt * (u.position[2] / INTRO_START.hFt) ** (e ** 3);
+  const bearing = ((180 + (INTRO_START.bearingDeg - 180) * (1 - e) ** 2) * Math.PI) / 180;
+  const k = e ** 1.5;
+  return {
+    position: [r * Math.sin(bearing), r * Math.cos(bearing), h],
+    target: INTRO_START.aim.map((v, i) => v + (u.target[i] - v) * k),
+    vfovDeg: INTRO_START.vfovDeg + (u.vfovDeg - INTRO_START.vfovDeg) * e,
+  };
+}
