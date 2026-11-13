@@ -19,10 +19,12 @@ DECISION_Y_FT = 25.0
 
 # Reference extension for perceived velocity. Statcast describes effective speed as the
 # speed "perceived by the batter" given extension, relative to an average pitcher. We use
-# the same time-equivalent definition with 6.0 ft as the reference (approximately MLB
-# average extension). ASSUMPTION: Statcast's exact reference is not published in the files
-# we have; Task 10 compares against `effective_speed` and may retune this constant.
-PERCEIVED_REF_EXT_FT = 6.0
+# the same time-equivalent definition. Statcast's reference isn't published; Task 2 assumed
+# 6.0 ft, which ran ~0.6 mph above `effective_speed` for all five pitchers. 6.34 ft is the value
+# that best fits `effective_speed` on the TRAINING games of the five M3 pitchers pooled (grid
+# search, median |diff|; scripts/m4_checks.py prints it). On held-out games it cuts the median
+# |diff| from 0.63 to 0.25 mph (results/M4.md). Fitted on nothing but that comparison.
+PERCEIVED_REF_EXT_FT = 6.34
 
 
 def approach_angles_deg(vel_plate: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

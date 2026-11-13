@@ -87,6 +87,35 @@ python scripts/seam_split_check.py                    # real data, four differen
 
 This writes `results/m3/<pitcher>/` (summary and knock-on CSVs, one PNG per pitch type).
 
+## M4: the batter's-eye viewer
+
+**Status: done, pending Ryan's live-fps check.** M4 is a Three.js viewer of a stylised, code-built
+ballpark. You pick a pitcher and one of his held-out at-bats, then watch each pitch fly in one of
+three ways: as Statcast's fit, as M1 + M3, or both at once (ghost mode). There are five views
+(umpire, batter, side, ride, free), a trail and a no-spin reference line. A skinned pitcher's hand
+sits on the real release point.
+
+Checks, all from [`results/M4.md`](results/M4.md):
+
+- **Truth test:** the viewer reproduces the exported paths within 0.0025 in, over 3,400 real
+  pitches.
+- **Perceived velocity:** within 0.21–0.32 mph of Statcast's `effective_speed` per pitcher, on
+  held-out games. This is after one reference extension was fitted on training games.
+- **Approach angles:** no public Savant reference was found, so they rest on hand-worked tests.
+- **Tunneling math:** unit-tested.
+
+To run it:
+
+```bash
+python scripts/export_viewer.py data/raw/<pitcher>.csv [more.csv ...] --out web/public/data
+cd web && npm install && npm run dev      # open the printed URL; press ? for keys
+npm test                                  # truth and framing tests
+python scripts/m4_checks.py data/raw/<pitcher>.csv [...]   # writes results/m4/checks.csv
+```
+
+Pass all five CSVs to `export_viewer.py` in one run: it rewrites `web/public/data/index.json`
+each time. The exported JSON is gitignored.
+
 ## Files
 
 | File | What it does |
@@ -99,6 +128,9 @@ This writes `results/m3/<pitcher>/` (summary and knock-on CSVs, one PNG per pitc
 | `scripts/seam_controls.py` | M3 controls on synthetic pitches: what the method finds when the truth is known. |
 | `scripts/seam_bound_check.py` | Record of the efficiency bound change: real results at the old 0.20 vs the new 0.01, plus the Spearman figures. |
 | `scripts/seam_split_check.py` | M3: pass counts when a different set of games is held out (split seeds 0-3). |
+| `src/pitchsim/tunneling.py`, `src/pitchsim/export.py`, `scripts/export_viewer.py` | M4: approach angles, perceived velocity, tunnel separation; held-out at-bats as JSON for the viewer. |
+| `scripts/m4_checks.py` | M4 checks: perceived velocity vs `effective_speed`, approach angles per pitch type. |
+| `web/` | M4 viewer (Three.js + Vite): cameras, HUD, pitcher figure, starter park in `web/src/park/`. |
 | `src/pitchsim/synthetic.py` | Fake pitcher with known physics, for testing without the internet. |
 | `tests/` | Checks against known numbers: ~0.4 s flight, ~8% speed loss, realistic rise, Coors effect. |
 
