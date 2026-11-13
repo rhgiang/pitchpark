@@ -3,11 +3,13 @@
     python scripts/m4_checks.py data/raw/<pitcher>.csv [more.csv ...]
 
 Held-out games only (validation.split_by_game, seed 0, the M1-M3 split). Writes
-results/m4/checks.csv with one row per pitcher and pitch type plus an "ALL" row per pitcher:
+results/m4/checks.csv with one row per pitcher and pitch type plus an "ALL" row per pitcher, a POOLED row (all held-out
+pitches) and a TRAIN_POOLED row (the training games the constant was tuned on):
 
 - perc_med_abs_diff_mph: median |perceived_velocity_mph - effective_speed| on held-out pitches,
   with tunneling.PERCEIVED_REF_EXT_FT as it is now; perc_med_diff_mph is the signed median.
 - perc_med_abs_diff_mph_ref6: the same with the Task 2 assumption (6.0 ft), for before/after.
+- perc_med_diff_mph_ref6: its signed median.
 - vaa_med_deg / haa_med_deg: median approach angles from the Statcast-fit velocity at the
   front of the plate (what the viewer shows).
 
@@ -51,6 +53,7 @@ def _row(pitcher: str, ptype: str, d: pd.DataFrame) -> dict:
             "perc_med_abs_diff_mph": round(float(np.median(np.abs(diff))), 3),
             "perc_med_diff_mph": round(float(np.median(diff)), 3),
             "perc_med_abs_diff_mph_ref6": round(float(np.median(np.abs(diff6))), 3),
+            "perc_med_diff_mph_ref6": round(float(np.median(diff6)), 3),
             "vaa_med_deg": round(float(d["vaa"].median()), 2),
             "haa_med_deg": round(float(d["haa"].median()), 2)}
 
@@ -61,7 +64,7 @@ def main():
     ap.add_argument("--out", default=str(ROOT / "results" / "m4" / "checks.csv"))
     args = ap.parse_args()
 
-    rows, train_all = [], []
+    rows, train_all, test_all = [], [], []
     for csv in args.csv:
         df = clean(pd.read_csv(csv))
         train, test = split_by_game(df, seed=0)
@@ -69,9 +72,15 @@ def main():
         _, vel, _ = fit_plate_crossing(test)
         vaa, haa = approach_angles_deg(vel)
         test = test.copy().assign(vaa=vaa, haa=haa)  # copy() defragments (pandas warns otherwise)
+        test_all.append(test)
         name = str(df["player_name"].iloc[0])
         rows += [_row(name, k, g) for k, g in test.groupby("pitch_type")]
         rows.append(_row(name, "ALL", test))
+
+    # POOLED: all given pitchers' held-out pitches together (the figure M4.md quotes);
+    # TRAIN_POOLED: the training games the reference extension was tuned on (vaa/haa not computed).
+    rows.append(_row("POOLED", "ALL", pd.concat(test_all)))
+    rows.append(_row("TRAIN_POOLED", "ALL", pd.concat(train_all).copy().assign(vaa=np.nan, haa=np.nan)))
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

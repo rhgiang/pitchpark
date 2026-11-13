@@ -67,6 +67,12 @@ test("result is gated: not landed at release or mid-flight, landed once tick rea
   assert.equal(landed(reduce(s, { type: "nextPitch" })), true);
 });
 
+test("a landed pitch stays landed after a mode switch (sim path may be longer than the real one)", () => {
+  let s = run(loaded(), { type: "pickAtBat", index: 0 }, { type: "replay" }, { type: "tick", dt: 5 });
+  assert.equal(landed(s), true);
+  assert.equal(landed(reduce(s, { type: "setMode", mode: "ghost" })), true);
+});
+
 test("ghost choice survives a no_model pitch and returns on the next modelled one", () => {
   let s = run(loaded(), { type: "pickAtBat", index: 1 }, { type: "setMode", mode: "ghost" },
     { type: "nextPitch" });

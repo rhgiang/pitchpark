@@ -41,10 +41,11 @@ export function flightEnd(s) {
 
 /**
  * Has the current pitch landed? Gates the result, at-bat event and "in the dirt" note so the HUD
- * never spoils a pitch before it arrives. A pitch with no flight (no_tracking) counts as landed.
+ * never spoils a pitch before it arrives. A pitch with no flight (no_tracking) counts as landed,
+ * and so does one already seen (a mode switch must not hide the result again).
  */
 export function landed(s) {
-  return shownPaths(s).length === 0 || (s.t > 0 && s.t >= flightEnd(s));
+  return shownPaths(s).length === 0 || (s.t > 0 && s.t >= flightEnd(s)) || s.seen > s.pitchIndex;
 }
 
 /**

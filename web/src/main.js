@@ -92,6 +92,8 @@ function updateCamera() {
  */
 let intro = null;
 function startIntro(t = 0, frozen = false) {
+  // Leaving Free for the intro: endIntro clears appliedView, so save the orbit here.
+  if (appliedView === "free") freePose = { position: camera.position.clone(), target: controls.target.clone() };
   if (state.data && state.view !== "umpire") dispatch({ type: "setView", view: "umpire" });
   intro = { t, frozen };
   controls.enabled = false;
@@ -143,7 +145,7 @@ function dispatch(action) {
   const pitch = currentPitch(state);
   if (ab !== shown.ab) buildStrip(state, (i) => dispatch({ type: "goPitch", index: i }));
   if (pitch !== shown.pitch) { // zone height is per pitch (Statcast sz_top / sz_bot)
-    if (zone) scene.remove(zone);
+    if (zone) { scene.remove(zone); zone.geometry.dispose(); zone.material.dispose(); }
     zone = pitch.sz_top_ft == null ? null : buildZone(pitch.sz_top_ft, pitch.sz_bot_ft);
     if (zone) scene.add(zone);
     // Each pitch has its own release and arm angle; a no_tracking row may have no release, so
@@ -168,6 +170,7 @@ async function pickPitcher(slug) {
     figure.traverse((o) => {
       o.geometry?.dispose();
       for (const m of [o.material ?? []].flat()) m.dispose();
+      o.skeleton?.dispose(); // bone texture
     });
   }
   figure = makePitcher(data.pitcher.throws);
@@ -243,7 +246,7 @@ for (const v of VIEWS) $(`view-${v}`).onclick = () => dispatch({ type: "setView"
 for (const v of SPEEDS) $(`speed-${v}`).onclick = () => dispatch({ type: "setSpeed", speed: v });
 $("tod").onclick = cycleTimeOfDay;
 
-// Initial state from the URL, e.g. ?pitcher=sale-chris&ab=0&pitch=2&t=0.3&mode=ghost&nospin=1
+// Initial state from the URL, e.g. ?pitcher=sale-chris&ab=0&pitch=2&t=0.3&mode=ghost&nospin=1&view=umpire
 // (frozen at t, for screenshots); ab=random&seed=N picks a seeded random at-bat.
 const q = new URLSearchParams(location.search);
 // ?tod=day|sunset|night (unknown names fall back to day).

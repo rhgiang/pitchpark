@@ -58,7 +58,7 @@ short comments. Small steps with Ryan's OK between them.
 - **Side view:** whole flight, release to plate, to see drop and arc.
 - **Free camera:** orbit and zoom anywhere, including pulled right out to the whole park.
 - **Ride with the ball:** the camera chases the ball, with its spin shown.
-- Out (Ryan's picks): catcher/umpire view, centre-field TV view (better once M5 adds a delivery).
+- Out (Ryan's picks; *superseded 2026-11-12: the umpire's view became the main view*): catcher/umpire view, centre-field TV view (better once M5 adds a delivery).
 - *(Claude's call)* Switch views by key or button; any pitch can be replayed in any view.
 
 ### What happens (Ryan agreed to Claude's proposal)
@@ -93,14 +93,14 @@ Fully simulated at-bats are **not** M4.
   labelled and kept out of `web/` data.
 
 ### Changes after the first look review (Ryan, 2026-11-10)
-- **Main view is the catcher's view**, not the batter's: camera centred behind the plate at a
+- **Main view is the catcher's view** *(superseded 2026-11-12: the main view is the Umpire view; the "far narrower FOV" guess below was wrong, see the update)*, not the batter's: camera centred behind the plate at a
   crouched catcher's eye height, zone in the middle of the frame, pitcher straight ahead. The
   batter's eye stays as an alternate view. **Update (Ryan, 2026-11-12):** the main view sits at the home-plate
   umpire's spot, (0, -5.0, 4.75) ft, aim -15 deg, vertical FOV 44 deg (narrowest that frames every
   visible pitch), chosen from a side-by-side with the catcher's eye (70 deg) and 4.5 ft back (35 deg). *(Claude's call: the framing test from Task 4 applies
   to the catcher's view, which should need a far narrower FOV.)*
 - **Interface: layout A "broadcast" (Ryan picked it from mockups).** Scorebug top-left (count,
-  outs, inning, bases, pitcher, pitch type and speed); view tabs top-right (Catcher, Batter,
+  outs, inning, bases, pitcher, pitch type and speed); view tabs top-right (Catcher [now "Umpire", 2026-11-12], Batter,
   Side, Ride, Free); pitch strip of clickable dots coloured by result above the playback bar;
   playback bar bottom-centre (pitcher/at-bat picker button, prev, Throw, next, speed segment,
   Statcast / M1+M3 / Both segment); collapsible "The look" stats card bottom-right; "?" key help

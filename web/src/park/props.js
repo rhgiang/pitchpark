@@ -161,7 +161,9 @@ function distanceMarkers() {
   for (const a of [-45, -22.5, 0, 22.5, 45]) {
     const d = fenceDistFt(a);
     const m = new THREE.Mesh(new THREE.PlaneGeometry(9, 4.5),
-      makeToonMaterial(0xffffff, { map: textTexture(String(Math.round(d)), { fg: "#f4ead2", font: "bold 110px sans-serif" }), transparent: true, depthWrite: false }));
+      makeToonMaterial(0xffffff, { map: textTexture(String(Math.round(d)), { fg: "#f4ead2", font: "bold 110px sans-serif" }), transparent: true, depthWrite: false,
+        // Polygon offset as on the wall ads: 0.08 ft off a fence ~375 ft away is below depth resolution.
+        polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8 }));
     // Along the wall itself (it is not square to the line from home: it bends in toward the
     // poles), a hair in front of it; frameAt's local +z then faces the field.
     const a0 = polar(a - 0.5, fenceDistFt(a - 0.5)), a1 = polar(a + 0.5, fenceDistFt(a + 0.5));

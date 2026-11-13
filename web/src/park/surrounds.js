@@ -348,7 +348,3 @@ export function buildFlags(flags, poles) {
   return [pole, wavingFlags(flags)];
 }
 
-/** Run every child's userData.tick(t) (flags, fountains, waterfall, clock). */
-export function tickAll(root, t) {
-  root.traverse((o) => o.userData.tick?.(t));
-}

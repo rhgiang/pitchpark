@@ -12,7 +12,7 @@ import numpy as np
 RUBBER_Y_FT = 60.5
 
 # Hitter's decision point: ~23.6 ft in front of the plate's front edge (y = 25 ft in the
-# plate-back-tip frame, i.e. inside the 23-25 ft range). The ball is ~0.167 s from the plate;
+# plate-back-tip frame, i.e. inside the 23-25 ft range). The ball is ~0.18 s from the plate;
 # after that a hitter cannot meaningfully change the swing (Baseball Prospectus tunneling
 # articles, "tunnel point", ~20-25 ft).
 DECISION_Y_FT = 25.0
