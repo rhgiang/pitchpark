@@ -1,4 +1,4 @@
-"""Tests for the fetch/cache/conditions layer.  No network."""
+﻿"""Tests for the fetch/cache/conditions layer.  No network."""
 
 import json
 
@@ -7,7 +7,9 @@ import pandas as pd
 import pytest
 
 from pitchsim.data import (VENUE_ELEVATION_FT, add_air_density, fetch_game_conditions,
-                           fetch_pitcher, lookup_id, parse_game_feed)
+                           fetch_pitcher, load_seasons, lookup_id, mark_cross_season,
+                           parse_game_feed)
+from pitchsim.validation import split_by_game
 from pitchsim.physics import air_density
 
 COORS = {"gamePk": 1, "gameData": {"venue": {"id": 19, "name": "Coors Field"},
@@ -107,3 +109,28 @@ def test_lookup_id_no_match(monkeypatch):
                         lambda last, first: pd.DataFrame(columns=["key_mlbam"]))
     with pytest.raises(SystemExit, match="No MLB player found"):
         lookup_id("Nobody Here")
+
+
+# Synthetic rows (not real pitches): two seasons of one pitcher, written as two CSVs.
+def _two_seasons(tmp_path):
+    rows = pd.DataFrame({
+        "player_name": "Synthetic, Pitcher", "pitcher": 694819,
+        "game_year": [2025, 2025, 2026, 2026], "game_pk": [1, 2, 3, 4],
+        "pitch_type": ["SL", "FF", "SL", "FC"],
+        "pitch_name": ["Slider", "4-Seam Fastball", "Slider", "Cutter"]})
+    paths = []
+    for year, g in rows.groupby("game_year"):
+        paths.append(tmp_path / f"{year}.csv")
+        g.to_csv(paths[-1], index=False)
+    return paths
+
+
+def test_load_seasons_relabels_only_the_listed_season(tmp_path):
+    df = load_seasons(_two_seasons(tmp_path))
+    assert df["pitch_type"].tolist() == ["FC", "FF", "SL", "FC"]   # 2026 SL is untouched
+    assert df["pitch_name"].tolist() == ["Cutter", "4-Seam Fastball", "Slider", "Cutter"]
+
+
+def test_cross_season_split_holds_out_the_newest_season(tmp_path):
+    train, test = split_by_game(mark_cross_season(load_seasons(_two_seasons(tmp_path))), seed=123)
+    assert set(train["game_year"]) == {2025} and set(test["game_year"]) == {2026}
