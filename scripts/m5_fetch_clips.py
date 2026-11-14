@@ -25,10 +25,9 @@ def main() -> None:
     a = ap.parse_args()
 
     df = clean(pd.read_csv(a.csv))
-    df = df[bases_empty(df)]
     rng = np.random.default_rng(a.seed)
-    # split by game first (no leakage), then sample within each side
-    train, test = split_by_game(df, seed=0)
+    # split by game on all cleaned rows (same games as the rest of M5), then keep bases empty
+    train, test = (p[bases_empty(p)] for p in split_by_game(df, seed=0))
     parts = []
     for name, part, cap in (("train", train, a.max_train), ("test", test, a.max_test)):
         pick = part.iloc[np.sort(rng.permutation(len(part))[:cap])].copy()

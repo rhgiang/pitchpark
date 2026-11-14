@@ -93,10 +93,10 @@ def fetch_clips(df: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
     rows = []
     for (_, r), pid in zip(df.iterrows(), ids):
         path = out_dir / clip_name(r)
-        if pd.isna(pid):
-            status = "no_play_id"
-        elif path.exists():
+        if path.exists():   # a saved clip counts even if its feed lookup failed
             status = "cached"
+        elif pd.isna(pid):
+            status = "no_play_id"
         else:
             try:
                 url = clip_url_from_page(_get_page(pid))
