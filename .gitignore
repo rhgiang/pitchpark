@@ -9,3 +9,5 @@ web/public/data/
 web/node_modules/
 web/dist/
 .superpowers/
+third_party/
+.venv-pose/
