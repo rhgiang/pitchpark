@@ -58,8 +58,8 @@ better". Even Trajekt doesn't reproduce the pitcher's body today, so a believabl
   pitch, mostly the center-field broadcast camera.
 - **Hardware:** NVIDIA RTX 5060 Ti (16 GB), 32 GB RAM, Windows 11. This is a new (Blackwell) card:
   PyTorch needs a CUDA 12.8+ build, and some research repos pin older versions that won't run on it.
-- **Dependencies:** CLAUDE.md requires asking before adding PyTorch. **Ryan approves it for the 3D step
-  when he approves this document.** Heavy video/pose dependencies go in a **separate environment**
+- **Dependencies:** CLAUDE.md requires asking before adding PyTorch. **PyTorch is approved by Ryan for the 3D
+  step (2026-11-13)**, as a CUDA 12.8+ build that runs on the RTX 5060 Ti. Heavy video/pose dependencies go in a **separate environment**
   (e.g. `.venv-pose`) or an optional extra, so `pip install -e .` and the existing 89 tests stay light.
   Lightweight 2D pose (e.g. RTMPose via `rtmlib`/ONNX, or MediaPipe) is preferred where it is enough.
 - **Body model weights:** if the chosen 3D model needs the SMPL body-model files, those need a free
