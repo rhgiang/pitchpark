@@ -1,7 +1,7 @@
 """Task 4 tests, delivery.py.  ALL INPUTS ARE SYNTHETIC (seeded sigmoids / noise), not real pitcher data."""
 import numpy as np
 
-from pitchsim.pose.delivery import average_delivery, jitter, landmarks
+from pitchsim.pose.delivery import average_delivery, ground_root, jitter, landmarks
 
 HAND = 23  # right_hand
 
@@ -82,3 +82,20 @@ def test_average_rejects_tiny_output():
         assert "Savitzky" in str(e)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_ground_root_removes_root_depth_noise():
+    """SYNTHETIC: a rigid body whose root drifts wildly in depth (like the real lifts) while the pivot foot
+    is planted until foot strike and the lead foot after it.  Grounding must pin both feet."""
+    rng = np.random.default_rng(0)
+    n, fs = 80, 40
+    j = np.zeros((n, 24, 3))
+    j[:, 11] = [0.0, 0.0, 0.0]       # right toe (pivot for a righty) at origin ...
+    j[:, 10] = [0.2, 0.0, 0.0]       # left toe (lead) a stride away, relative to the body
+    j[fs:, 10, 2] = 0.0
+    root = np.zeros((n, 3))
+    root[:, 2] = rng.normal(0, 5.0, n)             # +-5 m depth noise on the whole body
+    jn = j + root[:, None, :]
+    g = ground_root(jn, "R", fs)
+    assert np.allclose(g[: fs + 1, 11], g[0, 11], atol=0.05)          # pivot pinned until strike
+    assert np.allclose(g[fs:, 10], g[fs, 10], atol=0.05)              # lead pinned afterwards

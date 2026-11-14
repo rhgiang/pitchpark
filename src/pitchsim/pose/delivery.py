@@ -9,6 +9,7 @@ from scipy.signal import savgol_filter
 # SMPL joint indices (same order as JOINTS in web/src/skeleton.js)
 _KNEE = {"L": 4, "R": 5}
 _ANKLE = {"L": 7, "R": 8}
+_TOE = {"L": 10, "R": 11}
 
 
 def _lead(throws: str) -> str:
@@ -117,3 +118,26 @@ def average_delivery(seqs: list[np.ndarray], marks: list[dict], pre_s: float, fp
     win = max(int(round(0.15 * fps_out)) | 1, 5)
     win = min(win, n_out if n_out % 2 else n_out - 1)
     return savgol_filter(avg, win, 3, axis=0), ri
+
+
+def ground_root(j: np.ndarray, throws: str, foot_strike: int | None = None) -> np.ndarray:
+    """Replace the lift's root translation with foot-planting, in the same frame as `j`.
+
+    Why: the monocular lift gets the body's pose relative to itself right but its position in the camera
+    frame wrong, especially depth (the real clips' pelvis depth jumps by 5-10 m between frames, which would
+    put the pitcher tens of feet from the rubber).  A pitcher's feet are planted, so use them as the world
+    reference: the pivot (throwing-side) foot stays where it started until foot strike, then the lead foot
+    stays where it landed.  Both are planted at foot strike, so the hand-over is continuous.
+    foot_strike=None grounds on the pivot foot for every frame (used to find foot strike itself).
+    The toe is used raw (not filtered): filtering it would leave the root noise in the body; any toe jitter
+    this copies into the body is removed by the averaging and Savitzky-Golay smoothing downstream.
+    """
+    if throws not in ("L", "R"):
+        raise ValueError("throws must be 'L' or 'R'")
+    j = np.asarray(j, float)
+    piv_i, lead_i = _TOE[throws], _TOE["L" if throws == "R" else "R"]
+    out = j - j[:, piv_i][:, None, :] + j[0, piv_i]
+    if foot_strike is not None:
+        lead = out[:, lead_i].copy()
+        out[foot_strike:] = out[foot_strike:] - lead[foot_strike:, None, :] + lead[foot_strike]
+    return out
