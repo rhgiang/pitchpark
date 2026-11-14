@@ -39,6 +39,11 @@ def main():
     args = ap.parse_args()
 
     raw = load_pitcher(args.csv, args.cross_season)
+    # The arm is modelled per season: release points shift between seasons by 1-2 within-season sds
+    # (results/data-refresh.md), so pooling would blur two arms into one. --cross-season keeps both
+    # seasons as the drift diagnostic.
+    if not args.cross_season and "game_year" in raw:
+        raw = raw[raw["game_year"] == raw["game_year"].max()].reset_index(drop=True)
     # Count on the full CSV (all pitch types) before clean() drops rows.
     if {"game_pk", "at_bat_number", "pitch_number"} <= set(raw):
         raw["pitch_count"] = pitch_count_in_game(raw)

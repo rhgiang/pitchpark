@@ -52,7 +52,7 @@ Sale, King and Sánchez are unchanged (2026 only).
 
 ## M2: the arm (classifier two-sample test; AUC 0.5 = can't tell real from generated)
 
-Pooled results are in the usual range: AUC 0.57–0.79, with a floor (real vs real) of 0.56–0.74.
+Pooled results (since replaced, see the decision below) were in the usual range: AUC 0.57–0.79, with a floor (real vs real) of 0.56–0.74.
 Pass counts are in the summary CSVs. The pooled results lose a couple of passes against single
 seasons, e.g. Ohtani FF 0.70 vs floor 0.68 now fails, because one Gaussian now has to cover two
 seasons' release points.
@@ -70,9 +70,19 @@ within-season spread for fastballs. Here is (newer − older) / within-season sd
 | Misiorowski 25→26 | −1.98 | −0.32 | −0.09 | 0.85 | 0.59 | 0.87 |
 
 Whether that is a real change (rubber position, arm slot) or a change in Hawk-Eye calibration between
-seasons can't be told from this data. **What to do about it:** a "replica of the pitcher" should be
-"of the pitcher in a given season". Either fit M2 on the latest season only, or add season as a
-context variable alongside fatigue and count. Not done here. It's a choice to make before M7.
+seasons can't be told from this data.
+
+**Decision (Ryan): M2 is fitted on the latest season only.** `train_generative.py` keeps the newest
+`game_year` unless `--cross-season` is given, and the pooled run above was replaced. The result is
+graded types passing with the best of Gaussian or mixture, held out within the latest season:
+
+| Pitcher | Pooled (both seasons) | Latest season only |
+|---|---|---|
+| Cease (2026) | 5 of 6 (CH fails) | **6 of 6** |
+| Ohtani (2026) | 3 of 5 (FF, SI fail) | 3 of 4 (CU fails; SI ungraded, 25 test pitches) |
+| Misiorowski (2026) | 3 of 4 (SL fails) | 3 of 4 (SL fails; identical to the pre-refresh 2026 run) |
+
+M1 and M3 keep pooling seasons. Their fits carry across years, and more data helps them.
 
 ## M3: extra push (median miss M1 only → M1 + per-pitch push; pass = drop ≥ 0.6 in and interval above 0)
 
@@ -126,7 +136,7 @@ context variable alongside fatigue and count. Not done here. It's a choice to ma
 
 ## Still wrong / open
 
-- M2's season shift (above): pick "latest season" or "season as context" before M7.
+- M2 now ignores older seasons. "Season as context" would use them, if the latest season is ever too thin.
 - The Misiorowski relabel is a judgement from season means, not from Statcast. If Savant's classifier
   changes again, `RELABEL` needs another look.
 - Cease's 2024 changeup and sinker are too rare to test cross-season.
