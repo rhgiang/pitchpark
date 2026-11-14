@@ -3,7 +3,8 @@
 scripts/m5_lift.py and writes these files).
 
 joints_m is (F, 24, 3) metres in SMPL joint order (identical to JOINTS in web/src/skeleton.js);
-`up` is the gravity-up unit vector in the same frame; `lifter` names the model + settings used.
+`up` is the gravity-up unit vector in the same frame (for HMR 2.0 that is the camera frame: x right, y DOWN,
+z away from the camera, so `up` has a negative y); `lifter` names the model + settings used.
 """
 from dataclasses import dataclass
 from pathlib import Path

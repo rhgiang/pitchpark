@@ -16,6 +16,12 @@ $env:UV_HTTP_TIMEOUT = "300"   # the torch wheel is 2.7 GB; the default timeout 
 $LIFTER_COMMIT = "efe18deff163b29dff87ddbd575fa29b716a356c"   # shubham-goel/4D-Humans the patch applies to
 $py = ".venv-pose\Scripts\python.exe"
 
+# Check the hand-downloaded prerequisite first, so a missing file fails before the 2.7 GB downloads.
+$smpl = "third_party\body_models\smpl\basicmodel_neutral_lbs_10_207_0_v1.1.0.pkl"
+if (-not (Test-Path $smpl)) {
+    throw "Missing $smpl. Register at https://smpl.is.tue.mpg.de, download 'version 1.1.0 for Python 2.7', and copy the .pkl files into third_party\body_models\smpl\"
+}
+
 # 1. venv + dependencies (working order: torch, build tools, chumpy without build isolation, the rest)
 if (-not (Test-Path $py)) {
     uv venv .venv-pose --python "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
@@ -29,12 +35,24 @@ uv pip install --python $py numpy scipy pandas opencv-python einops timm lightni
 $lifter = "third_party\4D-Humans"
 if (-not (Test-Path $lifter)) {
     git clone https://github.com/shubham-goel/4D-Humans $lifter
+    if ($LASTEXITCODE -ne 0) { throw "git clone failed" }
     git -C $lifter checkout $LIFTER_COMMIT
+    if ($LASTEXITCODE -ne 0) { throw "git checkout $LIFTER_COMMIT failed" }
 }
 $patch = (Resolve-Path "scripts\patches\4d-humans.patch").Path
-git -C $lifter apply --ignore-whitespace --check -R $patch 2>$null
-if ($LASTEXITCODE -eq 0) { "4D-Humans patch already applied" }
-else { git -C $lifter apply --ignore-whitespace $patch; "4D-Humans patch applied" }
+# "Does the reverse patch apply?" = "is it already applied?".  The check is expected to fail on a
+# clean checkout, so relax "Stop" for it: in PowerShell 5.1 a native command's stderr under "Stop"
+# would abort the script instead of just setting $LASTEXITCODE.
+$ErrorActionPreference = "Continue"
+git -C $lifter apply --ignore-whitespace --check -R $patch *> $null
+$applied = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = "Stop"
+if ($applied) { "4D-Humans patch already applied" }
+else {
+    git -C $lifter apply --ignore-whitespace $patch
+    if ($LASTEXITCODE -ne 0) { throw "4D-Humans patch did not apply" }
+    "4D-Humans patch applied"
+}
 
 # 3. official checkpoint + SMPL placed where the lifter expects them (HMR2_CACHE_PARENT/4DHumans/...)
 New-Item -ItemType Directory -Force third_party\hmr2_cache, third_party\hmr2_cache_parent | Out-Null
