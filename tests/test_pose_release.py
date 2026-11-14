@@ -47,3 +47,11 @@ def test_screen_no_pitcher_when_wrist_never_rises():
     p = synth()
     p.xy[:, 10, 1] = p.xy[:, 10, 1].max()   # wrist stays low: tracker is on a catcher/batter
     assert screen(p, "R") == (False, "no_pitcher")
+
+
+def test_release_frame_first_peak_beats_larger_later_peak():
+    """SYNTHETIC: release peak at 40, then a LARGER fielding/return-throw peak at 150."""
+    p = synth(n=200)
+    later = 60 * np.exp(-0.5 * ((np.arange(200) - 150) / 5.0) ** 2)
+    p.xy[:, 10, 0] += np.cumsum(later)
+    assert abs(release_frame(p, "R") - 40) <= 1

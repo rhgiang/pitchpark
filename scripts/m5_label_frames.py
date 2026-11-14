@@ -48,11 +48,17 @@ def sheets(d: Path, only: list[str]):
 
 
 def score(d: Path):
+    """Detector error vs hand labels.  fresh=no rows are IN-SAMPLE: the release rule (first peak
+    >= 0.5 x max) was chosen after seeing those labels.  fresh=yes rows were labelled after."""
     det = pd.read_csv(d / "pose2d.csv").set_index("clip")
     lab = pd.read_csv(LABELS)
-    err = (det.loc[lab["clip"], "release_frame"].to_numpy() - lab["release_frame_label"].to_numpy())
-    print(f"n={len(lab)} detector minus label (frames): median |err|={np.median(np.abs(err))}, "
-          f"max |err|={np.abs(err).max()}, signed median={np.median(err)}")
+    lab["err"] = det.loc[lab["clip"], "release_frame"].to_numpy() - lab["release_frame_label"].to_numpy()
+    for name, g in (("IN-SAMPLE (rule chosen after seeing these labels)", lab[lab["fresh"] == "no"]),
+                    ("FRESH (labelled after the rule was fixed)", lab[lab["fresh"] == "yes"])):
+        e = g["err"]
+        print(f"{name}: n={len(g)} median |err|={np.median(np.abs(e))} max |err|={np.abs(e).max()} "
+              f"within 2 frames={(np.abs(e) <= 2).sum()}/{len(g)}")
+        print(g[["clip", "release_frame_label", "err"]].to_string(index=False))
 
 
 if __name__ == "__main__":
