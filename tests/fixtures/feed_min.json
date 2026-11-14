@@ -1,0 +1,10 @@
+{"_note": "SYNTHETIC hand-trimmed feed for tests; ids are made up.",
+ "gamePk": 1,
+ "liveData": {"plays": {"allPlays": [
+  {"playEvents": [
+    {"isPitch": true, "playId": "aaa-1"},
+    {"isPitch": false, "type": "pickoff"},
+    {"isPitch": true, "playId": "aaa-2"}]},
+  {"playEvents": [
+    {"isPitch": true, "playId": "bbb-1"},
+    {"isPitch": true}]}]}}}
