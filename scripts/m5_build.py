@@ -3,8 +3,9 @@
 usage: python scripts/m5_build.py data/video/ohtani-shohei [--raw data/raw/660271_2026-....csv]
 
 Pipeline (train clips only ever feed the average; test clips are only measured):
-  screen lifts -> landmarks -> time-warp average -> anchor to Statcast feet -> metrics (BEFORE any
-  correction) -> correct_to_mean toward the season mean release -> write JSON.
+  screen lifts -> per clip: ground on the feet, landmarks, anchor to Statcast feet -> time-warp average of
+  the anchored train clips -> foot lock -> metrics (BEFORE any correction) -> bone-length-preserving
+  correct_to_mean toward the season mean release -> write JSON.
 Writes web/public/data/deliveries/<slug>.json + <slug>.clips.json (gitignored) and results/m5/metrics.csv.
 """
 import argparse
@@ -15,7 +16,8 @@ import pandas as pd
 
 from pitchsim.data import fetch_heights
 from pitchsim.export import write_json
-from pitchsim.pose.anchor import anchor, correct_to_mean, release_values
+from pitchsim.pose.anchor import (anchor, correct_to_mean, lock_feet, mound_z_ft, release_values,
+                                  segment_lengths)
 from pitchsim.pose.delivery import average_delivery, ground_root, jitter, landmarks
 from pitchsim.pose.joints3d import load_lift
 from pitchsim.statcast import clean
@@ -26,6 +28,7 @@ KEYS = ["release_x_ft", "release_z_ft", "extension_ft", "arm_angle_deg"]
 STAT = {"release_x_ft": "release_pos_x", "release_z_ft": "release_pos_z",
         "extension_ft": "release_extension", "arm_angle_deg": "arm_angle"}
 HAND = {"R": 23, "L": 22}
+HAND_TOE = {"R": (11, 10), "L": (10, 11)}  # (pivot toe, lead toe) SMPL joints for a R / L thrower
 
 # Why 15 deg: gravity-up should be near-constant for a fixed broadcast camera.  The 20 good clips are
 # within 12 deg of the median up; the one known bad lift is 56 deg off.  15 sits in that gap.
@@ -36,6 +39,13 @@ MIN_EXTENT_FRAC = 0.85
 PRE_COVER_FRAC = 0.85   # pre_s = longest lead-in that >= 85% of train clips cover
 PRE_CAP_S = 2.5
 POST_S = 0.6
+# Release POSE frame = hand label - 1.  The labelling rule marks the first frame the ball is visibly out of
+# the hand, so at the label the hand has already whipped past release (it moves ~2 ft per frame at 60 fps):
+# the 2D image-plane arm angle is 25-35 deg at label-3..-1 and jumps to ~-140 deg at the label in about
+# half the clips, and the per-clip 3D arm-angle median error vs Statcast is 21.6 deg at the label, 8.0 at
+# label-1, 1.8 at label-2 (controller's check, 2026-11-14).  label-1 is the last frame with the ball still
+# in hand, so it is the frame whose hand position Statcast's release point describes.
+RELEASE_POSE_OFFSET = -1
 
 
 def boot_ci(err: pd.Series, games: pd.Series, q: float, n: int = 1000, seed: int = 0):
@@ -138,27 +148,29 @@ def main():
     train = [c for c in clean_clips if split[c] == "train"]
     test = [c for c in clean_clips if split[c] == "test"]
 
-    # The lifts' root translation is unusable (pelvis depth jumps by metres), so ground each clip on its
-    # feet first (delivery.ground_root).  Foot strike itself is found on the pivot-grounded version.
-    G, marks = {}, {}
+    rp = {c: rel[c] + RELEASE_POSE_OFFSET for c in L}
+    # Canonicalise EACH clip before averaging: the clips come from different games and camera set-ups, so
+    # their lift (camera) frames differ; averaging there would mix frames.  The lifts' root translation is
+    # unusable (pelvis depth jumps by metres), so each clip is first grounded on its feet
+    # (delivery.ground_root; foot strike is found on the pivot-grounded version), then anchored into
+    # Statcast ft with its own gravity-up, the StatsAPI height and the pivot toe on the rubber.
+    A, marks = {}, {}
     for c in L:
-        lm = landmarks(ground_root(L[c].joints_m, throws), rel[c], throws, up=L[c].up)
-        G[c] = ground_root(L[c].joints_m, throws, lm["foot_strike"])
+        lm = landmarks(ground_root(L[c].joints_m, throws), rp[c], throws, up=L[c].up)
+        A[c] = anchor(ground_root(L[c].joints_m, throws, lm["foot_strike"]), L[c].up, height_ft, throws,
+                      rp[c], fps=L[c].fps)
         marks[c] = {**lm, "fps": L[c].fps}
-    avail = np.array([rel[c] / L[c].fps for c in train])
+    avail = np.array([rp[c] / L[c].fps for c in train])
     pre_s = float(np.floor(min(PRE_CAP_S, np.quantile(avail, 1 - PRE_COVER_FRAC, method="lower")) * 100) / 100)
     excl: list = []
-    avg_m, ri = average_delivery([G[c] for c in train], [marks[c] for c in train], pre_s,
-                                 fps_out=60.0, post_s=POST_S, excluded=excl)
+    avg_raw, ri = average_delivery([A[c] for c in train], [marks[c] for c in train], pre_s,
+                                   fps_out=60.0, post_s=POST_S, excluded=excl)
     short = list(dict.fromkeys(train[i] for i, _ in excl))
     for c in short:
         drop("short", c)
     train_used = [c for c in train if c not in short]
-    # average_delivery averages metres in the lift frame; anchor needs one gravity-up for all of them.
-    # The camera is fixed, so use the train-median up (per-clip tilt was screened above).
-    up_train = np.median(np.stack([L[c].up for c in train_used]), axis=0)
-    up_train /= np.linalg.norm(up_train)
-    avg_ft = anchor(avg_m, up_train, height_ft, throws, ri)
+    # Averaging lets planted feet creep a little (clips disagree slightly); lock them again on the average.
+    avg_ft = lock_feet(avg_raw, 60.0)
     rv_avg = release_values(avg_ft, ri, throws)
 
     # ---- metrics BEFORE correct_to_mean (hold-out: test clips never fed the average) ---------
@@ -166,8 +178,7 @@ def main():
         return pd.DataFrame({k: [sx[c][STAT[k]] for c in cs] for k in KEYS}, index=cs)
 
     def own_anchor(c):
-        j = anchor(G[c], L[c].up, height_ft, throws, rel[c], fps=L[c].fps)
-        return j, release_values(j, rel[c], throws)
+        return A[c], release_values(A[c], rp[c], throws)
 
     games = pd.Series({c: parse_clip(c)[0] for c in L})
     own = pd.DataFrame([own_anchor(c)[1] for c in test], index=test)
@@ -187,19 +198,32 @@ def main():
     for c in train_used:
         j, _ = own_anchor(c)
         f = L[c].fps
-        raw_jit.append(jitter(j[max(rel[c] - int(pre_s * f), 0): rel[c] + int(POST_S * f) + 1], f))
+        raw_jit.append(jitter(j[max(rp[c] - int(pre_s * f), 0): rp[c] + int(POST_S * f) + 1], f))
 
     # ---- correct_to_mean toward the season mean of bases-empty release values (Statcast, 2026) ----
     cl = clean(raw)
     bases_empty = cl[cl[["on_1b", "on_2b", "on_3b"]].isna().all(axis=1)]
     target = {k: float(bases_empty[STAT[k]].mean()) for k in KEYS}
-    # foot strike of the template: median offset before release (s), in output frames
-    fs_s = np.median([(marks[c]["foot_strike"] - marks[c]["release"]) / L[c].fps for c in train_used])
-    fs = int(round(ri + fs_s * 60.0))
-    final = correct_to_mean(avg_ft, ri, fs, throws, target)
+    # leg lift / foot strike of the template: median offsets before release (s), in output frames (the same
+    # medians average_delivery warps to)
+    ll_s, fs_s = (np.median([(marks[c][k] - marks[c]["release"]) / L[c].fps for c in train])
+                  for k in ("leg_lift", "foot_strike"))
+    ll, fs = int(round(ri + ll_s * 60.0)), int(round(ri + fs_s * 60.0))
+    cinfo: dict = {}
+    final = correct_to_mean(avg_ft, ri, fs, throws, target, leg_lift_index=ll, info=cinfo)
     rv_fin = release_values(final, ri, throws)
-    # The z shift moves the whole body (feet included); > 0.15 ft would float/sink the feet on the mound.
-    dz = target["release_z_ft"] - rv_avg["release_z_ft"]
+    # What the correction did to the body: bone lengths (vs its input; and the foot lock vs the raw
+    # average), and the planted feet (pivot toe until foot strike, lead toe after) in the final delivery.
+    seg_corr_ft = float(np.abs(segment_lengths(final) - segment_lengths(avg_ft)).max())
+    seg_lock_ft = float(np.abs(segment_lengths(avg_ft) - segment_lengths(avg_raw)).max())
+    seg_cv = segment_lengths(final).std(0) / segment_lengths(final).mean(0)
+    piv, lead = HAND_TOE[throws]
+    feet = {}
+    for nm, k, fr in (("pivot", piv, slice(0, fs + 1)), ("lead", lead, slice(fs, None))):
+        p = final[fr, k]
+        feet[nm] = {"drift_ft": float(np.ptp(p[:, :2], axis=0).max()),
+                    "height_err_ft": float(np.abs(p[:, 2] - mound_z_ft(p[:, 0], p[:, 1])).max())}
+    stride_ft = float(np.linalg.norm(final[fs, lead, :2] - final[0, piv, :2]))
 
     # ---- release-frame detector error vs hand labels (in-sample unless fresh) ------------------
     lab = labels.loc[[c for c in labels.index if c in pose.index]].copy()
@@ -214,16 +238,21 @@ def main():
     info = {}
     for c in L:
         j, rv = own_anchor(c)
-        info[c] = {"release_frame": rel[c], "fps": float(L[c].fps),
-                   "release": [round(float(v), 3) for v in j[rel[c], HAND[throws]]],
+        info[c] = {"release_frame": rel[c], "release_pose_frame": rp[c], "fps": float(L[c].fps),
+                   "release": [round(float(v), 3) for v in j[rp[c], HAND[throws]]],
+                   "extension_ft": round(rv["extension_ft"], 3),
                    "arm_angle_deg": round(rv["arm_angle_deg"], 2), "split": str(split[c])}
     write_json(info, out / f"{slug}.clips.json")
     res = Path(a.results)
     res.mkdir(parents=True, exist_ok=True)
     metrics.to_csv(res / "metrics.csv", index=False)
+    write_json({"target": target, "before": rv_avg, "after": rv_fin, "applied": cinfo,
+                "stride_ft": stride_ft, "max_segment_change_correction_ft": seg_corr_ft,
+                "max_segment_change_foot_lock_ft": seg_lock_ft, "planted_feet": feet,
+                "leg_lift_index": ll, "foot_strike_index": fs, "release_index": ri}, res / "correction.json")
 
     pd.set_option("display.width", 220)
-    print(f"\nheight {height_in} in; pre_s {pre_s}; release_index {ri}; foot_strike_index {fs}; "
+    print(f"\nheight {height_in} in; pre_s {pre_s}; release_index {ri}; leg_lift_index {ll}; foot_strike_index {fs}; "
           f"train used {len(train_used)}, test {len(test)}")
     print("\nYIELD  downloaded:", int(clips["status"].isin(["ok", "cached"]).sum()), "of", len(clips))
     for k, v in drops.items():
@@ -236,8 +265,16 @@ def main():
     print("\ncorrect_to_mean   before -> after (target)")
     for k in KEYS:
         print(f"  {k}: {rv_avg[k]:.3f} -> {rv_fin[k]:.3f} ({target[k]:.3f})  gap {target[k] - rv_avg[k]:+.3f}")
-    print(f"  z gap {dz:+.3f} ft -> "
-          f"{'EXCEEDS 0.15 ft: FEET MAY FLOAT/SINK' if abs(dz) > 0.15 else 'within 0.15 ft'}")
+    print("  applied:", {k: np.round(v, 3).tolist() if isinstance(v, (list, float)) else v for k, v in cinfo.items()})
+    print(f"  stride (pivot toe -> planted lead toe, horizontal) {stride_ft:.2f} ft: CONSTRUCTED to match "
+          f"Statcast's mean extension; this camera cannot measure it")
+    print(f"  max bone-length change: correction {seg_corr_ft * 304.8:.4f} mm, foot lock {seg_lock_ft * 304.8:.1f} mm; "
+          f"bone-length variation over time in the final (CV, from averaging): median {np.median(seg_cv):.3f}, "
+          f"max {seg_cv.max():.3f}")
+    for nm, v in feet.items():
+        print(f"  planted {nm} toe: drift {v['drift_ft'] * 12:.4f} in, height error {v['height_err_ft'] * 12:.4f} in")
+    ext = {c.replace(".mp4", ""): round(own_anchor(c)[1]["extension_ft"], 2) for c in clean_clips}
+    print("\nper-clip extension BEFORE correction (ft, label-1):", ext)
     for nm, g in (("IN-SAMPLE", lab[lab["fresh"] == "no"]), ("FRESH", lab[lab["fresh"] == "yes"])):
         print(f"\nrelease detector vs labels {nm}: n={len(g)} median|err|={g['err'].abs().median()} "
               f"max|err|={g['err'].abs().max()} within2={(g['err'].abs() <= 2).sum()}/{len(g)}")
