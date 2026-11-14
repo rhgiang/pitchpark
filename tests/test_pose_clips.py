@@ -29,6 +29,9 @@ def test_clip_url_from_page():
     assert clips.clip_url_from_page((FIX / "sporty_page.html").read_text()) == \
         "https://sporty-clips.mlb.com/abc123_1280x720_59.mp4"
     assert clips.clip_url_from_page("<html></html>") is None
+    # Real Savant pages sometimes escape the base64 padding.
+    assert clips.clip_url_from_page("<a href='https://sporty-clips.mlb.com/Zm9v&#x3D;&#x3D;.mp4'>") \
+        == "https://sporty-clips.mlb.com/Zm9v==.mp4"
 
 
 def test_fetch_clips_records_failures(tmp_path, monkeypatch):

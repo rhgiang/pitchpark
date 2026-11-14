@@ -5,6 +5,7 @@ Chain: StatsAPI live feed gives each pitch a ``playId``; Savant's ``sporty-video
 that id links one mp4.  Clips are for personal research only (see CLAUDE.md): never commit them.
 """
 
+import html as htmllib
 import json
 import re
 import urllib.error
@@ -67,7 +68,8 @@ def play_ids(df: pd.DataFrame, cache_path: Path = RAW_DIR / "play_ids.csv") -> p
 def clip_url_from_page(html: str) -> str | None:
     """First sporty-clips mp4 link in a Savant sporty-videos page, else None."""
     m = _MP4.search(html)
-    return m.group(0) if m else None
+    # Some pages HTML-escape the link's base64 padding ('=' as '&#x3D;').
+    return htmllib.unescape(m.group(0)) if m else None
 
 
 def _get_page(pid: str) -> str:
