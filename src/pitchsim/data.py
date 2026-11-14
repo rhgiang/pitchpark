@@ -6,6 +6,7 @@ temperature comes from the MLB StatsAPI live game feed, not from Statcast.
 """
 
 import json
+import re
 import urllib.request
 from collections.abc import Iterable
 from pathlib import Path
@@ -142,3 +143,32 @@ def add_air_density(df: pd.DataFrame, conditions: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["rho"] = [air_density(t, e) for t, e in zip(temp.fillna(70.0), elev)]
     return out
+
+
+PEOPLE_URL = "https://statsapi.mlb.com/api/v1/people/{id}"
+
+
+def parse_height(text: str) -> int:
+    """StatsAPI height like ``6' 3"`` -> inches (75)."""
+    m = re.fullmatch(r"\s*(\d+)'\s*(\d+)\"?\s*", text)
+    if not m:
+        raise ValueError(f"unparseable height: {text!r}")
+    return int(m[1]) * 12 + int(m[2])
+
+
+def fetch_heights(ids: Iterable[int], cache_path: Path = RAW_DIR / "people.csv") -> pd.Series:
+    """Height in inches per MLBAM id (index = id).  Only uncached ids hit the network.
+
+    The request carries a generic User-Agent and nothing else."""
+    ids = [int(i) for i in dict.fromkeys(ids)]
+    cache_path = Path(cache_path)
+    have = pd.read_csv(cache_path) if cache_path.exists() else pd.DataFrame(columns=["id", "height_in"])
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    for i in [i for i in ids if i not in set(have["id"])]:
+        req = urllib.request.Request(PEOPLE_URL.format(id=i), headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            h = parse_height(json.load(r)["people"][0]["height"])
+        pd.DataFrame([{"id": i, "height_in": h}]).to_csv(
+            cache_path, mode="a", header=not cache_path.exists(), index=False)
+    out = pd.read_csv(cache_path).drop_duplicates("id").set_index("id")["height_in"]
+    return out.loc[ids]

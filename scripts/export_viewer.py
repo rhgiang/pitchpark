@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from pitchsim.data import add_air_density, fetch_game_conditions
+from pitchsim.data import add_air_density, fetch_game_conditions, fetch_heights
 from pitchsim.export import export_pitcher, write_json
 from pitchsim.physics import air_density
 
@@ -46,7 +46,9 @@ def main():
             rho = pd.Series(air_density(70.0, 0.0), index=raw.index)
         else:
             rho = add_air_density(raw, fetch_game_conditions(raw["game_pk"].unique()))["rho"]
-        data = export_pitcher(raw, rho, dt_s=args.dt)
+        # Synthetic pitchers have no StatsAPI record.
+        height = None if "Synthetic" in name else int(fetch_heights([int(raw["pitcher"].iloc[0])]).iloc[0])
+        data = export_pitcher(raw, rho, dt_s=args.dt, height_in=height)
         path = out / f"{slug}.json"
         write_json(data, path)
         counts = pd.Series([p["status"] for a in data["at_bats"] for p in a["pitches"]])

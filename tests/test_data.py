@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from pitchsim.data import (VENUE_ELEVATION_FT, add_air_density, fetch_game_conditions,
-                           fetch_pitcher, lookup_id, parse_game_feed)
+                           fetch_pitcher, lookup_id, parse_game_feed, parse_height)
 from pitchsim.physics import air_density
 
 COORS = {"gamePk": 1, "gameData": {"venue": {"id": 19, "name": "Coors Field"},
@@ -107,3 +107,8 @@ def test_lookup_id_no_match(monkeypatch):
                         lambda last, first: pd.DataFrame(columns=["key_mlbam"]))
     with pytest.raises(SystemExit, match="No MLB player found"):
         lookup_id("Nobody Here")
+
+
+def test_parse_height():
+    assert parse_height("6' 3\"") == 75
+    assert parse_height("5' 11\"") == 71
