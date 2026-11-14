@@ -2,7 +2,7 @@
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from pitchsim.pose.anchor import anchor, correct_to_mean, release_values
+from pitchsim.pose.anchor import anchor, correct_to_mean, mound_z_ft, release_values, segment_lengths
 
 RUBBER_Y, MOUND_Z = 60.5, 10 / 12
 
@@ -44,15 +44,35 @@ def test_feet_do_not_slide():
         assert np.ptp(out[:, k, :2], axis=0).max() < 0.01
 
 
-def _seq(release=30, n=40):
+def _delivery(n=60, ll=15, fs=35, ri=45):
+    """SYNTHETIC right-hander delivery in Statcast ft (made-up stick figure, not real data): stance, leg
+    lift peaking at `ll`, a short 1.4 ft stride landing at `fs`, arm whip to release at `ri`.  Legs are
+    roughly jointed (knee bulging forward); segment lengths vary a little per frame, as in a real average."""
+    t = np.arange(n, dtype=float)
+    ss = lambda a, b: np.clip((t - a) / (b - a), 0, 1) ** 2 * (3 - 2 * np.clip((t - a) / (b - a), 0, 1))
     j = np.zeros((n, 24, 3))
-    j[:, 11] = [0, RUBBER_Y, MOUND_Z]
-    s = np.clip(np.arange(n) / release, 0, 1)
-    sh = np.stack([np.full(n, -0.8), 60.0 - 3.0 * s, np.full(n, 5.2)], 1)
-    back, front = np.array([0, 1.8, 0.8]), 2.2 * np.array([0.1, -0.8, 0.59])
-    hand = sh + (1 - s)[:, None] * back + s[:, None] * front
-    j[:, 17] = sh; j[:, 23] = hand
-    j[:, 19] = sh + 0.4 * (hand - sh); j[:, 21] = sh + 0.8 * (hand - sh)
+    pel = np.stack([np.zeros(n), 60.3 - 0.9 * ss(ll, ri), 3.4 - 0.2 * ss(ll, fs)], 1)
+    j[:, 0] = pel
+    j[:, 1] = pel + [0.3, 0, -0.15]; j[:, 2] = pel + [-0.3, 0, -0.15]
+    for k, dz in ((3, 0.35), (6, 0.8), (9, 1.05), (12, 2.0), (15, 2.3)):
+        j[:, k] = pel + [0, 0, dz]
+    j[:, 13] = pel + [0.25, 0, 1.75]; j[:, 14] = pel + [-0.25, 0, 1.75]
+    j[:, 16] = pel + [0.62, 0, 1.8]; j[:, 17] = pel + [-0.62, 0, 1.8]
+    j[:, 18] = j[:, 16] + [0.3, -0.6, -0.6]; j[:, 20] = j[:, 18] + [0, -0.8, 0.1]; j[:, 22] = j[:, 20] + [0, -0.25, 0]
+    s = np.clip(t / ri, 0, 1)[:, None]
+    back, front = np.array([-0.5, 1.8, 0.8]), np.array([-1.2, -1.5, 1.2])
+    j[:, 23] = j[:, 17] + (1 - s) * back + s * front
+    j[:, 19] = j[:, 17] + 0.45 * (j[:, 23] - j[:, 17]) + [0, 0.3, -0.2]
+    j[:, 21] = j[:, 17] + 0.88 * (j[:, 23] - j[:, 17])
+    # pivot (right) toe pinned on the rubber until foot strike, then drags 0.5 ft toward the plate
+    j[:, 11] = [0.0, RUBBER_Y, MOUND_Z]
+    j[:, 11, 1] -= 0.5 * ss(fs, n - 1)
+    # lead (left) toe: stance, lifted to 1.6 ft at ll, lands 1.4 ft in front of the pivot at fs
+    lift = np.where(t < ll, ss(ll - 10, ll), 1 - ss(ll, fs))
+    j[:, 10] = np.stack([0.9 - 0.3 * ss(ll, fs), 60.4 - 1.5 * ss(ll, fs), MOUND_Z + 1.6 * lift], 1)
+    for toe, ank, hip, knee in ((10, 7, 1, 4), (11, 8, 2, 5)):
+        j[:, ank] = j[:, toe] + [0, 0.45, 0.2]
+        j[:, knee] = 0.5 * (j[:, hip] + j[:, ank]) + [0, -0.35, 0]
     return j
 
 
@@ -69,14 +89,44 @@ def test_release_values():
     assert abs(release_values(j, 1, "R")["extension_ft"] - 6.5) < 1e-9
 
 
+def _corrected():
+    j = _delivery()
+    rv = release_values(j, 45, "R")
+    target = dict(rv, release_x_ft=rv["release_x_ft"] + 0.3, release_z_ft=rv["release_z_ft"] - 0.4,
+                  extension_ft=rv["extension_ft"] + 2.0, arm_angle_deg=rv["arm_angle_deg"] + 5.0)
+    return j, correct_to_mean(j, 45, 35, "R", target, leg_lift_index=15), target
+
+
 def test_correct_to_mean():
-    j = _seq()
-    rv = release_values(j, 30, "R")
-    target = dict(rv, release_x_ft=rv["release_x_ft"] + 0.5, release_z_ft=rv["release_z_ft"] - 0.5,
-                  extension_ft=rv["extension_ft"] + 0.5, arm_angle_deg=rv["arm_angle_deg"] + 4.0)
-    out = correct_to_mean(j, 30, 20, "R", target)
-    got = release_values(out, 30, "R")
+    """SYNTHETIC: release values reach a target 2 ft further out, 0.4 ft lower, 0.3 ft over and 5 deg up."""
+    _, out, target = _corrected()
+    got = release_values(out, 45, "R")
     for k in ("release_x_ft", "release_z_ft", "extension_ft"):
         assert abs(got[k] - target[k]) < 0.05, k
     assert abs(got["arm_angle_deg"] - target["arm_angle_deg"]) < 1.0
     assert np.all(np.isfinite(out))
+
+
+def test_correct_to_mean_keeps_segment_lengths():
+    """SYNTHETIC: no bone changes length (1 mm), frame by frame -- the correction moves joints rigidly or
+    re-solves legs with two-bone IK at each frame's own thigh and shin lengths."""
+    j, out, _ = _corrected()
+    assert np.abs(segment_lengths(out) - segment_lengths(j)).max() < 0.001 / 0.3048
+
+
+def test_correct_to_mean_feet_planted():
+    """SYNTHETIC: the pivot toe stays on the rubber until foot strike and the lead toe stays where it
+    (now further out) landed from foot strike on, both exactly on the mound surface."""
+    _, out, _ = _corrected()
+    for toe, frames in ((11, slice(0, 36)), (10, slice(35, None))):
+        p = out[frames, toe]
+        assert np.ptp(p, axis=0).max() < 0.001, toe                       # no slide
+        assert np.abs(p[:, 2] - mound_z_ft(p[:, 0], p[:, 1])).max() < 0.001, toe  # no sink / float
+    assert out[40, 10, 1] < _delivery()[40, 10, 1] - 0.5  # the stride really got longer
+
+
+def test_correct_to_mean_is_smooth():
+    """SYNTHETIC: the correction (out - in) eases in; no joint jumps by more than 0.25 ft between frames
+    because of it (a snap onto the release point would)."""
+    j, out, _ = _corrected()
+    assert np.abs(np.diff(out - j, axis=0)).max() < 0.25
