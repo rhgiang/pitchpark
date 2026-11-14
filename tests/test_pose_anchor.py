@@ -62,6 +62,9 @@ def test_release_values():
     assert abs(release_values(j, 1, "R")["arm_angle_deg"] - 90) < 1e-6
     j[:, 23] = [2, 60, 5]
     assert abs(release_values(j, 1, "R")["arm_angle_deg"]) < 1e-6
+    j[:, 17] = [-1, 58, 6]; j[:, 23] = [-2, 56, 7]  # forward reach (dy != 0) is ignored: catcher's view
+    assert abs(release_values(j, 1, "R")["arm_angle_deg"] - 45) < 1e-6
+    j[:, 17] = [0, 60, 5]
     j[:, 23] = [2, 54.0, 5]
     assert abs(release_values(j, 1, "R")["extension_ft"] - 6.5) < 1e-9
 

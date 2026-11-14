@@ -92,25 +92,28 @@ def anchor(j_m: np.ndarray, up: np.ndarray, height_ft: float, throws: str, relea
 
 
 def release_values(j_ft: np.ndarray, release_index: int, throws: str) -> dict:
-    """Release point (ft), extension (ft, 60.5 - hand y) and arm angle (deg; shoulder -> hand line above
-    horizontal: 0 = sidearm, 90 = straight over the top) at `release_index`."""
+    """Release point (ft), extension (ft, 60.5 - hand y) and arm angle (deg) at `release_index`.
+
+    Arm angle is the catcher's-view (frontal, x-z plane) angle of shoulder -> hand above horizontal,
+    atan2(dz, |dx|), ignoring dy: 0 = sidearm, 90 = straight over the top.  This is Statcast's arm_angle
+    convention and the one M4's web/src/pitcher.js uses (shoulder = hand - reach*(s*cos t, sin t, 0))."""
     _check(throws)
     hand = j_ft[release_index, _HAND[throws]]
     d = hand - j_ft[release_index, _SHOULDER[throws]]
     return {"release_x_ft": float(hand[0]), "release_z_ft": float(hand[2]),
             "extension_ft": float(RUBBER_Y_FT - hand[1]),
-            "arm_angle_deg": float(np.degrees(np.arctan2(d[2], np.hypot(d[0], d[1]))))}
+            "arm_angle_deg": float(np.degrees(np.arctan2(d[2], abs(d[0]))))}
 
 
 def correct_to_mean(j_ft: np.ndarray, release_index: int, foot_strike_index: int, throws: str,
                     target: dict) -> np.ndarray:
     """One-time whole-body correction so release_values match `target` (to ~0.05 ft / 1 deg).
 
-    Per pass: (1) rotate the throwing arm chain about the shoulder, in the vertical plane of the release
-    arm line, by the arm-angle gap, eased with smoothstep over foot_strike -> release and held after (no
+    Per pass: (1) rotate the throwing arm chain about the shoulder, in the catcher's-view (x-z) plane --
+    the plane the arm angle is defined in (see release_values), i.e. about the y axis, y untouched, with the
+    sense mirrored by the sign of the release dx so it works for L and R -- by the arm-angle gap, eased with smoothstep over foot_strike -> release and held after (no
     snap back in the follow-through); (2) translate everything by the x/z gap; (3) stretch y about the
-    pivot foot at frame 0 so extension matches.  (3) slightly changes the arm angle and (1) moves the
-    hand, so passes repeat (converges in 2-3).  The angle step runs for gaps > 0.25 deg (not the brief's 2
+    pivot foot at frame 0 so extension matches.  (1) moves the hand so passes repeat (converges in 1-2).  The angle step runs for gaps > 0.25 deg (not the brief's 2
     deg) so the final result is guaranteed within 1 deg.
     """
     _check(throws)
@@ -123,14 +126,14 @@ def correct_to_mean(j_ft: np.ndarray, release_index: int, foot_strike_index: int
         rv = release_values(j, release_index, throws)
         gap = target["arm_angle_deg"] - rv["arm_angle_deg"]
         if abs(gap) > 0.25:
-            d = j[release_index, _HAND[throws]] - j[release_index, sh]
-            u = np.array([d[0], d[1], 0.0]) / np.hypot(d[0], d[1])
-            axis = np.cross(u, [0, 0, 1.0])  # +angle about this axis raises the arm
+            sgn = 1.0 if j[release_index, _HAND[throws], 0] - j[release_index, sh, 0] >= 0 else -1.0
             ang = np.radians(gap) * ease
-            c, s = np.cos(ang)[:, None], np.sin(ang)[:, None]
-            for k in chain:  # Rodrigues rotation about the (moving) shoulder, per frame
+            c, sn = np.cos(ang), np.sin(ang)
+            for k in chain:  # in-plane rotation of (sgn*dx, dz) about the (moving) shoulder, per frame
                 r = j[:, k] - j[:, sh]
-                j[:, k] = j[:, sh] + r * c + np.cross(axis, r) * s + axis * (r @ axis)[:, None] * (1 - c)
+                u, w = sgn * r[:, 0], r[:, 2]
+                j[:, k, 0] = j[:, sh, 0] + sgn * (c * u - sn * w)
+                j[:, k, 2] = j[:, sh, 2] + sn * u + c * w
         rv = release_values(j, release_index, throws)
         j[..., 0] += target["release_x_ft"] - rv["release_x_ft"]
         j[..., 2] += target["release_z_ft"] - rv["release_z_ft"]

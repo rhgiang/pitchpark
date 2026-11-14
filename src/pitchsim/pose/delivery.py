@@ -86,22 +86,34 @@ def average_delivery(seqs: list[np.ndarray], marks: list[dict], pre_s: float, fp
     n_out = ri + int(round(post_s * fps_out)) + 1
     tau = (np.arange(n_out) - ri) / fps_out
     acc = np.zeros((n_out, 24, 3))
+    used = 0
     for c, i in enumerate(keep):
         s = np.asarray(seqs[i], float)
         # knots extended with slope 1 past both ends
         kx = np.concatenate([[tmpl[0] - 10], tmpl, [10.0]])
         ky = np.concatenate([[rel_t[c, 0] - 10], rel_t[c], [10.0]])
         pos = marks[i]["release"] + np.interp(tau, kx, ky) * marks[i]["fps"]  # fractional clip frames
-        pos = np.clip(pos, 0, len(s) - 1)
+        # Coverage on the WARPED positions: a clip whose wind-up is longer than the template's needs frames
+        # before frame 0 once stretched; clamping would contribute frozen frames, so exclude it instead.
+        if pos.min() < 0 or pos.max() > len(s) - 1:
+            if excluded is not None:
+                excluded.append((i, "short"))
+            continue
+        used += 1
         lo = np.floor(pos).astype(int)
         hi = np.minimum(lo + 1, len(s) - 1)
         f = (pos - lo)[:, None, None]
         acc += s[lo] * (1 - f) + s[hi] * f
-    avg = acc / len(keep)
+    if used == 0:
+        raise ValueError("no clip covers the requested window after time-warping")
+    avg = acc / used
 
     # Savitzky-Golay (Savitzky & Golay 1964): local cubic fit over ~0.15 s.  Cubic keeps the sharp
     # release-speed peak (a moving average would flatten it); 0.15 s is shorter than the arm-acceleration
     # phase but long enough to kill frame-to-frame lift noise.
-    win = int(round(0.15 * fps_out)) | 1
+    # window must exceed the polynomial order (4) and fit in the signal
+    if n_out < 5:
+        raise ValueError(f"output has only {n_out} frames; need >= 5 for Savitzky-Golay smoothing")
+    win = max(int(round(0.15 * fps_out)) | 1, 5)
     win = min(win, n_out if n_out % 2 else n_out - 1)
     return savgol_filter(avg, win, 3, axis=0), ri
