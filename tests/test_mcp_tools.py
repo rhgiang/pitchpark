@@ -71,3 +71,16 @@ def test_sequence_transitions_filters_and_start_row():
     assert r["FF"]["n"] == 3 and r["FF"]["next"]["SL"] == {"n": 2, "p": 0.667, "median_sep_in": 3.0}
     assert T.sequence(d, stand="L")["FF"]["next"].keys() == {"CH"}
     assert T.sequence(d, strikes=2) == {"SL": {"n": 1, "next": {"FF": {"n": 1, "p": 1.0, "median_sep_in": 9.0}}}}
+
+
+def test_generator_check_filters_and_rejects_bad_input(tmp_path):
+    (tmp_path / "x").mkdir()
+    (tmp_path / "x" / "summary.csv").write_text(
+        "pitch_type,model,auc,auc_gap,pass\nFF,gaussian,0.66,0.01,True\nSL,gaussian,,,\n")
+    assert T.generator_check("x", "FF", tmp_path) == [
+        {"pitch_type": "FF", "model": "gaussian", "auc": 0.66, "auc_gap": 0.01, "pass": True}]
+    assert T.generator_check("x", "SL", tmp_path)[0]["auc"] is None     # NaN becomes null
+    with pytest.raises(FileNotFoundError):
+        T.generator_check("nobody", None, tmp_path)
+    with pytest.raises(ValueError):
+        T.generator_check("../x", None, tmp_path)

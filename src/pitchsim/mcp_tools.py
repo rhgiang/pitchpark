@@ -11,8 +11,10 @@ import re
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "web" / "public" / "data"
+M2_DIR = Path(__file__).resolve().parents[2] / "results" / "m2"   # gitignored: needs train_generative.py run locally
 
 
 def list_pitchers(data_dir: Path = DATA_DIR) -> list[dict]:
@@ -130,3 +132,18 @@ def sequence(d: dict, stand: str | None = None, balls: int | None = None,
         out[a] = {"n": n, "next": {b: {"n": len(v), "p": round(len(v) / n, 3), "median_sep_in": _med(v)}
                                    for b, v in sorted(nxt.items(), key=lambda kv: -len(kv[1]))}}
     return out
+
+
+def generator_check(slug: str, pitch_type: str | None = None, m2_dir: Path = M2_DIR) -> list[dict]:
+    """M2 evaluation rows (summary.csv) for one pitcher, optionally one pitch type: AUC of real
+    held-out vs generated pitches, the real-vs-real floor, gap, margin, and pass. `pass` means gap <=
+    margin (see results/M2.md); graded=False rows (under 30 held-out pitches) have no verdict."""
+    if not re.fullmatch(r"[a-z0-9-]+", slug):
+        raise ValueError(f"bad slug {slug!r}; use a slug from list_pitchers")
+    f = m2_dir / slug / "summary.csv"
+    if not f.exists():
+        raise FileNotFoundError(f"no M2 results for {slug!r}; run scripts/train_generative.py on its CSV")
+    df = pd.read_csv(f)
+    if pitch_type:
+        df = df[df["pitch_type"] == pitch_type]
+    return json.loads(df.to_json(orient="records"))   # NaN -> null

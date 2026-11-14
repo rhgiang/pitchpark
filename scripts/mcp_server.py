@@ -56,5 +56,13 @@ def sequence(slug: str, stand: str | None = None, balls: int | None = None,
     return T.sequence(T.load(slug), stand, balls, strikes)
 
 
+@mcp.tool()
+def generator_check(slug: str, pitch_type: str | None = None) -> list[dict]:
+    """M2 check on the per-pitcher generative model: per pitch type and model (gaussian/mixture),
+    classifier AUC of real held-out vs generated pitches, the real-vs-real floor (auc_floor), gap,
+    margin, and pass (gap <= margin). Not every pitcher has results; graded=false means too few pitches."""
+    return T.generator_check(slug, pitch_type)
+
+
 if __name__ == "__main__":
     mcp.run()
