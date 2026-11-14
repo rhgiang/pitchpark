@@ -28,7 +28,13 @@ def split_by_game(df: pd.DataFrame, train_frac: float = 0.7,
     Pitches from one game share air density, mound and umpire, so a random
     pitch-level split leaks that shared context into the test set and flatters
     the held-out error. Splitting by game keeps the test set truly unseen.
+
+    If df has a `split` column ("train"/"test", e.g. from data.mark_cross_season) that fixed
+    split is used instead, and train_frac and seed are ignored.
     """
+    if "split" in df:
+        test = df["split"] == "test"
+        return df[~test], df[test]
     games = np.random.default_rng(seed).permutation(df["game_pk"].unique())
     train_games = games[:int(np.ceil(train_frac * len(games)))]
     in_train = df["game_pk"].isin(train_games)
