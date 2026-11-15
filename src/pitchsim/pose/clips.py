@@ -9,9 +9,11 @@ import html as htmllib
 import json
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from pitchsim.data import FEED_URL, RAW_DIR
@@ -100,9 +102,11 @@ def _download(url: str, path: Path) -> None:
         f.write(r.read())
 
 
-def fetch_clips(df: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
+def fetch_clips(df: pd.DataFrame, out_dir: Path, download: bool = True) -> pd.DataFrame:
     """Download one clip per row into out_dir (sequential, skips existing files).
-    Never raises on a per-pitch failure; status is ok | cached | no_play_id | no_mp4 | http_error."""
+    Never raises on a per-pitch failure; status is ok | cached | no_play_id | no_mp4 | http_error.
+    download=False only resolves play ids: no clip is requested, status is cached | pending | no_play_id
+    (the mp4 host refuses scripts; clips are saved by hand and matched by m5_match_clips.py)."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     ids = play_ids(df)
@@ -113,6 +117,8 @@ def fetch_clips(df: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
             status = "cached"
         elif pd.isna(pid):
             status = "no_play_id"
+        elif not download:
+            status = "pending"
         else:
             try:
                 url = clip_url_from_page(_get_page(pid))
@@ -128,3 +134,50 @@ def fetch_clips(df: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
                      "clip_path": str(path) if status in ("ok", "cached") else None,
                      "status": status})
     return pd.DataFrame(rows)
+
+
+def round_robin(df: pd.DataFrame, n: int, seed: int = 0) -> pd.DataFrame:
+    """n rows, one game at a time in a random game order (then a second pass, ...), so clips
+    spread across as many games as possible.  Rows inside a game are shuffled too."""
+    rng = np.random.default_rng(seed)
+    by_game = df.groupby("game_pk").indices
+    queues = [list(rng.permutation(by_game[g])) for g in rng.permutation(list(by_game))]
+    pos = []
+    while len(pos) < n and any(queues):
+        for q in queues:
+            if q and len(pos) < n:
+                pos.append(q.pop())
+    return df.iloc[pos]
+
+
+def interleave(a: pd.DataFrame, b: pd.DataFrame) -> pd.DataFrame:
+    """a0, b0, a1, b1, ...; the longer one's tail follows."""
+    rows = []
+    for i in range(max(len(a), len(b))):
+        rows += [x.iloc[i] for x in (a, b) if i < len(x)]
+    return pd.DataFrame(rows).reset_index(drop=True)
+
+
+def mp4_basename(url: str) -> str:
+    """Savant's own (percent-decoded) file name for a clip link: what the browser saves it as."""
+    return urllib.parse.unquote(url.rsplit("/", 1)[-1])
+
+
+_DUP = re.compile(r" \(\d+\)\.mp4$")
+
+
+def match_downloads(expected: dict[str, str | None], files: list[str]) -> dict:
+    """Pure part of the matcher.  expected: wanted clip name -> Savant basename (None if no link);
+    files: names in the folder.  Returns renames {saved: wanted}, have (already named), missing,
+    leftovers (unmatched .mp4), duplicates ("x (1).mp4"), partial (.crdownload)."""
+    present = set(files)
+    have = [n for n in expected if n in present]
+    renames = {b: n for n, b in expected.items() if n not in present and b in present}
+    used = set(expected) | set(renames)
+    return {
+        "have": have, "renames": renames,
+        "missing": [n for n in expected if n not in present and n not in renames.values()],
+        "duplicates": sorted(f for f in files if _DUP.search(f)),
+        "partial": sorted(f for f in files if f.endswith(".crdownload")),
+        "leftovers": sorted(f for f in files if f.endswith(".mp4") and f not in used and not _DUP.search(f)),
+    }

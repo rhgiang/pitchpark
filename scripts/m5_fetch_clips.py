@@ -22,6 +22,8 @@ def main() -> None:
     ap.add_argument("--max-test", type=int, default=80)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--no-download", action="store_true",
+                    help="resolve play ids and write clips.csv only; request no mp4 (the host 403s scripts)")
     a = ap.parse_args()
 
     df = clean(pd.read_csv(a.csv))
@@ -34,7 +36,7 @@ def main() -> None:
         pick["split"] = name
         parts.append(pick)
     sel = pd.concat(parts)
-    res = fetch_clips(sel, Path(a.out))
+    res = fetch_clips(sel, Path(a.out), download=not a.no_download)
     keep = sel[KEY + ["split"] + META].reset_index(drop=True)
     res = res.merge(keep, on=KEY, how="left")
     res.to_csv(Path(a.out) / "clips.csv", index=False)

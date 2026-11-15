@@ -59,3 +59,40 @@ def test_label_paths_follow_the_pitcher_slug(tmp_path):
     assert clips.read_labels("some-other-pitcher", "release_frames").empty
     # the committed Ohtani labels are found under his clips-directory slug
     assert not clips.read_labels("ohtani-shohei", "release_frames").empty
+
+
+# --- download-list helpers; all data below is SYNTHETIC ---
+def _synthetic_rows(n_games=4, per_game=5):
+    return pd.DataFrame([(g, i) for g in range(1, n_games + 1) for i in range(per_game)],
+                        columns=["game_pk", "at_bat_number"])
+
+
+def test_round_robin_spreads_over_games():
+    out = clips.round_robin(_synthetic_rows(), 6, seed=0)
+    assert len(out) == 6
+    assert out["game_pk"].value_counts().max() == 2  # 4 games: one pass of 4, then 2 more
+    assert clips.round_robin(_synthetic_rows(), 6, seed=0).equals(out)  # seeded
+    assert len(clips.round_robin(_synthetic_rows(1, 3), 10)) == 3
+
+
+def test_interleave_alternates_then_tail():
+    a, b = pd.DataFrame({"x": [1, 2, 3]}), pd.DataFrame({"x": [10]})
+    assert clips.interleave(a, b)["x"].tolist() == [1, 10, 2, 3]
+
+
+def test_mp4_basename_from_page_matches_saved_name():
+    html = '<a href="https://sporty-clips.mlb.com/p/abc%2Bdef&#x3D;.mp4">'
+    assert clips.mp4_basename(clips.clip_url_from_page(html)) == "abc+def=.mp4"
+
+
+def test_match_downloads_reports_everything():
+    expected = {"1_1_1.mp4": "A.mp4", "1_1_2.mp4": "B.mp4", "1_1_3.mp4": "C.mp4", "1_1_4.mp4": None}
+    files = ["A.mp4", "1_1_2.mp4", "A (1).mp4", "Z.mp4", "D.mp4.crdownload", "notes.txt"]
+    r = clips.match_downloads(expected, files)
+    assert r["renames"] == {"A.mp4": "1_1_1.mp4"}
+    assert r["have"] == ["1_1_2.mp4"]
+    assert r["missing"] == ["1_1_3.mp4", "1_1_4.mp4"]
+    assert r["duplicates"] == ["A (1).mp4"]
+    assert r["partial"] == ["D.mp4.crdownload"]
+    assert r["leftovers"] == ["Z.mp4"]
+    assert clips.match_downloads(expected, ["1_1_1.mp4"])["renames"] == {}  # idempotent
