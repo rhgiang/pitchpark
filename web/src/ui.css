@@ -132,7 +132,7 @@ body.intro .glass { opacity: 0; pointer-events: none; }
 
 /* ---- start screen: blurred park still behind, one card per pitcher */
 body.menu .glass { opacity: 0; pointer-events: none; }
-#change { top: 80px; left: var(--gap); padding: 6px 12px; }
+#change { bottom: var(--gap); left: 64px; padding: 8px 12px; } /* beside the ? button: never over the scorebug */
 #menu { position: fixed; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center;
   background: radial-gradient(ellipse at center, rgba(10, 16, 22, 0.45), rgba(6, 10, 14, 0.8));
   backdrop-filter: blur(12px) saturate(1.1); -webkit-backdrop-filter: blur(12px) saturate(1.1); }
