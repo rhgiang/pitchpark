@@ -175,3 +175,33 @@ test("pitch-strip colours: Statcast descriptions map to ball, strike, foul, in p
   for (const [d, k] of Object.entries(cases)) assert.equal(resultKind(d), k, d);
   assert.equal(resultKind(null), null);
 });
+
+// Delivery timeline (M5): with a delivery the clock starts pre_s before release; release stays t = 0.
+const delivery = { pre_s: 2.5 };
+const withDelivery = () => run(initialState(), { type: "pickPitcher", slug: "synthetic", data, delivery },
+  { type: "pickAtBat", index: 0 });
+
+test("preroll: replay starts at -pre_s with a delivery, at 0 without", () => {
+  assert.equal(run(withDelivery(), { type: "replay" }).t, -2.5);
+  assert.equal(run(withDelivery(), { type: "nextPitch" }).t, -2.5);
+  assert.equal(run(loaded(), { type: "pickAtBat", index: 0 }, { type: "replay" }).t, 0);
+});
+
+test("seek clamps to -pre_s, and to 0 without a delivery", () => {
+  assert.equal(run(withDelivery(), { type: "seek", t: -9 }).t, -2.5);
+  assert.equal(run(loaded(), { type: "pickAtBat", index: 0 }, { type: "seek", t: -1 }).t, 0);
+});
+
+test("tick from -pre_s reaches release after pre_s / speed seconds", () => {
+  let s = run(withDelivery(), { type: "setSpeed", speed: 0.25 }, { type: "replay" });
+  for (let i = 0; i < 10; i++) s = reduce(s, { type: "tick", dt: 1 }); // 10 s x 0.25 = 2.5 s
+  assert.ok(Math.abs(s.t) < 1e-9);
+});
+
+test("no spoiler during the windup", () => {
+  const s = run(withDelivery(), { type: "seek", t: -0.5 });
+  assert.equal(landed(s), false);
+  const m = run(s, { type: "setMode", mode: "ghost" });
+  assert.equal(landed(m), false);
+  assert.equal(m.seen, 0);
+});

@@ -7,7 +7,7 @@ import {
   batterEye, umpireView, sideView, rideAlong, BATTER_EYE_VFOV_DEG, UMPIRE_VFOV_DEG, SIDE_VFOV_DEG,
   RIDE_VFOV_DEG, FREE_VFOV_DEG, FREE_START, FREE_MIN_DIST_FT, FREE_MAX_DIST_FT, introSweep, INTRO_S,
 } from "./cameras.js";
-import { loadIndex, loadPitcher } from "./data.js";
+import { loadIndex, loadPitcher, loadDelivery } from "./data.js";
 import {
   initialState, reduce, currentAtBat, currentPitch, shownPaths, MODES, SPEEDS, VIEWS, spinFactor,
 } from "./state.js";
@@ -78,7 +78,7 @@ function updateCamera() {
   if (state.view === "umpire") pose = umpireView();
   else if (state.view === "batter") pose = batterEye(ab.stand);
   else if (path && state.view === "side") pose = sideView(path, camera.aspect);
-  else if (path) pose = rideAlong(path, state.t, currentPitch(state).release, state.data.pitcher.throws);
+  else if (path) pose = rideAlong(path, Math.max(state.t, 0), currentPitch(state).release, state.data.pitcher.throws);
   if (!pose) return;
   camera.position.copy(toScene(pose.position));
   camera.lookAt(toScene(pose.target));
@@ -164,7 +164,7 @@ function dispatch(action) {
 const randomSeed = () => Math.floor(Math.random() * 2 ** 31);
 
 async function pickPitcher(slug) {
-  const data = await loadPitcher(slug);
+  const [data, delivery] = await Promise.all([loadPitcher(slug), loadDelivery(slug)]);
   if (figure) {
     scene.remove(figure);
     figure.traverse((o) => {
@@ -186,7 +186,7 @@ async function pickPitcher(slug) {
     return b;
   }));
   $("ab-count").textContent = `(${data.at_bats.length} held-out)`;
-  dispatch({ type: "pickPitcher", slug, data });
+  dispatch({ type: "pickPitcher", slug, data, delivery });
   dispatch({ type: "pickAtBat", index: 0 });
 }
 
@@ -362,12 +362,16 @@ renderer.setAnimationLoop((now) => {
   if (state.data) {
     dispatch({ type: "tick", dt });
     const p = currentPitch(state);
-    updateBall(ball, state.mode === "sim" ? p.sim : p.real, state.t);
-    spinBall(ball, p.spin_rpm == null ? null : p.spin_axis_deg, 2 * Math.PI * (p.spin_rpm / 60) * state.t * spinFactor(state.speed));
-    updateBall(ghost, state.mode === "ghost" ? p.sim : null, state.t);
-    updateTube(trail, state.mode === "sim" ? p.sim : p.real, state.t);
-    updateTube(ghostTrail, state.mode === "ghost" ? p.sim : null, state.t);
-    updateTube(noSpinLine, state.showNoSpin ? p.nospin : null, state.t);
+    // Before release (t < 0) everything that follows the ball is hidden: it clamps to t = 0, where
+    // the ball sits at the release point, so hide it explicitly. (Ball in the hand: Task 7.)
+    const flying = state.t >= 0;
+    const ft = Math.max(state.t, 0);
+    updateBall(ball, flying ? (state.mode === "sim" ? p.sim : p.real) : null, ft);
+    spinBall(ball, p.spin_rpm == null ? null : p.spin_axis_deg, 2 * Math.PI * (p.spin_rpm / 60) * ft * spinFactor(state.speed));
+    updateBall(ghost, flying && state.mode === "ghost" ? p.sim : null, ft);
+    updateTube(trail, flying ? (state.mode === "sim" ? p.sim : p.real) : null, ft);
+    updateTube(ghostTrail, flying && state.mode === "ghost" ? p.sim : null, ft);
+    updateTube(noSpinLine, flying && state.showNoSpin ? p.nospin : null, ft);
   }
   if (intro) updateIntro(dt);
   else if (state.data) updateCamera();
