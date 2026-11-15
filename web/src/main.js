@@ -17,10 +17,11 @@ import { renderHud, buildStrip } from "./hud.js";
 import { makePitcher, poseAtRelease, poseAtTime, handPosition } from "./pitcher.js";
 import { buildPark } from "./park/index.js";
 import { initLook, setTimeOfDay, refreshShadows, inkProof, timeOfDay, TIMES } from "./look.js";
+import { frameSlot, shouldDraw, pixelRatio } from "./pacing.js";
 
 // No MSAA: the composer renders to its own targets, and SMAA (look.js) anti-aliases instead.
 const renderer = new THREE.WebGLRenderer({ antialias: false });
-renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setPixelRatio(pixelRatio(window.devicePixelRatio)); // capped: see pacing.js
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -50,6 +51,10 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enabled = false;
 controls.minDistance = FREE_MIN_DIST_FT;
 controls.maxDistance = FREE_MAX_DIST_FT;
+// Draw on demand (pacing.js): a frame is drawn when t or the camera moved, or `dirty` says
+// something else the picture shows changed (a pitch, view, mode or time of day; a resize).
+let dirty = true;
+controls.addEventListener("change", () => { dirty = true; });
 let freePose = { position: toScene(FREE_START.position), target: toScene(FREE_START.target) };
 let appliedView = null;
 const VFOV = {
@@ -122,6 +127,8 @@ function updateIntro(dt) {
 for (const ev of ["pointerdown", "wheel"]) window.addEventListener(ev, () => { if (intro && !intro.frozen) endIntro(); });
 
 function resize() {
+  dirty = true;
+  renderer.setPixelRatio(pixelRatio(window.devicePixelRatio)); // the window may have moved screens
   renderer.setSize(window.innerWidth, window.innerHeight);
   look.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -138,6 +145,7 @@ let shown = { ab: null, pitch: null }; // what the camera and zone are set up fo
 function dispatch(action) {
   const before = state;
   state = reduce(state, action);
+  if (action.type !== "tick") dirty = true;
   if (action.type === "tick") {
     // The pitch just landed: re-render so the result (and "in the dirt") appears now.
     if (before.playing && !state.playing) renderHud(state, currentPitch(state));
@@ -213,6 +221,7 @@ const KEYS = {
 const TOD_NAMES = Object.keys(TIMES);
 /** Next time of day: day -> sunset -> night -> day. */
 const cycleTimeOfDay = () => {
+  dirty = true;
   setTimeOfDay(TOD_NAMES[(TOD_NAMES.indexOf(timeOfDay()) + 1) % TOD_NAMES.length]);
   $("tod").textContent = `${timeOfDay()[0].toUpperCase()}${timeOfDay().slice(1)}`;
 };
@@ -301,18 +310,20 @@ start();
 // ?fps=1: frame-rate readout, averaged over half-second windows.
 const fpsBox = q.get("fps") === "1" ? $("fps") : null;
 if (fpsBox) fpsBox.hidden = false;
-let fpsFrames = 0, fpsSince = null;
+let fpsFrames = 0, fpsTicks = 0, fpsSince = null; // frames drawn, display frames
 // Which GPU the browser gave WebGL (a software renderer such as SwiftShader is far slower).
 const gl = renderer.getContext();
 const gpu = gl.getExtension("WEBGL_debug_renderer_info");
 const gpuName = gpu ? gl.getParameter(gpu.UNMASKED_RENDERER_WEBGL) : "unknown GPU";
-function countFrame(now) {
+function countFrame(now, drew) {
   if (!fpsBox) return;
   fpsSince ??= now;
-  fpsFrames++;
+  fpsTicks++;
+  if (drew) fpsFrames++;
   if (now - fpsSince >= 500) {
-    fpsBox.innerHTML = `${((fpsFrames * 1000) / (now - fpsSince)).toFixed(1)} fps · ${renderer.info.render.calls} draws · ${(renderer.info.render.triangles / 1e6).toFixed(2)} M tris<br>${gpuName}${burst}`;
-    fpsFrames = 0;
+    const fps = (fpsFrames * 1000) / (now - fpsSince);
+    fpsBox.innerHTML = `${fps.toFixed(1)} fps drawn (${Math.round((100 * fpsFrames) / fpsTicks)}% of display frames) · ${renderer.info.render.calls} draws · ${(renderer.info.render.triangles / 1e6).toFixed(2)} M tris<br>${gpuName}${burst}`;
+    fpsFrames = fpsTicks = 0;
     fpsSince = now;
   }
 }
@@ -369,10 +380,14 @@ function poseFigure(p) {
 }
 
 let last = null;
+let nextSlot = 0; // when the next capped frame is due (ms)
+let lastDraw = -Infinity;
+let drawnKey = null; // t and camera of the last drawn frame
 renderer.info.autoReset = false; // count the whole frame (all passes), reset below
 renderer.setAnimationLoop((now) => {
-  countFrame(now);
-  renderer.info.reset();
+  const slot = frameSlot(now, nextSlot); // 60 fps cap, whatever the display's rate
+  nextSlot = slot.next;
+  if (!slot.due) return countFrame(now, false);
   // Real time: 1 s of animation per 1 s of flight (times speed), from the exported timestamps.
   // dt is capped so a backgrounded tab does not jump the ball to the plate on return.
   const dt = last === null ? 0 : Math.min((now - last) / 1000, 0.1);
@@ -399,6 +414,15 @@ renderer.setAnimationLoop((now) => {
   }
   if (intro) updateIntro(dt);
   else if (state.data) updateCamera();
+  // Still frame (paused, camera at rest): skip the GPU work, but for the park's idle animation.
+  const key = [state.t, ...camera.position.toArray(), ...camera.quaternion.toArray(), camera.fov, camera.aspect].join();
+  const draw = shouldDraw(dirty || key !== drawnKey, now, lastDraw);
+  countFrame(now, draw);
+  if (!draw) return;
+  dirty = false;
+  drawnKey = key;
+  lastDraw = now;
+  renderer.info.reset();
   park.userData.update?.({ timeS: now / 1000, board: boardInfo() });
   look.render();
 });
