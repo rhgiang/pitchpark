@@ -36,7 +36,7 @@ const PIVOT_FOOT_Y_FT = RUBBER_FRONT_Y_FT + 0.25; // the drag never goes behind 
  * `root` towards `target`, bending towards `pole`. If the target is out of reach the chain
  * straightens towards it instead of stretching. Returns {mid, end, reached}.
  */
-export function twoBone(root, target, a, b, pole) {
+function twoBone(root, target, a, b, pole) {
   const u = target.clone().sub(root);
   const want = u.length();
   const dist = Math.min(Math.max(want, Math.abs(a - b) + 1e-4), (a + b) * 0.9999);
@@ -391,12 +391,6 @@ export function poseAtTime(figure, delivery, t, release, armAngleDeg) {
   figure.updateMatrixWorld(true);
 }
 
-/** Pose a figure from 24 joint positions (scene ft, JOINTS order): bones follow their directions. */
-export function poseFromJoints(figure, pts) {
-  setBones(figure.userData.bones, pts, figure.userData.scale);
-  figure.updateMatrixWorld(true);
-}
-
 /** World position (scene ft) of the throwing hand's knuckles, where the ball sits. */
 export function handPosition(figure, throws = figure.userData.throws) {
   figure.updateMatrixWorld(true);
@@ -408,8 +402,8 @@ const COLORS = {
   jersey: PALETTE.jersey, sleeve: PALETTE.navy, pants: PALETTE.pants, skin: PALETTE.skin,
   cap: PALETTE.navy, glove: PALETTE.glove, shoe: PALETTE.shoe,
 };
-const makeMaterials = (colors) => Object.fromEntries(
-  Object.entries({ ...COLORS, ...colors }).map(([k, c]) => [k, makeToonMaterial(c)]));
+const makeMaterials = () => Object.fromEntries(
+  Object.entries(COLORS).map(([k, c]) => [k, makeToonMaterial(c)]));
 
 /** Rigid skinning: each vertex follows one bone, chosen from its rest position. */
 function skin(geo, boneOf) {
@@ -444,7 +438,7 @@ function lathe(profile, sx, sz) {
 }
 
 /** Stylised body: lathe torso and hips, capsule limbs, head with a cap, glove on the glove hand. */
-function bodyParts(throws, glove = true) {
+function bodyParts(throws) {
   const G = throws === "L" ? "right" : "left";
   // The torso follows the spine bone whose segment each vertex sits in (heights from the rest pose).
   const spineAt = (v) => (v.y < REST[J.spine1].y ? J.pelvis
@@ -468,7 +462,7 @@ function bodyParts(throws, glove = true) {
       ["pants", limb(`${sd}_hip`, `${sd}_knee`, 0.27, 0.1)],
       ["pants", limb(`${sd}_knee`, `${sd}_ankle`, 0.19, 0.05)],
       ["shoe", limb(`${sd}_ankle`, `${sd}_foot`, 0.14, 0.12)],
-      sd === G && glove
+      sd === G
         ? ["glove", skin(new THREE.SphereGeometry(0.3, 18, 12).scale(1, 1.15, 0.7)
           .translate(...REST[J[`${sd}_hand`]].toArray()), () => J[`${sd}_wrist`])]
         : ["skin", limb(`${sd}_wrist`, `${sd}_hand`, 0.11, 0.06)],
@@ -482,13 +476,11 @@ function bodyParts(throws, glove = true) {
  * posed at a typical release until poseAtRelease is called with a real pitch. The rest skeleton
  * is 75 in tall; the figure is scaled by heightIn / 75.
  * userData: {throws, bones (JOINTS order), scale, armAngleDeg}.
- * Options (figures.js reuses it for the batter, catcher and umpire): colors overrides COLORS
- * per body part; glove: false puts a bare hand on the glove side too.
  */
-export function makePitcher(throws, heightIn = 75, { colors = {}, glove = true } = {}) {
+export function makePitcher(throws, heightIn = 75) {
   const { bones, skeleton } = buildSkeleton();
-  const parts = bodyParts(throws, glove);
-  const mats = makeMaterials(colors);
+  const parts = bodyParts(throws);
+  const mats = makeMaterials();
   const mesh = new THREE.SkinnedMesh(mergeGeometries(parts.map((p) => p[1]), true), parts.map((p) => mats[p[0]]));
   mesh.add(bones[0]);
   mesh.bind(skeleton); // at rest: T-pose is the bind pose

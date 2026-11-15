@@ -136,7 +136,7 @@ export function rideAlong(path, t_s, release, throws) {
 // TV broadcast view: the centre-field camera, calibrated (2026-11-14) on two real centre-field frames
 // of Ohtani pitching (Dodger Stadium and Houston; 800x450). Measured there, as fractions of the frame:
 // pitcher's feet 0.76/0.85 down, his height 0.41/0.38 of the frame, the plate 0.55/0.50 down and
-// 0.20/0.03 of the width to his right; the batter's head ~0.2 down.
+// 0.20/0.03 of the width to his right.
 // - Position: on a platform just behind the outfield fence (real park cameras sit at the top of the
 //   centre-field wall / batter's eye, ~400-420 ft out). The eye wall stands further back, behind it.
 // - Side: the pitcher stands left of the plate on screen, so the camera is off to the third-base side
@@ -148,7 +148,7 @@ export function rideAlong(path, t_s, release, throws) {
 // - Aim: 20 ft in front of the plate, 2.5 ft up: the frame centre falls between the pitcher and the
 //   plate, as on TV (feet ~0.8 H down, plate ~0.56 H).
 // - Vertical FOV: a 6.3 ft pitcher at ~350 ft is 1.03 deg tall and fills ~0.4 of the frame -> 2.6 deg
-//   (a ~650 mm lens on 16:9). The telephoto flattening is what makes the batter look as tall as him.
+//   (a ~650 mm lens on 16:9); the telephoto flattening stacks the plate just above his shoulders.
 export const TV_VFOV_DEG = 2.6;
 const TV_X_FT = -22;
 const TV_Y_FT = fenceDistFt(0) + 10;

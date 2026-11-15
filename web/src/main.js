@@ -16,7 +16,6 @@ import { makeBall, makeGhost, updateBall, spinBall } from "./ball.js";
 import { renderHud, buildStrip } from "./hud.js";
 import { makePitcher, poseAtRelease, poseAtTime, handPosition } from "./pitcher.js";
 import { buildPark } from "./park/index.js";
-import { buildCast, setCast } from "./figures.js";
 import { initLook, setTimeOfDay, refreshShadows, inkProof, timeOfDay, TIMES } from "./look.js";
 
 // No MSAA: the composer renders to its own targets, and SMAA (look.js) anti-aliases instead.
@@ -37,9 +36,6 @@ const trail = makeTube({ color: 0xffe07a, radiusFt: 0.035, fadeS: 0.12 });
 const ghostTrail = makeTube({ color: 0xffb070, radiusFt: 0.03, fadeS: 0.12, opacity: 0.7 });
 const noSpinLine = makeTube({ color: 0xffffff, radiusFt: 0.022, dashS: 0.012, opacity: 0.85 });
 scene.add(trail, ghostTrail, noSpinLine);
-// Batter, catcher and umpire (figures.js): static poses, shown or hidden per view.
-const cast = buildCast();
-scene.add(cast);
 let zone = null;
 let figure = null; // the pitcher, rebuilt per pitcher (handedness), re-posed per pitch
 
@@ -403,8 +399,6 @@ renderer.setAnimationLoop((now) => {
   }
   if (intro) updateIntro(dt);
   else if (state.data) updateCamera();
-  // The intro flies in from outside: show everyone until it hands over to the umpire's eye.
-  if (state.data && setCast(cast, currentAtBat(state).stand, intro ? "free" : state.view)) refreshShadows();
   park.userData.update?.({ timeS: now / 1000, board: boardInfo() });
   look.render();
 });
