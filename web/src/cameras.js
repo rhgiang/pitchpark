@@ -133,22 +133,27 @@ export function rideAlong(path, t_s, release, throws) {
   };
 }
 
-// TV broadcast view: the centre-field camera. All framing choices, tuned against screenshots.
+// TV broadcast view: the centre-field camera, calibrated (2026-11-14) on two real centre-field frames
+// of Ohtani pitching (Dodger Stadium and Houston; 800x450). Measured there, as fractions of the frame:
+// pitcher's feet 0.76/0.85 down, his height 0.41/0.38 of the frame, the plate 0.55/0.50 down and
+// 0.20/0.03 of the width to his right; the batter's head ~0.2 down.
 // - Position: on a platform just behind the outfield fence (real park cameras sit at the top of the
 //   centre-field wall / batter's eye, ~400-420 ft out). The eye wall stands further back, behind it.
-// - Height: 24 ft, 16 ft above the 8 ft fence so the sight line clears it (23 ft up when it crosses
-//   the fence). It sets the look: ~3 deg down, so the pitcher's head lines up with the batter's and
-//   the catcher and plate sit just above his shoulders, as on TV. (At 44 ft it looked from above.)
-// - Side offset: 12 ft to the first-base side, the slight off-centre of real broadcast cameras: at the
-//   mound the pitcher is ~1.8 ft off the camera-to-plate line, so the batter shows past his body.
-// - Aim: 2 ft up at the plate, mid-way between the pitcher's feet and the batter's head.
-// - Vertical FOV: a few degrees is the long-lens TV flattening (~600 mm); the narrowest that frames
-//   the pitcher's feet to the batter's head with margin (the pitcher's side-to-side reach is 6x narrower).
-export const TV_VFOV_DEG = 2.8;
-const TV_X_FT = 12;
+// - Side: the pitcher stands left of the plate on screen, so the camera is off to the third-base side
+//   (x < 0, "left-centre"): nearer things shift away from the camera's offset. The shift between
+//   pitcher (~350 ft away) and plate (~410 ft) is offset x (1/350 - 1/410) rad: the frames' 0.20 and
+//   0.03 W give 43 and 7 ft depending on the park; 22 ft is a typical one (~0.11 W).
+// - Height: likewise the plate sits above the pitcher's feet by height x (1/350 - 1/410) rad: the
+//   frames give 24-42 ft; 32 ft (24 above the 8 ft fence) puts the plate ~0.24 H above his feet.
+// - Aim: 20 ft in front of the plate, 2.5 ft up: the frame centre falls between the pitcher and the
+//   plate, as on TV (feet ~0.8 H down, plate ~0.56 H).
+// - Vertical FOV: a 6.3 ft pitcher at ~350 ft is 1.03 deg tall and fills ~0.4 of the frame -> 2.6 deg
+//   (a ~650 mm lens on 16:9). The telephoto flattening is what makes the batter look as tall as him.
+export const TV_VFOV_DEG = 2.6;
+const TV_X_FT = -22;
 const TV_Y_FT = fenceDistFt(0) + 10;
-const TV_Z_FT = FENCE_HEIGHT_FT + 16;
-const TV_AIM = [0, 0, 2];
+const TV_Z_FT = FENCE_HEIGHT_FT + 24;
+const TV_AIM = [0, 20, 2.5];
 
 /**
  * Centre-field TV broadcast camera, the same for both pitcher hands.

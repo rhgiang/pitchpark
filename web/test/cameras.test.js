@@ -233,11 +233,28 @@ test("TV view frames the pitcher on the rubber, his release, the zone and the pl
   assert.ok(v.vfovDeg < 8, "a telephoto lens: a few degrees");
 });
 
-test("TV camera is behind the pitcher (y well past the rubber), above the field and off the centre line", () => {
+test("TV camera is behind the pitcher, 25-40 ft up and off to the third-base side (x < 0), as on the broadcast", () => {
   const v = tvView();
   assert.ok(v.position[1] > TV_RUBBER_Y_FT + 300);
-  assert.ok(v.position[2] > 20);
-  assert.ok(v.position[0] !== 0);
+  assert.ok(v.position[2] >= 25 && v.position[2] <= 40, `${v.position[2]} ft up`);
+  // Broadcast frames show the pitcher low-left with the plate up and to his right: a camera on
+  // the third-base side (left-centre), 7-42 ft off the centre line depending on the park.
+  assert.ok(v.position[0] <= -7 && v.position[0] >= -42, `${v.position[0]} ft across`);
+});
+
+test("TV frame layout matches the broadcast: pitcher low-left, plate just below mid-frame and right of him", () => {
+  const v = tvView();
+  const cam = cameraAt(v, v.vfovDeg);
+  // Image fractions (0,0 top-left), as measured on two centre-field frames of Ohtani (Dodger
+  // Stadium, Houston): feet 0.76/0.85 down, plate 0.55/0.50 down, plate 0.20/0.03 W right of him.
+  const at = (q) => { const w = toScene(q).project(cam); return [(w.x + 1) / 2, (1 - w.y) / 2]; };
+  const feet = at([0, TV_RUBBER_Y_FT, MOUND_TOP_FT]);
+  const head = at([0, TV_RUBBER_Y_FT, MOUND_TOP_FT + 6.3]);
+  const plate = at([0, PLATE_FRONT_Y_FT / 2, 0]);
+  assert.ok(feet[1] > 0.74 && feet[1] < 0.87, `feet ${feet[1]}`);
+  assert.ok(feet[1] - head[1] > 0.34 && feet[1] - head[1] < 0.44, `pitcher height ${feet[1] - head[1]} of the frame`);
+  assert.ok(plate[1] > 0.48 && plate[1] < 0.6, `plate ${plate[1]}`);
+  assert.ok(plate[0] - feet[0] > 0.03 && plate[0] - feet[0] < 0.2, `plate ${plate[0] - feet[0]} W right of the pitcher`);
 });
 
 test("TV line of sight to home plate and to the release clears the fence, the batter's eye wall and the stands", () => {
