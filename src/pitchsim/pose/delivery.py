@@ -46,6 +46,28 @@ def landmarks(j: np.ndarray, release: int, throws: str, up: np.ndarray | None = 
     return {"leg_lift": leg_lift, "foot_strike": fs, "release": int(release)}
 
 
+def rocker_step(j: np.ndarray, throws: str, leg_lift: int, fps: float, up: np.ndarray | None = None,
+                min_step: float = 0.6) -> int | None:
+    """Frame of the rocker step (the lead foot's small step sideways / back before the leg lift), or None.
+
+    Ohtani starts from a set stance, steps the lead foot ~1.3 ft sideways and sways his hips over it,
+    then lifts the leg.  The step's plateau is the lead toe's horizontal offset from frame 0 over
+    leg_lift - 0.8 s .. leg_lift - 0.6 s (planted after the step, before the leg starts to rise); the
+    rocker step is the first frame the toe has covered half of it along that direction.  None when the
+    plateau is under `min_step` (j's units; 0.6 ft by default: no visible step, or a lift that missed it).
+    """
+    up = np.array([0.0, 0.0, 1.0]) if up is None else np.asarray(up, float) / np.linalg.norm(up)
+    d = j[:, _TOE[_lead(throws)]] - j[0, _TOE[_lead(throws)]]
+    d = d - np.outer(d @ up, up)
+    lo, hi = max(leg_lift - int(round(0.8 * fps)), 0), max(leg_lift - int(round(0.6 * fps)), 1)
+    plateau = np.median(d[lo:hi], axis=0)
+    size = np.linalg.norm(plateau)
+    if size < min_step:
+        return None
+    along = d[:hi] @ (plateau / size)
+    return int(np.argmax(along >= 0.5 * size))
+
+
 def jitter(j: np.ndarray, fps: float) -> float:
     """RMS over joints and frames of the third time-difference (jerk), in units/s^3.
     Noise is amplified hard by differencing, so this is a sensitive jitter meter."""
@@ -68,7 +90,8 @@ def time_warp(tmpl_s: np.ndarray, clip_s: np.ndarray) -> PchipInterpolator:
 
 
 def average_delivery(seqs: list[np.ndarray], marks: list[dict], pre_s: float, fps_out: float = 60.0,
-                     post_s: float = 0.6, excluded: list | None = None) -> tuple[np.ndarray, int]:
+                     post_s: float = 0.6, excluded: list | None = None,
+                     weights: list | None = None) -> tuple[np.ndarray, int]:
     """Time-warp clips so their landmarks coincide, average, smooth.  Returns (joints (T,24,3), release_index).
 
     marks[i]: dict with leg_lift, foot_strike, release (frame indices, from `landmarks`) and "fps" (that
@@ -77,6 +100,9 @@ def average_delivery(seqs: list[np.ndarray], marks: list[dict], pre_s: float, fp
     pre_s / post_s: seconds kept before / after release.  release_index == round(pre_s * fps_out).
     excluded: optional out-parameter; a clip that does not cover [release - pre_s, release + post_s] is
       appended as (clip_index, "short").  An out-list keeps the return a plain 2-tuple as the brief says.
+    weights: optional per-clip f(tau) -> weight in [0, 1] (tau: output time, s from release; None = 1), so a
+      clip can sit out part of the delivery (e.g. a clip whose lift missed the rocker step fades in only
+      before the leg lift); the average divides by the summed weight.
     Warp: `time_warp` (smooth, monotone) through the landmarks -> their median times relative to release.
     """
     keep = []
@@ -104,6 +130,7 @@ def average_delivery(seqs: list[np.ndarray], marks: list[dict], pre_s: float, fp
     n_out = ri + int(round(post_s * fps_out)) + 1
     tau = (np.arange(n_out) - ri) / fps_out
     acc = np.zeros((n_out, 24, 3))
+    wsum = np.zeros(n_out)
     used = 0
     for c, i in enumerate(keep):
         s = np.asarray(seqs[i], float)
@@ -122,10 +149,14 @@ def average_delivery(seqs: list[np.ndarray], marks: list[dict], pre_s: float, fp
         lo = np.floor(pos).astype(int)
         hi = np.minimum(lo + 1, len(s) - 1)
         f = (pos - lo)[:, None, None]
-        acc += s[lo] * (1 - f) + s[hi] * f
+        wt = np.ones(n_out) if weights is None or weights[i] is None else np.asarray(weights[i](tau), float)
+        acc += wt[:, None, None] * (s[lo] * (1 - f) + s[hi] * f)
+        wsum += wt
     if used == 0:
         raise ValueError("no clip covers the requested window after time-warping")
-    avg = acc / used
+    if np.any(wsum <= 0):
+        raise ValueError("clip weights sum to zero somewhere in the window")
+    avg = acc / wsum[:, None, None]
 
     # Savitzky-Golay (Savitzky & Golay 1964): local cubic fit over ~0.15 s.  Cubic keeps the sharp
     # release-speed peak (a moving average would flatten it); 0.15 s is shorter than the arm-acceleration

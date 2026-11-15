@@ -114,3 +114,35 @@ def test_time_warp_is_smooth_monotone_and_hits_the_knots():
     for k in tmpl:
         left, right = (w(k) - w(k - h)) / h, (w(k + h) - w(k)) / h
         assert abs(left - right) < 1e-3, (k, left, right)
+
+
+def _rocker_clip(step_ft=1.3, at=20, n=160, fps=60.0):
+    """SYNTHETIC: lead (left) toe steps sideways `step_ft` (x) as a sigmoid centred on frame `at`, then
+    comes back toward the plate after a leg lift at frame 100 (z up)."""
+    t = np.arange(n)
+    j = np.zeros((n, 24, 3))
+    j[:, 10, 0] = step_ft / (1 + np.exp(-(t - at) / 3.0))
+    j[:, 10, 0] -= 3.0 / (1 + np.exp(-(t - 110) / 4.0))
+    j[:, 7] = j[:, 10] + [0, 0.3, 0.2]
+    return j
+
+
+def test_rocker_step_found_at_half_the_step():
+    from pitchsim.pose.delivery import rocker_step
+    assert abs(rocker_step(_rocker_clip(), "R", leg_lift=100, fps=60.0) - 20) <= 1
+
+
+def test_rocker_step_none_without_a_step():
+    from pitchsim.pose.delivery import rocker_step
+    assert rocker_step(_rocker_clip(step_ft=0.1), "R", leg_lift=100, fps=60.0) is None
+
+
+def test_average_weights_fade_a_clip_out():
+    """SYNTHETIC: clip b has weight 0 before 0.3 s pre-release, so early frames are clip a alone."""
+    a, b = _clip(60, 120, 60, 0.05), _clip(60, 120, 60, 0.05)
+    a[:, 0, 2], b[:, 0, 2] = 0.0, 1.0
+    m = dict(leg_lift=20, foot_strike=40, release=60, fps=60.0)
+    wb = lambda tau: (tau > -0.3).astype(float)  # noqa: E731
+    j, ri = average_delivery([a, b], [m, m], pre_s=0.9, weights=[None, wb])
+    assert np.allclose(j[: ri - 30, 0, 2], 0.0, atol=1e-6)
+    assert np.allclose(j[ri - 10:, 0, 2], 0.5, atol=1e-6)
