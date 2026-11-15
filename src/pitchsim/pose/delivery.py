@@ -5,6 +5,7 @@ Frame-agnostic: nothing here assumes which axis is up except `landmarks`, which 
 """
 import numpy as np
 from scipy.interpolate import PchipInterpolator
+from scipy.ndimage import gaussian_filter1d
 from scipy.signal import savgol_filter
 
 # SMPL joint indices (same order as JOINTS in web/src/skeleton.js)
@@ -135,6 +136,24 @@ def time_warp(tmpl_s: np.ndarray, clip_s: np.ndarray) -> PchipInterpolator:
     kx = np.concatenate([[tmpl_s[0] - 10], tmpl_s, [10.0]])
     ky = np.concatenate([[clip_s[0] - 10], clip_s, [10.0]])
     return PchipInterpolator(kx, ky)
+
+
+def phase_smooth(j: np.ndarray, fps: float, slow_until: int, sigma_s: float = 0.05,
+                 blend_s: float = 0.15) -> np.ndarray:
+    """Extra smoothing for the slow part of a delivery (frames before `slow_until`), none after.
+
+    Why: before the leg lift the body moves slowly (set stance, rocker step, hands coming together), so
+    the averaged lifts' residual frame noise is a large share of the motion there and reads as a wobble
+    (torso ~117 deg/s of angular noise at t ~ -1.5 s); the same smoothing through the stride and arm
+    action would blunt real fast motion.  The output is a Gaussian-smoothed copy (sigma `sigma_s`, 0.05 s
+    = 3 frames: the rocker step takes ~0.4 s, so it survives) blended into the input with a weight that
+    is 1 up to `slow_until` - `blend_s` and eases (smootherstep) to 0 at `slow_until`.
+    """
+    j = np.asarray(j, float)
+    smooth = gaussian_filter1d(j, sigma_s * fps, axis=0, mode="nearest")
+    u = np.clip((slow_until - np.arange(len(j))) / max(blend_s * fps, 1.0), 0.0, 1.0)
+    w = u ** 3 * (u * (6 * u - 15) + 10)
+    return j + w[:, None, None] * (smooth - j)
 
 
 def average_delivery(seqs: list[np.ndarray], marks: list[dict], pre_s: float, fps_out: float = 60.0,

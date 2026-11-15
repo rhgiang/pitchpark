@@ -263,3 +263,22 @@ def test_ground_root_bridges_the_foot_hand_over_smoothly():
     j[:, 11, 1] -= 0.3 * s * s * (3 - 2 * s)          # lift artifact: pivot toe slides 0.3 m toward the plate
     g = ground_root(j, "R", fs)
     assert np.linalg.norm(np.diff(g[:, 0], n=2, axis=0), axis=1).max() < 0.008
+
+
+def test_phase_smooth_calms_the_slow_windup_but_keeps_fast_motion():
+    """SYNTHETIC: a slow sway (0.5 Hz) with 5 mm frame noise until frame 90, then a fast throw (a 1 m
+    sigmoid over ~0.1 s at frame 130).  Smoothing hard before frame 90 must cut the windup noise by more
+    than half while leaving the fast part untouched (< 1 mm)."""
+    from pitchsim.pose.delivery import phase_smooth
+    rng = np.random.default_rng(3)
+    n, fps = 180, 60.0
+    t = np.arange(n) / fps
+    clean = np.zeros((n, 24, 3))
+    clean[:, :, 0] = 0.2 * np.sin(2 * np.pi * 0.5 * t)[:, None]
+    clean[:, 23, 1] = 1.0 / (1 + np.exp(-(np.arange(n) - 130) / 3.0))
+    noisy = clean + rng.normal(0, 0.005, clean.shape)
+    out = phase_smooth(noisy, fps, slow_until=90)
+    before = np.sqrt(np.mean((noisy[:80] - clean[:80]) ** 2))
+    after = np.sqrt(np.mean((out[:80] - clean[:80]) ** 2))
+    assert after < 0.5 * before
+    assert np.abs(out[100:] - noisy[100:]).max() < 1e-3

@@ -19,7 +19,7 @@ from pitchsim.export import write_json
 from pitchsim.pose.anchor import (anchor, correct_to_mean, lock_feet, mound_z_ft, release_values,
                                   segment_lengths)
 from pitchsim.pose.delivery import (average_delivery, fix_leg_swaps, ground_root, jitter, landmarks, lift_snap,
-                                    rocker_step)
+                                    phase_smooth, rocker_step)
 from pitchsim.pose.joints3d import load_lift
 from pitchsim.pose.pose2d import load_pose2d
 from pitchsim.pose.release import foot_strike_frame
@@ -231,6 +231,14 @@ def main():
         drop(why, train[i])
     train_used = [c for c in train if c not in short]
     # Averaging lets planted feet creep a little (clips disagree slightly); lock them again on the average.
+    # leg lift / foot strike / rocker step of the template: median offsets before release (s), in output
+    # frames (the same medians average_delivery warps to)
+    ll_s, fs_s, rk_s = (np.median([(marks[c][k] - marks[c]["release"]) / L[c].fps for c in train_used])
+                        for k in ("leg_lift", "foot_strike", "rocker"))
+    ll, fsi, rki = (int(round(ri + v * 60.0)) for v in (ll_s, fs_s, rk_s))
+    # Extra smoothing before the leg-lift peak only (delivery.phase_smooth): the windup is slow, so the
+    # averaged lifts' leftover noise read as a wobble there; the stride and throw keep today's smoothing.
+    avg_raw = phase_smooth(avg_raw, 60.0, slow_until=ll)
     avg_ft = lock_feet(avg_raw, 60.0, v_lo_ftps=1.0, v_hi_ftps=2.5)
     rv_avg = release_values(avg_ft, ri, throws)
 
@@ -265,11 +273,6 @@ def main():
     cl = clean(raw)
     bases_empty = cl[cl[["on_1b", "on_2b", "on_3b"]].isna().all(axis=1)]
     target = {k: float(bases_empty[STAT[k]].mean()) for k in KEYS}
-    # leg lift / foot strike of the template: median offsets before release (s), in output frames (the same
-    # medians average_delivery warps to)
-    ll_s, fs_s, rk_s = (np.median([(marks[c][k] - marks[c]["release"]) / L[c].fps for c in train_used])
-                        for k in ("leg_lift", "foot_strike", "rocker"))
-    ll, fsi, rki = (int(round(ri + v * 60.0)) for v in (ll_s, fs_s, rk_s))
     cinfo: dict = {}
     final = correct_to_mean(avg_ft, ri, fsi, throws, target, leg_lift_index=ll, info=cinfo)
     rv_fin = release_values(final, ri, throws)
