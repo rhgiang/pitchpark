@@ -206,3 +206,17 @@ def test_correct_to_mean_late_foot_strike_smooth(kind):
     for hip, knee, ank in ((1, 4, 7), (2, 5, 8)):
         assert np.abs(np.diff(_knee_deg(out, hip, knee, ank))).max() < 8.0, knee
     assert np.linalg.norm(np.diff(out - j, n=2, axis=0), axis=2).max() < 0.05
+
+
+def test_lock_feet_holds_the_toe_when_the_heel_moves():
+    """SYNTHETIC: a planted foot whose ankle sways 0.2 ft (weight shift) while its toe creeps 0.03 ft:
+    the toe -- what the viewer pins -- must be held still."""
+    from pitchsim.pose.anchor import lock_feet
+    n = 60
+    p = np.zeros((n, 24, 3))
+    p[:, 10] = [0.0, 60.0, 0.83]
+    p[:, 10, 0] += np.linspace(0, 0.03, n)
+    p[:, 7] = p[:, 10] + [0.0, 0.4, 0.2]
+    p[:, 7, 0] += 0.2 * np.sin(np.linspace(0, np.pi, n))
+    out = lock_feet(p, 60.0)
+    assert np.ptp(out[:, 10, :2], axis=0).max() < 0.002
