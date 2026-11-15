@@ -274,3 +274,61 @@ test("TV line of sight to home plate and to the release clears the fence, the ba
     }
   }
 });
+
+test("TV near plane gives depth resolution at the pitcher under 0.01 ft", () => {
+  const v = tvView();
+  const d = Math.hypot(...v.position.map((c, i) => c - [0, 60.5, 5][i]));
+  assert.ok(v.near > 0.05);
+  assert.ok(d * d / (v.near * 2 ** 24) < 0.01, `resolution ${d * d / (v.near * 2 ** 24)} ft`);
+});
+
+// ---- ride windup
+
+const PRE_S = 2.85;
+// Pelvis walks 5 ft toward the plate over the windup (stand-in for the delivery's pelvis joint).
+const pelvisAt = (t) => [-0.5, 61 - 5 * Math.min(1, (t + PRE_S) / PRE_S), 3.8];
+const windup = (t) => ({ pelvis: pelvisAt(t) });
+const wpath = { t: flight.t, p: flight.p };
+
+test("windup ride sits behind the pitcher on his throwing side with head and feet in 16:9 frame", () => {
+  for (const throws of ["R", "L"]) {
+    const m = throws === "R" ? 1 : -1;
+    const path = { t: flight.t, p: flight.p.map(([x, y, z]) => [m * x, y, z]) };
+    const t = -1.5, [px, py, pz] = pelvisAt(t);
+    const w = { pelvis: [m * px, py, pz] };
+    const v = rideAlong(path, t, path.p[0], throws, w);
+    assert.ok(v.position[1] > py);
+    assert.ok(throws === "R" ? v.position[0] < w.pelvis[0] : v.position[0] > w.pelvis[0]);
+    const cam = cameraAt(v, RIDE_VFOV_DEG);
+    for (const q of [[w.pelvis[0], py, 6.6], [w.pelvis[0], py, 0.3]]) {
+      const n = toScene(q).project(cam);
+      assert.ok(Math.abs(n.x) < 0.9 && Math.abs(n.y) < 0.9, `${q} out of frame (${n.x}, ${n.y})`);
+    }
+  }
+});
+
+test("windup ride is continuous into release and the flight, and equals today's pose at t = 0", () => {
+  const dt = 1 / 240;
+  let prev = null;
+  for (let t = -PRE_S; t <= 0.3 + 1e-9; t += dt) {
+    const v = rideAlong(wpath, t, wpath.p[0], "R", windup(t));
+    if (prev) {
+      // Camera speed: the glide covers ~5 ft in 0.4 s; smootherstep peaks at 1.875x the mean (~23 ft/s).
+      // 0.15 ft per 1/240 s = 36 ft/s allows that but no jump.
+      // (after release the camera rides the ball at ~130 ft/s, so only t <= 0 is bounded)
+      assert.ok(t > 0 || Math.hypot(...v.position.map((c, i) => c - prev.position[i])) < 0.15, `position jump at t=${t}`);
+      const a = v.target.map((c, i) => c - v.position[i]), b = prev.target.map((c, i) => c - prev.position[i]);
+      const ang = Math.acos(Math.min(1, a.reduce((s, c, i) => s + c * b[i], 0) / Math.hypot(...a) / Math.hypot(...b)));
+      assert.ok(ang < 0.01, `aim jump ${ang} rad at t=${t}`); // 0.57 deg per 1/240 s = 137 deg/s
+    }
+    prev = v;
+  }
+  const a = rideAlong(wpath, 0, wpath.p[0], "R", windup(0)), b = rideAlong(wpath, 0, wpath.p[0], "R");
+  for (let i = 0; i < 3; i++) {
+    assert.ok(Math.abs(a.position[i] - b.position[i]) < 1e-6 && Math.abs(a.target[i] - b.target[i]) < 1e-6);
+  }
+});
+
+test("ride without a windup is the same for every t < 0 as at t = 0", () => {
+  assert.deepEqual(rideAlong(wpath, -1, wpath.p[0], "R"), rideAlong(wpath, 0, wpath.p[0], "R"));
+});

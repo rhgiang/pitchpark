@@ -64,6 +64,18 @@ const VFOV = {
   ride: RIDE_VFOV_DEG, tv: TV_VFOV_DEG,
 };
 
+/**
+ * The delivery's pelvis (joint 0, Statcast ft) at t s from release: mean of the frames within
+ * +-0.15 s, so per-frame lifting noise does not shake the windup camera.
+ */
+function pelvisAt(d, t) {
+  const c = d.release_index + t * d.fps, r = 0.15 * d.fps;
+  const lo = Math.max(0, Math.ceil(c - r)), hi = Math.min(d.joints_ft.length - 1, Math.floor(c + r));
+  const m = [0, 0, 0];
+  for (let i = lo; i <= hi; i++) d.joints_ft[i][0].forEach((v, k) => { m[k] += v / (hi - lo + 1); });
+  return m;
+}
+
 /** Point the camera for the current view. Runs every frame: cheap, and ride follows t. */
 function updateCamera() {
   const ab = currentAtBat(state);
@@ -73,6 +85,7 @@ function updateCamera() {
     if (appliedView === "free") freePose = { position: camera.position.clone(), target: controls.target.clone() };
     appliedView = state.view;
     camera.fov = VFOV[state.view];
+    camera.near = 0.05; // back to the default (a pose may push it out below); Free and the intro rely on it
     camera.updateProjectionMatrix();
     controls.enabled = state.view === "free";
     if (state.view === "free") { // first visit: FREE_START; later: where the user left it
@@ -87,8 +100,11 @@ function updateCamera() {
   else if (state.view === "batter") pose = batterEye(ab.stand);
   // With a delivery the windup happens on the rubber, behind release: keep the pitcher in shot.
   else if (path && state.view === "side") pose = sideView(path, camera.aspect, state.delivery ? RUBBER_FRONT_Y_FT + 1.5 : null);
-  else if (path) pose = rideAlong(path, Math.max(state.t, 0), currentPitch(state).release, state.data.pitcher.throws);
+  else if (path) pose = rideAlong(path, state.t, currentPitch(state).release, state.data.pitcher.throws,
+    state.delivery ? { pelvis: pelvisAt(state.delivery, state.t) } : null);
   if (!pose) return;
+  const near = pose.near ?? 0.05; // a pose may push the near plane out for depth precision (tvView)
+  if (camera.near !== near) { camera.near = near; camera.updateProjectionMatrix(); }
   camera.position.copy(toScene(pose.position));
   camera.lookAt(toScene(pose.target));
 }
