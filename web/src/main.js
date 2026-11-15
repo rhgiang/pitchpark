@@ -9,7 +9,7 @@ import {
 } from "./cameras.js";
 import { loadIndex, loadPitcher, loadDelivery } from "./data.js";
 import {
-  initialState, reduce, currentAtBat, currentPitch, shownPaths, MODES, SPEEDS, VIEWS, spinFactor,
+  initialState, reduce, preroll, currentAtBat, currentPitch, shownPaths, MODES, SPEEDS, VIEWS, spinFactor,
 } from "./state.js";
 import { makeTube, updateTube } from "./trail.js";
 import { makeBall, makeGhost, updateBall, spinBall } from "./ball.js";
@@ -290,7 +290,7 @@ async function start() {
   if (q.get("panel") === "help") $("help").open = true;
   if (q.get("panel") === "nolook") $("look").open = false;
   // Freeze at t (no playback) so a headless screenshot catches the ball mid-flight.
-  dispatch({ type: "seek", t: Number(q.get("t") ?? 0) });
+  dispatch({ type: "seek", t: q.has("t") ? Number(q.get("t")) : 0 - preroll(state) }); // no ?t=: from the start of the delivery
   if (fpsBox) benchmark();
 }
 start();

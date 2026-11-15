@@ -205,3 +205,9 @@ test("no spoiler during the windup", () => {
   assert.equal(landed(m), false);
   assert.equal(m.seen, 0);
 });
+
+test("pickAtBat and pickPitcher start at -pre_s with a delivery, at 0 without", () => {
+  assert.equal(withDelivery().t, -2.5);
+  assert.equal(run(initialState(), { type: "pickPitcher", slug: "synthetic", data, delivery }).t, -2.5);
+  assert.equal(run(loaded(), { type: "pickAtBat", index: 1 }).t, 0);
+});

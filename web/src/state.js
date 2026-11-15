@@ -74,11 +74,12 @@ function step(s, a) {
       return derive({
         ...initialState(), speed: s.speed, view: s.view, showNoSpin: s.showNoSpin,
         slug: a.slug, data: a.data, delivery: a.delivery ?? null,
+        t: 0 - (a.delivery?.pre_s ?? 0),
       });
     case "pickAtBat": {
       const n = s.data.at_bats.length;
       const abIndex = a.index === "random" ? Math.floor(mulberry32(a.seed) * n) : a.index;
-      return derive({ ...s, abIndex, pitchIndex: 0, t: 0, playing: false, wantMode: "real", seen: 0 });
+      return derive({ ...s, abIndex, pitchIndex: 0, t: 0 - preroll(s), playing: false, wantMode: "real", seen: 0 });
     }
     case "goPitch": { // a pitch-strip click: that pitch, thrown from release
       const last = currentAtBat(s).pitches.length - 1;
