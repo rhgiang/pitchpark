@@ -104,7 +104,7 @@ async function main() {
   scene.add(figure);
   const resize = () => {
     const w = pane.clientWidth, h = pane.clientHeight;
-    renderer.setSize(w, h);
+    renderer.setSize(w, h, false); // false: CSS sizes the canvas, so it never pushes the pane wider
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     shown = null;
