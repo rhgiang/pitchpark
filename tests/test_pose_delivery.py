@@ -146,3 +146,79 @@ def test_average_weights_fade_a_clip_out():
     j, ri = average_delivery([a, b], [m, m], pre_s=0.9, weights=[None, wb])
     assert np.allclose(j[: ri - 30, 0, 2], 0.0, atol=1e-6)
     assert np.allclose(j[ri - 10:, 0, 2], 0.5, atol=1e-6)
+
+
+def _walk(n=120, fps=60.0):
+    """SYNTHETIC legs: hips at +-0.1 m, each knee/ankle/toe swinging fore-aft out of phase (no real data)."""
+    t = np.arange(n) / fps
+    j = np.zeros((n, 24, 3))
+    for side, (hip, knee, ank, toe), ph in (("L", (1, 4, 7, 10), 0.0), ("R", (2, 5, 8, 11), np.pi)):
+        x = 0.1 if side == "L" else -0.1
+        sw = 0.3 * np.sin(2 * np.pi * 1.0 * t + ph)
+        j[:, hip] = [x, 0, 0.9]
+        for k, z, s in ((knee, 0.5, 0.5), (ank, 0.1, 1.0), (toe, 0.0, 1.0)):
+            j[:, k, 0] = x
+            j[:, k, 1] = s * sw + (0.15 if k == toe else 0.0)
+            j[:, k, 2] = z
+    return j
+
+
+def test_fix_leg_swaps_undoes_a_left_right_leg_swap():
+    """SYNTHETIC: the monocular lift sometimes labels the left leg as the right (and vice versa) for a
+    stretch of frames, then snaps back -- a one-frame 0.5-0.9 m jump of every leg joint.  Those swaps sat
+    right before the leg lift in 5 real clips and made the average hitch there."""
+    from pitchsim.pose.delivery import fix_leg_swaps
+    j = _walk()
+    bad = j.copy()
+    bad[:40, [1, 4, 7, 10, 2, 5, 8, 11]] = j[:40, [2, 5, 8, 11, 1, 4, 7, 10]]
+    fixed, n = fix_leg_swaps(bad, anchor_frame=100)
+    assert n == 40
+    assert np.allclose(fixed, j)
+
+
+def test_fix_leg_swaps_leaves_a_clean_clip_alone():
+    from pitchsim.pose.delivery import fix_leg_swaps
+    j = _walk()
+    fixed, n = fix_leg_swaps(j, anchor_frame=100)
+    assert n == 0 and np.allclose(fixed, j)
+
+
+def test_leg_swap_would_make_the_average_hitch():
+    """SYNTHETIC regression: averaging a clip whose legs are swapped until some frame puts an acceleration
+    spike in the average there (> 3x the clean average's); repaired first, it does not."""
+    from pitchsim.pose.delivery import fix_leg_swaps
+    clean = _walk(180)
+    bad = clean.copy()
+    bad[:70, [1, 4, 7, 10, 2, 5, 8, 11]] = clean[:70, [2, 5, 8, 11, 1, 4, 7, 10]]
+    m = dict(leg_lift=60, foot_strike=120, release=150, fps=60.0)
+    acc = lambda a: np.linalg.norm(np.diff(a, n=2, axis=0), axis=2).max()  # noqa: E731
+    ref, _ = average_delivery([clean, clean], [m, m], pre_s=2.0, post_s=0.4)
+    hitch, _ = average_delivery([clean, bad], [m, m], pre_s=2.0, post_s=0.4)
+    rep, _ = average_delivery([clean, fix_leg_swaps(bad, 150)[0]], [m, m], pre_s=2.0, post_s=0.4)
+    assert acc(hitch) > 3 * acc(ref)
+    assert acc(rep) < 1.5 * acc(ref)
+
+
+def test_lift_snap_finds_the_last_whole_leg_jump_before_release():
+    """SYNTHETIC: a lift frozen in a wrong pose until frame 50, then snapping to the right one."""
+    from pitchsim.pose.delivery import lift_snap
+    j = _walk(180)
+    j[:50, [4, 7, 10]] += [0, 0, -0.6]   # lead knee/ankle/toe 0.6 m off until the snap
+    assert lift_snap(j, release=150, fps=60.0) == 50
+    assert lift_snap(_walk(180), release=150, fps=60.0) is None
+
+
+def test_valid_from_keeps_a_snap_out_of_the_average():
+    """SYNTHETIC regression for the leg-lift hitch: one clip is garbage (0.6 m off) until its lift snaps at
+    frame 60.  Averaged in, the snap is an acceleration spike far above the clean clips' own; with
+    valid_from it fades in after the snap and the average stays as smooth as the clean one (< 1.5x)."""
+    clean = _walk(180)
+    bad = clean.copy()
+    bad[:60, [4, 7, 10]] += [0, 0, -0.6]
+    m = dict(leg_lift=60, foot_strike=120, release=150, fps=60.0)
+    acc = lambda a: np.linalg.norm(np.diff(a, n=2, axis=0), axis=2).max()  # noqa: E731
+    ref, _ = average_delivery([clean] * 3, [m] * 3, pre_s=2.0, post_s=0.4)
+    hitch, _ = average_delivery([clean, clean, bad], [m] * 3, pre_s=2.0, post_s=0.4)
+    ok, _ = average_delivery([clean, clean, bad], [m] * 3, pre_s=2.0, post_s=0.4, valid_from=[None, None, 60])
+    assert acc(hitch) > 3 * acc(ref)
+    assert acc(ok) < 1.5 * acc(ref)

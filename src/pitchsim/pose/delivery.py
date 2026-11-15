@@ -46,6 +46,54 @@ def landmarks(j: np.ndarray, release: int, throws: str, up: np.ndarray | None = 
     return {"leg_lift": leg_lift, "foot_strike": fs, "release": int(release)}
 
 
+_LEGS = [1, 4, 7, 10, 2, 5, 8, 11]          # L hip, knee, ankle, toe, then R
+_LEGS_SWAPPED = [2, 5, 8, 11, 1, 4, 7, 10]
+
+
+def fix_leg_swaps(j: np.ndarray, anchor_frame: int, margin: float = 0.1) -> tuple[np.ndarray, int]:
+    """Undo left/right leg swaps in a lift.  Returns (repaired copy, number of frames swapped back).
+
+    Why: a monocular lift sometimes labels the left leg as the right for a stretch of frames, then snaps
+    back -- a one-frame jump of every leg joint (0.5-0.9 m in 5 of the 14 Ohtani train clips, all before
+    the leg lift).  Averaged in, the snap is a hitch in the delivery at the leg lift, and the swapped
+    stretch hides the rocker step (its "lead toe" is really the pivot toe).
+    Walk out from `anchor_frame` (a frame trusted to be right, e.g. release), each frame compared with its
+    already-repaired neighbour: if the swapped labelling is closer by more than `margin` (j's units; the
+    farthest leg joint, pelvis-relative so root noise does not count), swap it.  Real leg motion moves a
+    joint < 0.1 m per frame at 60 fps, while a swap moves the hips' width plus the stride.
+    """
+    j = np.array(j, float)
+    rel = j - j[:, :1]
+    n_sw = 0
+    for frames, step in ((range(anchor_frame - 1, -1, -1), 1), (range(anchor_frame + 1, len(j)), -1)):
+        for f in frames:
+            g = rel[f + step, _LEGS]
+            keep = np.linalg.norm(rel[f, _LEGS] - g, axis=1).max()
+            swap = np.linalg.norm(rel[f, _LEGS_SWAPPED] - g, axis=1).max()
+            if swap + margin < keep:
+                j[f, _LEGS] = j[f, _LEGS_SWAPPED]
+                rel[f, _LEGS] = rel[f, _LEGS_SWAPPED]
+                n_sw += 1
+    return j, n_sw
+
+
+def lift_snap(j: np.ndarray, release: int, fps: float, jump: float = 0.4) -> int | None:
+    """First frame after the last whole-leg snap before release - 0.3 s, or None.
+
+    A snap is a frame where some leg joint (pelvis-relative, so root noise does not count) jumps more than
+    `jump` (j's units; 0.4 m) from the frame before.  Real leg joints move < 0.1 m per frame at 60 fps
+    away from release; in 3 Ohtani train clips the lift sits frozen in the set stance and then snaps
+    0.5-0.9 m to the leg lift in one frame.  Frames before the snap are not the pitcher's motion.  The last
+    0.3 s before release is not searched: the stride and arm are fast there and leg jumps of 0.2-0.34 m
+    are real.
+    """
+    rel = j[:, _LEGS] - j[:, :1]
+    hi = release - int(round(0.3 * fps))
+    d = np.linalg.norm(np.diff(rel[: hi + 1], axis=0), axis=2).max(1)
+    big = np.nonzero(d > jump)[0]
+    return int(big[-1] + 1) if big.size else None
+
+
 def rocker_step(j: np.ndarray, throws: str, leg_lift: int, fps: float, up: np.ndarray | None = None,
                 min_step: float = 0.6) -> int | None:
     """Frame of the rocker step (the lead foot's small step sideways / back before the leg lift), or None.
@@ -91,7 +139,8 @@ def time_warp(tmpl_s: np.ndarray, clip_s: np.ndarray) -> PchipInterpolator:
 
 def average_delivery(seqs: list[np.ndarray], marks: list[dict], pre_s: float, fps_out: float = 60.0,
                      post_s: float = 0.6, excluded: list | None = None,
-                     weights: list | None = None) -> tuple[np.ndarray, int]:
+                     weights: list | None = None, valid_from: list | None = None,
+                     fade_s: float = 0.3) -> tuple[np.ndarray, int]:
     """Time-warp clips so their landmarks coincide, average, smooth.  Returns (joints (T,24,3), release_index).
 
     marks[i]: dict with leg_lift, foot_strike, release (frame indices, from `landmarks`) and "fps" (that
@@ -103,6 +152,9 @@ def average_delivery(seqs: list[np.ndarray], marks: list[dict], pre_s: float, fp
     weights: optional per-clip f(tau) -> weight in [0, 1] (tau: output time, s from release; None = 1), so a
       clip can sit out part of the delivery (e.g. a clip whose lift missed the rocker step fades in only
       before the leg lift); the average divides by the summed weight.
+    valid_from: optional per-clip first valid frame (e.g. `lift_snap`; None = all valid).  The clip's weight
+      is 0 before it and eases in (smootherstep) over the next `fade_s` of clip time: a clip that joins
+      the average abruptly changes the mix in one frame, which is itself a jump.
     Warp: `time_warp` (smooth, monotone) through the landmarks -> their median times relative to release.
     """
     keep = []
@@ -150,6 +202,9 @@ def average_delivery(seqs: list[np.ndarray], marks: list[dict], pre_s: float, fp
         hi = np.minimum(lo + 1, len(s) - 1)
         f = (pos - lo)[:, None, None]
         wt = np.ones(n_out) if weights is None or weights[i] is None else np.asarray(weights[i](tau), float)
+        if valid_from is not None and valid_from[i] is not None:
+            u = np.clip((pos - valid_from[i]) / (fade_s * marks[i]["fps"]), 0.0, 1.0)
+            wt = wt * u ** 3 * (u * (6 * u - 15) + 10)   # smootherstep: no jolt where the clip joins
         acc += wt[:, None, None] * (s[lo] * (1 - f) + s[hi] * f)
         wsum += wt
     if used == 0:
