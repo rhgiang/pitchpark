@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Vector3 } from "three";
-import { JOINTS } from "../src/skeleton.js";
-import { makePitcher, poseAtRelease } from "../src/pitcher.js";
+import { readFileSync } from "node:fs";
+import { JOINTS, J } from "../src/skeleton.js";
+import { makePitcher, poseAtRelease, poseAtTime, handPosition } from "../src/pitcher.js";
 import { toScene } from "../src/coords.js";
 
 // SMPL's kinematic tree (Loper et al. 2015, SMPL model files): joint order and parents.
@@ -55,5 +56,69 @@ test("arm angle: shoulder-to-hand elevation above horizontal equals arm_angle", 
       // The hand is out on the throwing side, past the shoulder (Statcast x: RHP < 0).
       assert.ok(throws === "R" ? v.x < 0 : v.x > 0);
     }
+  }
+});
+
+// --- Delivery playback (M5). SYNTHETIC fixture (not from video): the 75 in rest pose on the
+// mound, right arm swinging overhand, release at frame 60 of 60 fps (t = 0). See its "note".
+const DELIVERY = JSON.parse(readFileSync(new URL("./fixtures/delivery-synthetic.json", import.meta.url)));
+const fixtureJoint = (t, name) => toScene(DELIVERY.joints_ft[DELIVERY.release_index + t * DELIVERY.fps][J[name]]);
+const add = ([x, y, z], [a, b, c], s = 1) => [x + s * a, y + s * b, z + s * c];
+const ownHand0 = DELIVERY.joints_ft[DELIVERY.release_index][J.right_hand]; // Statcast ft
+
+test("delivery: hand reaches the release point at t = 0", () => {
+  const fig = makePitcher("R");
+  const release = add(ownHand0, [0.12, -0.1, -0.1]);
+  poseAtTime(fig, DELIVERY, 0, release, 45);
+  const d = handPosition(fig, "R").distanceTo(toScene(release));
+  assert.ok(d < 0.01, `hand ${d.toFixed(4)} ft from release`);
+});
+
+test("delivery: a far release is reached without a snap", () => {
+  const fig = makePitcher("R");
+  const release = add(ownHand0, [0.6, 0, -0.8], 0.8); // 0.8 ft from the delivery's own hand
+  let prev = null, maxStep = 0, maxElbow = 0;
+  for (let i = -72; i <= 24; i++) { // t = -0.3 .. 0.1 s in 1/240 s steps
+    poseAtTime(fig, DELIVERY, i / 240, release, 45);
+    const h = handPosition(fig, "R");
+    if (prev) maxStep = Math.max(maxStep, h.distanceTo(prev));
+    prev = h;
+    const e = worldPos(fig, "mixamorig:RightForeArm");
+    const elbow = worldPos(fig, "mixamorig:RightArm").sub(e).angleTo(worldPos(fig, "mixamorig:RightHand").sub(e));
+    maxElbow = Math.max(maxElbow, (elbow * 180) / Math.PI);
+  }
+  assert.ok(maxStep <= 0.25, `largest hand step ${maxStep.toFixed(3)} ft`);
+  assert.ok(maxElbow < 178, `elbow reached ${maxElbow.toFixed(1)} deg`);
+  poseAtTime(fig, DELIVERY, 0, release, 45);
+  assert.ok(handPosition(fig, "R").distanceTo(toScene(release)) < 0.01);
+});
+
+test("delivery: before the blend the delivery is untouched", () => {
+  const fig = makePitcher("R");
+  poseAtTime(fig, DELIVERY, -0.5, add(ownHand0, [0.5, 0, -0.5]), 45);
+  const d = handPosition(fig, "R").distanceTo(fixtureJoint(-0.5, "right_hand"));
+  assert.ok(d < 1e-6, `hand ${d} ft off the fixture frame`);
+});
+
+test("height scales the figure, and the hand still reaches the release", () => {
+  for (const heightIn of [70, 80]) {
+    const fig = makePitcher("R", heightIn);
+    // Standing height: top of the rest-pose (T-pose, floor at 0) mesh, times the figure's scale.
+    const mesh = fig.children[0];
+    mesh.geometry.computeBoundingBox();
+    const top = mesh.geometry.boundingBox.max.y * fig.getWorldScale(new Vector3()).y;
+    assert.ok(Math.abs(top - heightIn / 12) < 0.1, `${heightIn} in: head top ${top.toFixed(3)} ft`);
+    // A delivery plays on its own pitcher (same height). Here the 75 in fixture drives a 70 / 80
+    // in body, whose shoulder sits lower / higher, so the release is taken near where this body's
+    // own (unblended) hand is at t = 0, then moved 0.2 ft.
+    poseAtTime(fig, DELIVERY, 0, null, 45);
+    const h = handPosition(fig, "R");
+    const release = add([h.x, -h.z, h.y], [0.12, -0.1, -0.13]); // scene -> Statcast, + 0.2 ft
+    poseAtTime(fig, DELIVERY, 0, release, 45);
+    const d = handPosition(fig, "R").distanceTo(toScene(release));
+    assert.ok(d < 0.01, `${heightIn} in: hand ${d.toFixed(4)} ft from release`);
+    // The static pose scales too (pitchers without a delivery).
+    poseAtRelease(fig, [-2.2, 54.5, 5.6], 35);
+    assert.ok(handPosition(fig, "R").distanceTo(toScene([-2.2, 54.5, 5.6])) < 0.05);
   }
 });

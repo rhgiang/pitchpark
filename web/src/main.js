@@ -14,7 +14,7 @@ import {
 import { makeTube, updateTube } from "./trail.js";
 import { makeBall, makeGhost, updateBall, spinBall } from "./ball.js";
 import { renderHud, buildStrip } from "./hud.js";
-import { makePitcher, poseAtRelease } from "./pitcher.js";
+import { makePitcher, poseAtRelease, poseAtTime, handPosition } from "./pitcher.js";
 import { buildPark } from "./park/index.js";
 import { initLook, setTimeOfDay, refreshShadows, inkProof, timeOfDay, TIMES } from "./look.js";
 
@@ -150,7 +150,8 @@ function dispatch(action) {
     if (zone) scene.add(zone);
     // Each pitch has its own release and arm angle; a no_tracking row may have no release, so
     // the figure keeps the previous pose (and a missing arm angle keeps the previous one).
-    if (pitch.release?.every(Number.isFinite)) {
+    // With a delivery the figure is posed every frame instead (render loop).
+    if (!state.delivery && pitch.release?.every(Number.isFinite)) {
       poseAtRelease(figure, pitch.release, pitch.arm_angle_deg ?? figure.userData.armAngleDeg);
       refreshShadows(); // the pitcher moved: redraw his shadow
     }
@@ -173,7 +174,7 @@ async function pickPitcher(slug) {
       o.skeleton?.dispose(); // bone texture
     });
   }
-  figure = makePitcher(data.pitcher.throws);
+  figure = makePitcher(data.pitcher.throws, data.pitcher.height_in ?? 75); // scaled to his height
   refreshShadows(); // new figure: redraw even if this at-bat's first pitch has no release
   scene.add(figure);
   for (const b of $("pitchers").children) b.classList.toggle("on", b.dataset.slug === slug);
@@ -350,6 +351,21 @@ function boardInfo() {
   };
 }
 
+/**
+ * With a delivery (M5), pose the figure at the current t; the hand blends onto this pitch's
+ * release just before t = 0. Re-posed (and its shadow redrawn) only when t or the pitch changed,
+ * so a frozen frame costs nothing.
+ */
+let posedAt = null;
+function poseFigure(p) {
+  const key = `${state.t}|${state.abIndex}|${state.pitchIndex}`;
+  if (!state.delivery || !figure || key === posedAt) return;
+  posedAt = key;
+  const release = p.release?.every(Number.isFinite) ? p.release : null;
+  poseAtTime(figure, state.delivery, state.t, release, p.arm_angle_deg ?? figure.userData.armAngleDeg);
+  refreshShadows();
+}
+
 let last = null;
 renderer.info.autoReset = false; // count the whole frame (all passes), reset below
 renderer.setAnimationLoop((now) => {
@@ -362,11 +378,17 @@ renderer.setAnimationLoop((now) => {
   if (state.data) {
     dispatch({ type: "tick", dt });
     const p = currentPitch(state);
-    // Before release (t < 0) everything that follows the ball is hidden: it clamps to t = 0, where
-    // the ball sits at the release point, so hide it explicitly. (Ball in the hand: Task 7.)
+    poseFigure(p);
+    // Before release (t < 0) everything that follows the flight is hidden (it would clamp to the
+    // release point); the ball rides in the hand instead. At t = 0 the hand is on the release
+    // point, which is where the flight starts, so the hand-off is seamless.
     const flying = state.t >= 0;
     const ft = Math.max(state.t, 0);
     updateBall(ball, flying ? (state.mode === "sim" ? p.sim : p.real) : null, ft);
+    if (!flying && figure) {
+      ball.visible = true;
+      ball.position.copy(handPosition(figure));
+    }
     spinBall(ball, p.spin_rpm == null ? null : p.spin_axis_deg, 2 * Math.PI * (p.spin_rpm / 60) * ft * spinFactor(state.speed));
     updateBall(ghost, flying && state.mode === "ghost" ? p.sim : null, ft);
     updateTube(trail, flying ? (state.mode === "sim" ? p.sim : p.real) : null, ft);
