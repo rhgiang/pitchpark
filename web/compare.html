@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Replica Eye Test</title>
+    <style>
+      :root { color-scheme: dark; --bg: #14171c; --panel: #1e232b; --ink: #e9edf2; --dim: #9aa4b1; --hi: #ffd166; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, sans-serif; }
+      header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 10px 16px; background: var(--panel); }
+      header h1 { font-size: 16px; margin: 0 8px 0 0; }
+      #status { color: var(--dim); }
+      .split { font-weight: 700; padding: 2px 8px; border-radius: 4px; }
+      .split.test { background: #2f6f4f; } .split.train { background: #5a4a2a; }
+      main { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 16px; }
+      #stage { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; overflow: hidden; }
+      #zoom { position: absolute; inset: 0; }
+      #stage video, #stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+      #stage canvas { pointer-events: none; }
+      #replica { width: 100%; aspect-ratio: 16 / 9; background: #000; }
+      .label { color: var(--dim); font-size: 12px; margin: 2px 0 6px; }
+      .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 0 16px; }
+      button { background: #2c3440; color: var(--ink); border: 1px solid #3c4654; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+      button.on { border-color: var(--hi); color: var(--hi); }
+      #clock { font-variant-numeric: tabular-nums; color: var(--dim); }
+      table { border-collapse: collapse; margin: 10px 16px; font-variant-numeric: tabular-nums; }
+      th, td { padding: 3px 12px; text-align: right; border-bottom: 1px solid #2c3440; }
+      th:first-child { text-align: left; }
+      tr.now { background: #3a3320; }
+      small { color: var(--dim); }
+      p.help { color: var(--dim); margin: 4px 16px 16px; max-width: 70em; }
+      @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Replica eye test</h1>
+      <input id="file" type="file" accept="video/mp4" />
+      <span id="split" class="split"></span>
+      <span id="status">Pick a clip from data/video/&lt;pitcher&gt;/ (it stays on your disk).</span>
+    </header>
+    <main>
+      <section>
+        <div id="stage"><div id="zoom"><video id="video" playsinline muted></video><canvas id="overlay"></canvas></div></div>
+        <div class="label">Real clip · red = the replica's joints projected with this clip's fitted camera</div>
+      </section>
+      <section>
+        <div id="replica"></div>
+        <div class="label">Replica · centre-field TV camera · hand pinned to this pitch's Statcast release</div>
+      </section>
+    </main>
+    <div class="controls">
+      <button id="play">Play</button>
+      <button data-speed="1" class="on">1×</button>
+      <button data-speed="0.25">¼×</button>
+      <button data-speed="0.1">⅒×</button>
+      <label><input id="show-overlay" type="checkbox" checked /> Overlay (o)</label>
+      <label><input id="zoom-on" type="checkbox" /> Zoom on pitcher (z)</label>
+      <span id="clock"></span>
+    </div>
+    <table id="scores"></table>
+    <p class="help">
+      Scores: median 2D distance between the replica's projected joints and the joints detected in this clip,
+      in torso lengths (shoulders to hips; ~inches for his 76 in height). "His other pitches" puts his real
+      deliveries from other games through the same fit: that is the noise floor, how much his own pitches differ.
+      "Static pose" is one pose held throughout. Keys: ← → step a frame, space play/pause, o overlay, z zoom,
+      [ ] shift the overlay a frame if a file's timing is off.
+    </p>
+    <script type="module" src="/src/compare.js"></script>
+  </body>
+</html>

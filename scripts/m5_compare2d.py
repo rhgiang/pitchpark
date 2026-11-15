@@ -37,6 +37,7 @@ from pitchsim.pose.compare2d import (CONF_MIN, COCO_IDX, GROUPS, JOINT_NAMES, PH
 from pitchsim.pose.delivery import fix_leg_swaps
 from pitchsim.pose.joints3d import load_lift
 from pitchsim.pose.pose2d import load_pose2d
+from pitchsim.statcast import clean
 
 ROOT = Path(__file__).resolve().parents[1]
 LEAD_KNEE = {"R": 4, "L": 5}  # SMPL: the glove-side knee lifts
@@ -61,6 +62,7 @@ def main():
     ap.add_argument("clips_dir", nargs="?", default=str(ROOT / "data/video/ohtani-shohei"))
     ap.add_argument("--deliveries", default=str(ROOT / "web/public/data/deliveries"))
     ap.add_argument("--results", default=str(ROOT / "results/m5"))
+    ap.add_argument("--raw", default=str(ROOT / "data/raw/660271_2026-03-01_2026-11-30.csv"))
     a = ap.parse_args()
     vd, slug, dd, res = Path(a.clips_dir), Path(a.clips_dir).name, Path(a.deliveries), Path(a.results)
 
@@ -165,11 +167,16 @@ def main():
            "note": "Camera: image_px = A @ joint_ft (Statcast ft) + b[frame - frame0]. Score: median 2D error in "
                    "torso lengths (replica unpinned). floor_2d: other real deliveries' 2D, same fit.",
            "clips": {}}
+    # Each clip's Statcast release + arm angle: the page pins the replica's hand there, as the viewer does.
+    stat = clean(pd.read_csv(a.raw)).set_index(["game_pk", "at_bat_number", "pitch_number"])
     for c, cm in cams.items():
         f = Fr[c]
+        r = stat.loc[tuple(int(v) for v in c[:-4].split("_"))]
         out["clips"][c] = {"split": clips[c]["split"], "fps": P[c][1], "release_pose_frame": P[c][0],
                            "frame0": int(f[0]), "shot_start_frame": CUT[c], "torso_px": round(TOR[c], 2),
                            "A": np.round(cm["A"], 5).tolist(),
+                           "release_ft": [round(float(r[k]), 3) for k in ("release_pos_x", "release_pos_y", "release_pos_z")],
+                           "arm_angle_deg": None if pd.isna(r.get("arm_angle")) else round(float(r["arm_angle"]), 1),
                            "b": [None if not o else np.round(v, 2).tolist() for v, o in zip(cm["b"], cm["ok"])],
                            "score": clip_score(c, "replica"), "naive_static": clip_score(c, "naive_static"),
                            "floor_2d": clip_score(c, "floor_2d"), "own_lift": clip_score(c, "own_lift")}
