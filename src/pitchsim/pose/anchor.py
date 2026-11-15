@@ -64,10 +64,12 @@ def lock_feet(p_ft: np.ndarray, fps: float, v_lo_ftps: float = 0.5, v_hi_ftps: f
     Plant weight = 1 below v_lo, 0 above v_hi, smoothstep between (a swinging foot moves >> 3 ft/s, a
     planted one ~0; the band absorbs lift noise).  Within each planted run the foot is pulled to its mean
     position by weight w(t); only the ankle and toe move (a cm-scale shift, leg proportions unaffected).
+    The toe (ball of the foot) is the reference, not the ankle: the viewer pins the toe, and a planted foot
+    that rolls onto its toes or sways (the rocker step's weight shift) moves the ankle while the toe stays.
     """
     out = p_ft.copy()
     for side in ("L", "R"):
-        a = p_ft[:, _ANKLE[side], :2]
+        a = p_ft[:, _TOE[side], :2]
         v = np.linalg.norm(np.gradient(a, axis=0), axis=1) * fps
         v = np.convolve(v, np.ones(3) / 3, mode="same")
         w = 1.0 - _smoothstep((v - v_lo_ftps) / (v_hi_ftps - v_lo_ftps))
@@ -195,7 +197,8 @@ def _hermite_ease(t: np.ndarray, t0: int, t1: int, t2: int, f1: float) -> np.nda
 
 def correct_to_mean(j_ft: np.ndarray, release_index: int, foot_strike_index: int, throws: str,
                     target: dict, leg_lift_index: int | None = None, knee_reach: float = 0.97,
-                    info: dict | None = None) -> np.ndarray:
+                    info: dict | None = None, fps: float = 60.0, arm_ease_s: float = 0.45,
+                    pivot_ease_s: float = 0.45) -> np.ndarray:
     """Bone-length-preserving correction so release_values match `target` (to 0.05 ft / 1 deg).
 
     Why not stretch or shift: the monocular lift squashes depth from the centre-field camera, so the stride
@@ -210,7 +213,7 @@ def correct_to_mean(j_ft: np.ndarray, release_index: int, foot_strike_index: int
     2. Upper body (pelvis, hips, trunk, arms, head) moves forward for the extension gap and sideways for
        the release-x gap, eased over leg lift -> foot strike -> release (through the foot-strike pelvis
        position that needs the least drop, see body_ease) and held after.
-    2b. Release height: trunk flexion about the pelvis (about +x, eased foot strike -> release, held
+    2b. Release height: trunk flexion about the pelvis (about +x, eased with the arm, see 5, held
        after) up to MAX_ADDED_FLEXION_DEG; any remaining gap lowers the upper body by knee flexion, eased
        over leg lift -> foot strike so that after foot strike the planted lead leg only has the pelvis
        travel over it, not a sinking pelvis as well (that folded the knee fast).
@@ -220,13 +223,20 @@ def correct_to_mean(j_ft: np.ndarray, release_index: int, foot_strike_index: int
        through a smooth envelope.  Both legs are then re-solved with two-bone IK at that frame's thigh /
        shin lengths, the knee bending in the input knee's own plane.  A swinging leg that still cannot
        reach is eased toward (never onto) 0.99 of its length, so the knee never snaps straight.
-    4. Back foot: after foot strike it catches up with the body shift by release; where the hips run away
+    4. Back foot: from foot strike it eases toward the body shift over `pivot_ease_s` (so it is still
+       catching up through release, as a real back foot drags off the rubber); where the hips run away
        from it, it drags after them (toe height kept), the drag easing in over 0.1 s.
     5. Arm angle: the throwing arm turns about the shoulder in the catcher's-view (x-z) plane (the plane
-       release_values measures it in), eased over foot strike -> release, held after (no snap back).
+       release_values measures it in), eased over the `arm_ease_s` before release (or from foot strike, if
+       that is earlier), held after (no snap back).
+    Why the arm, trunk and back-foot easings have their own durations: the real lead foot plants only
+    ~0.17 s before release; squeezing a 24 deg arm turn, 16 deg of trunk flexion and a ~3 ft back-foot move
+    into those 10 frames folded the back knee ~35 deg/frame.  0.45 s is the span they had (and looked
+    right) when foot strike was taken from the 3D lift.
     The amounts (arm rotation, x/y shift, flexion, lowering) come from fixed-point iteration on the
     release values; info["converged"] says whether it got within 0.005 ft / 0.05 deg.
     leg_lift_index: start of the stride easing (default fs - 2 (ri - fs), a typical leg-lift lead).
+    fps: frame rate of j_ft (the easing durations are in seconds).
     info: optional out-dict with the applied rotation, flexion, shift, lowering, drop and iterations.
     """
     _check(throws)
@@ -234,11 +244,13 @@ def correct_to_mean(j_ft: np.ndarray, release_index: int, foot_strike_index: int
     n, ri, fs = len(j0), release_index, foot_strike_index
     ll = max(0, fs - 2 * (ri - fs)) if leg_lift_index is None else leg_lift_index
     t = np.arange(n)
-    w_arm = _smootherstep((t - fs) / max(ri - fs, 1))
+    a0 = min(fs, ri - int(round(arm_ease_s * fps)))
+    w_arm = _smootherstep((t - a0) / max(ri - a0, 1))
+    w_piv = _smootherstep((t - fs) / max(pivot_ease_s * fps, 1.0))
     w_lead = _smootherstep((t - ll) / max(fs - ll, 1))
     # Back-foot drag easing: 6 frames = 0.1 s at 60 fps, about the time a real back foot takes to break
     # from the rubber and start sliding.
-    w_drag = _smootherstep((t - fs) / 6.0)
+    w_drag = _smootherstep((t - fs) / (0.1 * fps))
     lead = "L" if throws == "R" else "R"
     sh, hand = _SHOULDER[throws], _HAND[throws]
     # (hip, knee, ankle, toe, frames the toe is planted, weight of its reach requirement)
@@ -266,7 +278,10 @@ def correct_to_mean(j_ft: np.ndarray, release_index: int, foot_strike_index: int
         monotone.  f puts the pelvis at foot strike where the deeper of the two planted legs' required
         drops is smallest: a stride the lift never made has to be spanned by both legs, so neither the
         pivot (body running ahead) nor the lead leg (body lagging) is left out of reach."""
-        f = np.linspace(0.0, 1.0, 51)[:, None]
+        # Lower bound: 0.1 below the stride's time fraction (fs - ll) / (ri - ll).  With the real, late
+        # foot strike (10 frames before release) a pelvis far behind at foot strike has to sprint the rest
+        # of the way in those 10 frames (seen on synthetic data: pelvis 3 -> 15 ft/s, knee 14 deg/frame).
+        f = np.linspace(max((fs - ll) / max(ri - ll, 1) - 0.1, 0.0), 1.0, 51)[:, None]
         worst = np.zeros(len(f))
         for hip, knee, ank, toe, foot in ((_HIP[throws], _KNEE[throws], _ANKLE[throws], _TOE[throws], j0[0, _TOE[throws]]),
                                           (_HIP[lead], _KNEE[lead], _ANKLE[lead], _TOE[lead], land)):
@@ -305,9 +320,9 @@ def correct_to_mean(j_ft: np.ndarray, release_index: int, foot_strike_index: int
             p = j0[:, toe].copy()
             if toe == _TOE[lead]:
                 p += w_lead[:, None] * (land - j0[fs, toe])
-            else:  # pivot: from 0 on the rubber at foot strike to the body's full shift by release, so
-                # the lift's own back-leg pose relative to the hips comes back
-                p[:, :2] += (w_body * w_arm)[:, None] * shift[:2]
+            else:  # pivot: from 0 on the rubber at foot strike toward the body's full shift, so the
+                # lift's own back-leg pose relative to the hips comes back
+                p[:, :2] += (w_body * w_piv)[:, None] * shift[:2]
             p[:, 2] = np.maximum(p[:, 2], mound_z_ft(p[:, 0], p[:, 1]))  # a swinging toe never digs in
             hold = p[int(np.argmax(planted))].copy()
             hold[2] = mound_z_ft(hold[0], hold[1])

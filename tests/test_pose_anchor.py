@@ -176,3 +176,33 @@ def test_correct_to_mean_knees_continuous(kind):
         leg = np.linalg.norm(j[:, hip] - j[:, knee], axis=1) + np.linalg.norm(j[:, knee] - j[:, ank], axis=1)
         reach = np.linalg.norm(out[:, hip] - out[:, ank], axis=1) / leg
         assert reach[swing].max() <= 0.99 + 1e-9, knee
+
+
+# Real foot strike is ~10 frames (0.17 s) before release (hand labels on the 2D video), not 27: the
+# correction's arm, trunk and back-foot easings must not be squeezed into those 10 frames.
+LATE_FS = RI - 10
+
+
+@pytest.mark.parametrize("kind", ["moderate"])
+def test_correct_to_mean_late_foot_strike_smooth(kind):
+    """SYNTHETIC delivery whose lead foot lands 10 frames before release: same guarantees as above --
+    targets met, bones kept, feet planted, knees under 8 deg/frame, no kinked correction.
+    Only the moderate gap: the long_stride gap on these 3.2 ft synthetic legs needs a 1.4 ft pelvis drop,
+    and with foot strike this late its lead knee re-extends at ~11 deg/frame (added acceleration 0.11
+    ft/frame^2); the real build needs 0.7 ft and is reported by scripts/m5_build.py."""
+    j = _delivery(fs=LATE_FS)
+    rv = release_values(j, RI, "R")
+    dx, dz, de, da = GAPS[kind]
+    target = dict(rv, release_x_ft=rv["release_x_ft"] + dx, release_z_ft=rv["release_z_ft"] + dz,
+                  extension_ft=rv["extension_ft"] + de, arm_angle_deg=rv["arm_angle_deg"] + da)
+    out = correct_to_mean(j, RI, LATE_FS, "R", target, leg_lift_index=LL)
+    got = release_values(out, RI, "R")
+    for k in ("release_x_ft", "release_z_ft", "extension_ft"):
+        assert abs(got[k] - target[k]) < 0.05, k
+    assert abs(got["arm_angle_deg"] - target["arm_angle_deg"]) < 1.0
+    assert np.abs(segment_lengths(out) - segment_lengths(j)).max() < 0.001 / 0.3048
+    for toe, frames in ((11, slice(0, LATE_FS + 1)), (10, slice(LATE_FS, None))):
+        assert np.ptp(out[frames, toe], axis=0).max() < 0.001, toe
+    for hip, knee, ank in ((1, 4, 7), (2, 5, 8)):
+        assert np.abs(np.diff(_knee_deg(out, hip, knee, ank))).max() < 8.0, knee
+    assert np.linalg.norm(np.diff(out - j, n=2, axis=0), axis=2).max() < 0.05
