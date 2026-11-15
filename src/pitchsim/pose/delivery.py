@@ -224,7 +224,8 @@ def average_delivery(seqs: list[np.ndarray], marks: list[dict], pre_s: float, fp
     return savgol_filter(avg, win, 3, axis=0), ri
 
 
-def ground_root(j: np.ndarray, throws: str, foot_strike: int | None = None) -> np.ndarray:
+def ground_root(j: np.ndarray, throws: str, foot_strike: int | None = None,
+                smooth_frames: int = 9, bridge_pre: int = 6, bridge_post: int = 6) -> np.ndarray:
     """Replace the lift's root translation with foot-planting, in the same frame as `j`.
 
     Why: the monocular lift gets the body's pose relative to itself right but its position in the camera
@@ -233,15 +234,46 @@ def ground_root(j: np.ndarray, throws: str, foot_strike: int | None = None) -> n
     reference: the pivot (throwing-side) foot stays where it started until foot strike, then the lead foot
     stays where it landed.  Both are planted at foot strike, so the hand-over is continuous.
     foot_strike=None grounds on the pivot foot for every frame (used to find foot strike itself).
-    The toe is used raw (not filtered): filtering it would leave the root noise in the body; any toe jitter
-    this copies into the body is removed by the averaging and Savitzky-Golay smoothing downstream.
+    The toe's offset from the pelvis is smoothed over `smooth_frames` (see below); the planted toe joint
+    keeps its own small jitter, which lock_feet removes.
     """
     if throws not in ("L", "R"):
         raise ValueError("throws must be 'L' or 'R'")
     j = np.asarray(j, float)
     piv_i, lead_i = _TOE[throws], _TOE["L" if throws == "R" else "R"]
-    out = j - j[:, piv_i][:, None, :] + j[0, piv_i]
+    # The body is placed by its pelvis: world pelvis = planted toe - (toe - pelvis).  (toe - pelvis) is body-
+    # relative, so the lift's root noise cancels in it and it can be smoothed (Savitzky-Golay, cubic, 9
+    # frames ~ 0.15 s) without letting root noise back in.  Subtracting the raw toe instead handed the
+    # toe joint's own frame-to-frame jitter to every joint: a whole-body kink 0.27 s before release in the
+    # average (13 clips' pivot toes wobble as the heel comes up).
+    def rel(k):
+        r = j[:, k] - j[:, 0]
+        w = min(smooth_frames, len(j) if len(j) % 2 else len(j) - 1)
+        return savgol_filter(r, w, 3, axis=0) if w > 3 else r
+    body = j - j[:, :1]
+    r_piv = rel(piv_i)
+    out = body - r_piv[:, None, :]
+    out += j[0, piv_i] - out[0, piv_i]
     if foot_strike is not None:
-        lead = out[:, lead_i].copy()
-        out[foot_strike:] = out[foot_strike:] - lead[foot_strike:, None, :] + lead[foot_strike]
+        r_lead = rel(lead_i)
+        fs = foot_strike
+        land = out[fs, 0] + r_lead[fs]                       # where the lead toe is at foot strike
+        out[fs:] = body[fs:] - r_lead[fs:, None, :] + land
+        # Bridge the hand-over: before foot strike the lift's pivot toe slides toward the plate relative to
+        # the body as the back heel comes up, so pinning it drags the whole body backward, and the switch to
+        # the lead foot then snaps it forward (a kink in every joint ~0.27 s before release in the average).
+        # Neither foot is a trustworthy anchor right there, so the root path from foot strike - bridge_pre
+        # to foot strike + bridge_post is replaced by a cubic Hermite matching position and velocity at both
+        # ends (C1), and every joint moves with it.  6 + 6 frames (0.1 s each side at 60 fps): a 15-frame
+        # bridge also removed the kink but moved the pelvis so far ahead of the planted back foot at foot
+        # strike that correct_to_mean had to drop the pelvis 1.4 ft and the back knee snapped 34 deg/frame.
+        a, b = max(fs - bridge_pre, 1), min(fs + bridge_post, len(j) - 2)
+        if b > a:
+            P = out[:, 0]
+            va, vb = P[a] - P[a - 1], P[b + 1] - P[b]          # per frame
+            h = b - a
+            u = (np.arange(a, b + 1) - a)[:, None] / h
+            H = ((2 * u ** 3 - 3 * u ** 2 + 1) * P[a] + (u ** 3 - 2 * u ** 2 + u) * h * va
+                 + (-2 * u ** 3 + 3 * u ** 2) * P[b] + (u ** 3 - u ** 2) * h * vb)
+            out[a:b + 1] += (H - P[a:b + 1])[:, None, :]
     return out

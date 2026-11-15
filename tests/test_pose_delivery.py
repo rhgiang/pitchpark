@@ -222,3 +222,44 @@ def test_valid_from_keeps_a_snap_out_of_the_average():
     ok, _ = average_delivery([clean, clean, bad], [m] * 3, pre_s=2.0, post_s=0.4, valid_from=[None, None, 60])
     assert acc(hitch) > 3 * acc(ref)
     assert acc(ok) < 1.5 * acc(ref)
+
+
+def test_ground_root_does_not_copy_toe_jitter_into_the_body():
+    """SYNTHETIC: pelvis travels smoothly (a parabola) over a planted pivot toe; the lift adds +-5 m root
+    depth noise to the whole body and 1 cm of jitter to the toe joint alone.  Grounding must not hand that
+    toe jitter to every joint (it showed as a whole-body kink 0.27 s before release in the average)."""
+    rng = np.random.default_rng(1)
+    n = 120
+    t = np.arange(n) / 60.0
+    j = np.zeros((n, 24, 3))
+    j[:, 0] = np.stack([0.5 * t ** 2, np.zeros(n), np.full(n, 0.95)], 1)   # smooth pelvis path (m)
+    for k in range(1, 24):
+        j[:, k] = j[:, 0] + [0.01 * k, 0.0, -0.02 * k]                          # rigid body
+    j[:, 11] = [0.0, 0.0, 0.0]                                                   # pivot toe planted
+    noisy = j.copy()
+    noisy[:, 11] += rng.normal(0, 0.01, (n, 3))                                  # toe jitter only
+    noisy += np.stack([np.zeros(n), np.zeros(n), rng.normal(0, 5.0, n)], 1)[:, None, :]  # root depth noise
+    g = ground_root(noisy, "R")
+    err = (g[:, 0] - g[0, 0]) - (j[:, 0] - j[0, 0])
+    assert np.sqrt(np.mean(np.diff(err, n=2, axis=0) ** 2)) < 0.25 * 0.01 * np.sqrt(6)
+
+
+def test_ground_root_bridges_the_foot_hand_over_smoothly():
+    """SYNTHETIC: the pelvis travels steadily toward the plate; in the lift the pivot toe slides 0.3 m
+    forward relative to the pelvis over the 15 frames before foot strike (the real lifts do this as the
+    back heel comes up), so pinning the pivot toe drags the body BACK and the switch to the lead foot at
+    foot strike snaps it forward -- a whole-body kink ~0.1-0.3 s before release.  The root path across the
+    hand-over must stay smooth (max second difference < 8 mm/frame^2)."""
+    n, fs = 120, 80
+    t = np.arange(n) / 60.0
+    j = np.zeros((n, 24, 3))
+    j[:, 0] = np.stack([np.zeros(n), -3.0 * t, np.full(n, 0.95)], 1)
+    for k in range(1, 24):
+        j[:, k] = j[:, 0] + [0.01 * k, 0.0, -0.02 * k]
+    j[:, 11] = [0.0, 0.0, 0.0]                        # pivot toe on the rubber
+    j[:, 10] = j[:, 0] + [0.2, -0.8, -0.95]           # lead toe swings with the body ...
+    j[fs:, 10] = j[fs, 10]                            # ... and is planted from foot strike
+    s = np.clip((np.arange(n) - (fs - 15)) / 15.0, 0, 1)
+    j[:, 11, 1] -= 0.3 * s * s * (3 - 2 * s)          # lift artifact: pivot toe slides 0.3 m toward the plate
+    g = ground_root(j, "R", fs)
+    assert np.linalg.norm(np.diff(g[:, 0], n=2, axis=0), axis=1).max() < 0.008
