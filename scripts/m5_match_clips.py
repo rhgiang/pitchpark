@@ -41,6 +41,7 @@ def main() -> None:
     cl = pd.read_csv(d / "clips.csv")
     ok = pd.Series([clip_name(r) in found for _, r in cl.iterrows()], index=cl.index)
     cl.loc[ok, "status"] = "cached"
+    cl["clip_path"] = cl["clip_path"].astype(object)  # all-empty columns read back as float
     cl.loc[ok, "clip_path"] = [str(d / clip_name(r)) for _, r in cl[ok].iterrows()]
     cl.to_csv(d / "clips.csv", index=False)
 
