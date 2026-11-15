@@ -91,7 +91,10 @@ def main():
     labels = pd.read_csv(LABELS).set_index("clip")
     raw = pd.read_csv(a.raw)
     pid, throws = int(raw["pitcher"].iloc[0]), str(clips["p_throws"].iloc[0])
-    height_in = int(fetch_heights([pid]).iloc[0])
+    h = fetch_heights([pid]).iloc[0]
+    if pd.isna(h):  # anchor() scales the body to it: no height, no delivery
+        raise SystemExit(f"no StatsAPI height for pitcher {pid}; cannot scale the delivery")
+    height_in = int(h)
     height_ft = height_in / 12
     stat = clean(raw).set_index(["game_pk", "at_bat_number", "pitch_number"])
 
@@ -115,12 +118,15 @@ def main():
     for c in ok.index:
         if c not in L:
             drop("no_lift", c)
-    up_med = np.median(np.stack([l.up for l in L.values()]), axis=0)
+    # Screening references come from TRAIN lifts only (hold-out hygiene: test clips must not shape the
+    # thresholds they are screened by); every lift, test included, is then screened against them.
+    tr_lifts = [c for c in L if pose.loc[c, "split"] == "train"]
+    up_med = np.median(np.stack([L[c].up for c in tr_lifts]), axis=0)
     up_med /= np.linalg.norm(up_med)
     tilt = {c: float(np.degrees(np.arccos(np.clip(l.up @ up_med, -1, 1)))) for c, l in L.items()}
     extent = {c: float(np.median(np.linalg.norm(l.joints_m.max(1) - l.joints_m.min(1), axis=1)))
               for c, l in L.items()}
-    ext_med = np.median(list(extent.values()))
+    ext_med = np.median([extent[c] for c in tr_lifts])
     screened, passed = [], []
     for c in L:
         if tilt[c] > MAX_UP_TILT_DEG:
@@ -131,7 +137,7 @@ def main():
             passed.append(c)
     suspect = "823691_49_6.mp4"
     print(f"suspect {suspect}: tilt {tilt[suspect]:.1f} deg, extent {extent[suspect]:.2f} m "
-          f"(set median {ext_med:.2f}) -> {'kept' if suspect in passed else 'DROPPED'}")
+          f"(train median {ext_med:.2f}) -> {'kept' if suspect in passed else 'DROPPED'}")
 
     # release frame: hand label where one exists, else the detector's
     rel = {c: int(labels.loc[c, "release_frame_label"]) if c in labels.index
@@ -212,6 +218,10 @@ def main():
     cinfo: dict = {}
     final = correct_to_mean(avg_ft, ri, fs, throws, target, leg_lift_index=ll, info=cinfo)
     rv_fin = release_values(final, ri, throws)
+    miss = {k: rv_fin[k] - target[k] for k in KEYS}
+    if (max(abs(miss[k]) for k in KEYS[:3]) > 0.05 or abs(miss["arm_angle_deg"]) > 1.0
+            or not cinfo.get("converged", False)):
+        raise SystemExit(f"correct_to_mean did not converge to 0.05 ft / 1 deg: misses {miss}, info {cinfo}")
     # What the correction did to the body: bone lengths (vs its input; and the foot lock vs the raw
     # average), and the planted feet (pivot toe until foot strike, lead toe after) in the final delivery.
     seg_corr_ft = float(np.abs(segment_lengths(final) - segment_lengths(avg_ft)).max())
@@ -235,13 +245,15 @@ def main():
                 "fps": 60.0, "release_index": ri, "pre_s": pre_s, "post_s": POST_S,
                 "joints_ft": np.round(final, 3).tolist(), "n_clips": len(train_used),
                 "lifter": str(next(iter(L.values())).lifter)}, out / f"{slug}.json")
+    screen_of = {c: r for r, cs in drops.items() for c in cs}  # its drop reason (one per clip), else "ok"
     info = {}
     for c in L:
         j, rv = own_anchor(c)
         info[c] = {"release_frame": rel[c], "release_pose_frame": rp[c], "fps": float(L[c].fps),
                    "release": [round(float(v), 3) for v in j[rp[c], HAND[throws]]],
                    "extension_ft": round(rv["extension_ft"], 3),
-                   "arm_angle_deg": round(rv["arm_angle_deg"], 2), "split": str(split[c])}
+                   "arm_angle_deg": round(rv["arm_angle_deg"], 2), "split": str(split[c]),
+                   "screen": screen_of.get(c, "ok")}
     write_json(info, out / f"{slug}.clips.json")
     res = Path(a.results)
     res.mkdir(parents=True, exist_ok=True)
