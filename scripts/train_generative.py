@@ -17,7 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from pitchsim.data import add_air_density, fetch_game_conditions
+from pitchsim.data import add_air_density, fetch_game_conditions, load_pitcher
 from pitchsim.generative import circular_mean_deg, evaluate_pitcher, pitch_count_in_game, unwrap_deg
 from pitchsim.physics import air_density
 from pitchsim.statcast import clean
@@ -30,13 +30,20 @@ INK, MUTED, GRID = "#1f1f1e", "#6b6a63", "#e4e3dd"
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("csv")
+    ap.add_argument("csv", nargs="+", help="one pitcher's CSVs (one per season)")
+    ap.add_argument("--cross-season", action="store_true",
+                    help="train on earlier seasons, test on the newest (out: <pitcher>-cross-season)")
     ap.add_argument("--out", help="output folder (default results/m2/<pitcher>)")
     ap.add_argument("--no-weather", action="store_true",
                     help="use a constant air density (synthetic data)")
     args = ap.parse_args()
 
-    raw = pd.read_csv(args.csv)
+    raw = load_pitcher(args.csv, args.cross_season)
+    # The arm is modelled per season: release points shift between seasons by 1-2 within-season sds
+    # (results/data-refresh.md), so pooling would blur two arms into one. --cross-season keeps both
+    # seasons as the drift diagnostic.
+    if not args.cross_season and "game_year" in raw:
+        raw = raw[raw["game_year"] == raw["game_year"].max()].reset_index(drop=True)
     # Count on the full CSV (all pitch types) before clean() drops rows.
     if {"game_pk", "at_bat_number", "pitch_number"} <= set(raw):
         raw["pitch_count"] = pitch_count_in_game(raw)
@@ -50,7 +57,7 @@ def main():
         if args.out and Path(args.out).resolve() != out.resolve():
             raise SystemExit(f"Synthetic data may only be written to {out}")
     else:
-        slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+        slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") + ("-cross-season" if args.cross_season else "")
         out = Path(args.out) if args.out else RESULTS / "m2" / slug
     out.mkdir(parents=True, exist_ok=True)
 

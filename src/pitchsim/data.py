@@ -59,6 +59,54 @@ VENUE_ELEVATION_FT = {
 }
 
 
+# (pitcher id, season, Statcast pitch_type) -> the pitch_type we model it as. Only for a pitch
+# Statcast labelled differently in different seasons, so that pooling seasons by label doesn't
+# put two different pitches in one model. Evidence is season means from data/raw:
+#   Misiorowski 2025 "SL": 94.1 mph, spin axis 181 deg, 2.6 in arm-side / 6.4 in rise. That is his
+#   2026 "FC" (95.8 mph, 195 deg, 1.4 / 7.2 in), not his 2026 "SL" (91.9 mph, 124 deg, 3.4 / 1.8 in).
+RELABEL = {(694819, 2025, "SL"): "FC"}
+
+
+def load_seasons(paths: Iterable[str | Path]) -> pd.DataFrame:
+    """Raw Statcast CSVs (one or more seasons, any pitchers) joined, with RELABEL applied.
+
+    Rows are only relabelled when the CSVs carry `pitcher` and `game_year` (real Statcast does;
+    the synthetic CSV doesn't). A relabelled row also takes the pitch_name its new type has.
+    """
+    df = pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
+    if not {"pitcher", "game_year"} <= set(df):
+        return df
+    for (pid, year, old), new in RELABEL.items():
+        hit = (df["pitcher"] == pid) & (df["game_year"] == year) & (df["pitch_type"] == old)
+        if hit.any():
+            names = df.loc[(df["pitcher"] == pid) & (df["pitch_type"] == new), "pitch_name"]
+            df.loc[hit, "pitch_type"] = new
+            if not names.empty:
+                df.loc[hit, "pitch_name"] = names.iloc[0]
+            print(f"relabelled {int(hit.sum())} pitches: pitcher {pid} {year} {old} -> {new}")
+    return df
+
+
+def mark_cross_season(df: pd.DataFrame) -> pd.DataFrame:
+    """Copy of df with split = "test" for the newest season's games, "train" for the rest.
+
+    validation.split_by_game uses this column instead of its random split, so every model is
+    trained on earlier seasons and scored on the latest one: how well it survives a pitcher's
+    year-to-year drift, which a pooled random split of games hides.
+    """
+    if df["game_year"].nunique() < 2:
+        raise SystemExit("--cross-season needs at least two seasons of data")
+    return df.assign(split=(df["game_year"] == df["game_year"].max()).map({True: "test", False: "train"}))
+
+
+def load_pitcher(paths: Iterable[str | Path], cross_season: bool = False) -> pd.DataFrame:
+    """One pitcher's season CSVs via load_seasons, marked for the cross-season split if asked."""
+    df = load_seasons(paths)
+    if df["player_name"].nunique() > 1:
+        raise SystemExit("These CSVs hold more than one pitcher; pass one pitcher's seasons")
+    return mark_cross_season(df) if cross_season else df
+
+
 def lookup_id(full_name: str) -> int:
     """MLBAM id for a "First Last" name (most recent player if several match)."""
     if " " not in full_name.strip():

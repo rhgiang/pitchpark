@@ -2,7 +2,7 @@
 
     python scripts/export_viewer.py data/raw/<pitcher>.csv [more.csv ...] [--out web/public/data]
 
-Writes <out>/<slug>.json per CSV and <out>/index.json = [{slug, name, throws, n_at_bats}].
+Writes <out>/<slug>.json per pitcher (a pitcher's season CSVs are pooled) and <out>/index.json = [{slug, name, throws, n_at_bats}].
 CSV paths are explicit (no globbing data/raw/). Synthetic pitchers may only be written to
 web/test/fixtures/ so nothing fake lands next to real pitchers in the viewer.
 """
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from pitchsim.data import add_air_density, fetch_game_conditions, fetch_heights
+from pitchsim.data import add_air_density, fetch_game_conditions, fetch_heights, load_seasons
 from pitchsim.export import export_pitcher, write_json
 from pitchsim.physics import air_density
 
@@ -33,8 +33,8 @@ def main():
     out = Path(args.out)
 
     index = []
-    for csv in args.csv:
-        raw = pd.read_csv(csv)
+    for _, raw in load_seasons(args.csv).groupby("player_name", sort=False):  # seasons pooled per pitcher
+        raw = raw.reset_index(drop=True)
         name = str(raw["player_name"].iloc[0])
         # Strip accents: the slug regex would turn an accented letter into a hyphen.
         plain = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()

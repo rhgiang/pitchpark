@@ -23,6 +23,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from pitchsim.data import load_seasons
 from pitchsim.statcast import clean, fit_plate_crossing
 from pitchsim.tunneling import (PERCEIVED_REF_EXT_FT, RUBBER_Y_FT, approach_angles_deg,
                                 perceived_velocity_mph)
@@ -65,8 +66,8 @@ def main():
     args = ap.parse_args()
 
     rows, train_all, test_all = [], [], []
-    for csv in args.csv:
-        df = clean(pd.read_csv(csv))
+    for _, raw in load_seasons(args.csv).groupby("player_name", sort=False):  # seasons pooled per pitcher
+        df = clean(raw)
         train, test = split_by_game(df, seed=0)
         train_all.append(train.dropna(subset=["effective_speed", "release_extension"]))
         _, vel, _ = fit_plate_crossing(test)
