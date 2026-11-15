@@ -122,3 +122,24 @@ test("height scales the figure, and the hand still reaches the release", () => {
     assert.ok(handPosition(fig, "R").distanceTo(toScene([-2.2, 54.5, 5.6])) < 0.05);
   }
 });
+
+test("delivery: hand velocity is continuous across frame boundaries (slow motion stays smooth)", () => {
+  // SYNTHETIC: the fixture with the whole body sliding sideways with constant acceleration,
+  // x += A t^2 (Statcast ft). Linear interpolation between 60 fps frames turns that into a chain of
+  // straight segments, so the velocity jumps by 2A/fps at every frame; a cubic (Catmull-Rom) does not.
+  const A = 2; // ft/s^2
+  const fps = DELIVERY.fps;
+  const moving = { ...DELIVERY, joints_ft: DELIVERY.joints_ft.map((fr, i) => {
+    const t = (i - DELIVERY.release_index) / fps;
+    return fr.map(([x, y, z]) => [x + A * t * t, y, z]);
+  }) };
+  const fig = makePitcher("R");
+  const hand = (t) => { poseAtTime(fig, moving, t, null, 45); return handPosition(fig, "R"); };
+  const h = 1e-4;
+  for (const tb of [-0.5, -0.25, -0.1]) { // frame boundaries (whole frames at 60 fps)
+    const before = hand(tb).sub(hand(tb - h)).divideScalar(h);
+    const after = hand(tb + h).sub(hand(tb)).divideScalar(h);
+    const jump = after.distanceTo(before);
+    assert.ok(jump < 0.25 * (2 * A) / fps, `t=${tb}: velocity jumps ${jump.toFixed(4)} ft/s at the frame boundary (linear: ~${((2 * A) / fps).toFixed(3)})`);
+  }
+});

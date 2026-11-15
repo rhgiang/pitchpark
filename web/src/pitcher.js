@@ -246,16 +246,27 @@ const smoothstep = (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x)); // ze
 /** IK blend weight at t s from release: 0 -> 1 over [-0.15, 0], 1 -> 0 over [0, 0.12]. */
 const blendWeight = (t) => (t <= 0 ? smoothstep((t + BLEND_IN_S) / BLEND_IN_S) : 1 - smoothstep(t / BLEND_OUT_S));
 
-/** Linear interpolation of a per-frame array at t s from release (ends held). */
-function atTime(delivery, frames, t, lerp) {
+/**
+ * Cubic interpolation of a per-frame array at t s from release (ends held): uniform Catmull-Rom.
+ * Why cubic: linear interpolation is a chain of straight segments, so the velocity jumps at every
+ * 60 fps frame, which shows as a stutter in slow motion (1/4x, 1/10x). Catmull-Rom (Catmull & Rom
+ * 1974) takes each frame's tangent from its two neighbours, (p[i+1] - p[i-1]) / 2, and joins cubic
+ * pieces with matching tangents, so velocity is continuous. Uniform (not centripetal) because the
+ * samples are evenly spaced in time, which is the parameter we interpolate in.
+ * `mix(frames, weights)` combines frames with weights that sum to 1.
+ */
+function atTime(delivery, frames, t, mix) {
   const n = frames.length;
   const f = Math.min(n - 1, Math.max(0, delivery.release_index + t * delivery.fps));
   const i = Math.min(n - 2, Math.floor(f));
-  return lerp(frames[i], frames[i + 1], f - i);
+  const u = f - i, u2 = u * u, u3 = u2 * u;
+  const at = (k) => frames[Math.min(n - 1, Math.max(0, k))]; // repeat the end frames
+  return mix([at(i - 1), at(i), at(i + 1), at(i + 2)],
+    [(-u3 + 2 * u2 - u) / 2, (3 * u3 - 5 * u2 + 2) / 2, (-3 * u3 + 4 * u2 + u) / 2, (u3 - u2) / 2]);
 }
 /** The delivery's 24 joints (scene ft) at t s from release. */
 const deliveryFrame = (delivery, t) => atTime(delivery, delivery.joints_ft, t,
-  (a, b, u) => a.map((p, j) => toScene(p).lerp(toScene(b[j]), u)));
+  (fr, w) => fr[0].map((_, j) => fr.reduce((s, f, k) => s.addScaledVector(toScene(f[j]), w[k]), new THREE.Vector3())));
 
 /** World positions of all joints as the bones currently put them (forward kinematics). */
 function jointPositions(figure) {
@@ -330,7 +341,7 @@ function pelvisDrops(figure, delivery) {
  */
 export function poseAtTime(figure, delivery, t, release, armAngleDeg) {
   const { bones, throws, scale: k } = figure.userData;
-  const drop = atTime(delivery, pelvisDrops(figure, delivery), t, (a, b, u) => a + (b - a) * u);
+  const drop = atTime(delivery, pelvisDrops(figure, delivery), t, (v, w) => v.reduce((s, x, k) => s + x * w[k], 0));
   const src = deliveryFrame(delivery, t);
   setBones(bones, src, k);
   const p = jointPositions(figure).map((v) => v.setY(v.y - drop));
