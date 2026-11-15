@@ -1,7 +1,7 @@
 import "./ui.css";
 import * as THREE from "three";
 import { toScene } from "./coords.js";
-import { buildField, buildZone } from "./field.js";
+import { buildField, buildZone, RUBBER_FRONT_Y_FT } from "./field.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
   batterEye, umpireView, sideView, rideAlong, BATTER_EYE_VFOV_DEG, UMPIRE_VFOV_DEG, SIDE_VFOV_DEG,
@@ -77,7 +77,8 @@ function updateCamera() {
   let pose = null;
   if (state.view === "umpire") pose = umpireView();
   else if (state.view === "batter") pose = batterEye(ab.stand);
-  else if (path && state.view === "side") pose = sideView(path, camera.aspect);
+  // With a delivery the windup happens on the rubber, behind release: keep the pitcher in shot.
+  else if (path && state.view === "side") pose = sideView(path, camera.aspect, state.delivery ? RUBBER_FRONT_Y_FT + 1.5 : null);
   else if (path) pose = rideAlong(path, Math.max(state.t, 0), currentPitch(state).release, state.data.pitcher.throws);
   if (!pose) return;
   camera.position.copy(toScene(pose.position));

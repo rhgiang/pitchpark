@@ -86,13 +86,16 @@ const SIDE_HEIGHT_FT = 5; // side camera height; it aims 1 ft lower (framing cho
  * First-base-side camera (x > 0) looking across the flight at its midpoint, far enough back that
  * release and plate fit the horizontal field of view at `aspect` with 15% spare each side.
  * @param path {t, p} exported path (Statcast feet); release is p[0], the plate the last sample.
+ * @param backY optional Statcast y (ft) the frame must also reach behind release, e.g. the rubber
+ *   so a pitcher's windup (M5 delivery) is in shot.
  * @returns {{position: number[], target: number[]}} Statcast feet; use vertical FOV SIDE_VFOV_DEG.
  */
-export function sideView(path, aspect = 16 / 9) {
+export function sideView(path, aspect = 16 / 9, backY = null) {
   const a = path.p[0];
   const b = path.p[path.p.length - 1];
-  const midY = (a[1] + b[1]) / 2;
-  const halfSpan = (Math.abs(a[1] - b[1]) / 2) * 1.15;
+  const far = backY == null ? a[1] : Math.max(a[1], backY);
+  const midY = (far + b[1]) / 2;
+  const halfSpan = (Math.abs(far - b[1]) / 2) * 1.15;
   const hfov = 2 * Math.atan(Math.tan((SIDE_VFOV_DEG * Math.PI) / 360) * aspect);
   return {
     position: [halfSpan / Math.tan(hfov / 2), midY, SIDE_HEIGHT_FT],
