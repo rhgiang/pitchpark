@@ -109,6 +109,39 @@ def test_lookup_id_no_match(monkeypatch):
         lookup_id("Nobody Here")
 
 
+def test_fetch_heights_caches_and_survives_failures(tmp_path, monkeypatch, capsys):
+    """Network mocked (no real request): a fetched height is cached and not fetched again; an id whose
+    request fails, or whose record has no height, gives NaN with a printed warning and is not cached
+    (so a later run retries it); an empty cache file is treated as no cache."""
+    import io
+    import urllib.error
+
+    import pitchsim.data as data
+
+    calls = []
+
+    def fake_urlopen(req, timeout=30):
+        calls.append(req.full_url)
+        pid = int(req.full_url.rstrip("/").split("/")[-1])
+        if pid == 3:
+            raise urllib.error.URLError("down")
+        person = {"height": "6' 4\""} if pid == 1 else {}
+        return io.BytesIO(json.dumps({"people": [person]}).encode())
+
+    monkeypatch.setattr(data.urllib.request, "urlopen", fake_urlopen)
+    cache = tmp_path / "people.csv"
+    cache.write_text("")
+    h = data.fetch_heights([1, 2, 3], cache_path=cache)
+    assert h.loc[1] == 76 and np.isnan(h.loc[2]) and np.isnan(h.loc[3])
+    out = capsys.readouterr().out
+    assert "2" in out and "3" in out and "WARNING" in out
+    assert len(calls) == 3
+    assert data.fetch_heights([1], cache_path=cache).loc[1] == 76
+    assert len(calls) == 3  # cached: no new request
+    data.fetch_heights([1, 3], cache_path=cache)
+    assert len(calls) == 4  # the failed id is retried, the cached one is not
+
+
 def test_parse_height():
     assert parse_height("6' 3\"") == 75
     assert parse_height("5' 11\"") == 71

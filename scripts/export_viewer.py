@@ -47,7 +47,8 @@ def main():
         else:
             rho = add_air_density(raw, fetch_game_conditions(raw["game_pk"].unique()))["rho"]
         # Synthetic pitchers have no StatsAPI record.
-        height = None if "Synthetic" in name else int(fetch_heights([int(raw["pitcher"].iloc[0])]).iloc[0])
+        h = float("nan") if "Synthetic" in name else fetch_heights([int(raw["pitcher"].iloc[0])]).iloc[0]
+        height = None if pd.isna(h) else int(h)  # unknown height: the viewer falls back to its default
         data = export_pitcher(raw, rho, dt_s=args.dt, height_in=height)
         path = out / f"{slug}.json"
         write_json(data, path)
