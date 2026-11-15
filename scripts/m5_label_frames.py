@@ -1,6 +1,8 @@
 """Contact sheets around each detected release, and detector error against hand labels.
 usage: python scripts/m5_label_frames.py sheets data/video/ohtani-shohei [clip ...]
        python scripts/m5_label_frames.py score data/video/ohtani-shohei
+       python scripts/m5_label_frames.py fssheets data/video/ohtani-shohei [clip ...]   (foot strike)
+       python scripts/m5_label_frames.py fsscore data/video/ohtani-shohei
 Sheets are images: they stay in data/ (gitignored)."""
 import sys
 from pathlib import Path
@@ -9,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 LABELS = Path(__file__).parents[1] / "src/pitchsim/pose/labels/ohtani_release_frames.csv"
+FS_LABELS = LABELS.with_name("ohtani_foot_strike_frames.csv")
 
 
 def sheets(d: Path, only: list[str]):
@@ -61,6 +64,64 @@ def score(d: Path):
         print(g[["clip", "release_frame_label", "err"]].to_string(index=False))
 
 
+def release_pose(d: Path, clip: str) -> int:
+    """Release pose frame: release hand label - 1 where labelled (as m5_build), else the detector's."""
+    lab = pd.read_csv(LABELS).set_index("clip")
+    if clip in lab.index:
+        return int(lab.loc[clip, "release_frame_label"]) - 1
+    return int(pd.read_csv(d / "pose2d.csv").set_index("clip").loc[clip, "release_frame"])
+
+
+def fs_sheets(d: Path, only: list[str]):
+    """Foot-strike sheets: frames release-22 .. release-3, one apart, a FIXED 140 px crop around the lead
+    ankle at release (a fixed crop shows the foot stopping; a hip-centred one moves with the body), the
+    2D lead ankle (COCO 15) dotted so it is clear which foot is the lead.  Label rule: first frame the
+    lead foot is flat on the ground (toe down) and stays put."""
+    import cv2
+    from pitchsim.pose.pose2d import load_pose2d
+    (d / "labels").mkdir(exist_ok=True)
+    for clip in only:
+        r = release_pose(d, clip)
+        p = load_pose2d(d / "pose2d" / clip.replace(".mp4", ".npz"))
+        cx, cy = p.xy[r, 15].astype(int) - [0, 25]
+        cap, tiles = cv2.VideoCapture(str(d / clip)), []
+        for f in range(r - 22, r - 2):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, f)
+            ok, im = cap.read()
+            if not ok:
+                continue
+            cv2.circle(im, tuple(int(v) for v in p.xy[f, 15]), 3, (0, 255, 0), -1)
+            x, y = np.clip(cx, 70, im.shape[1] - 70), np.clip(cy, 70, im.shape[0] - 70)
+            im = cv2.resize(im[y - 70: y + 70, x - 70: x + 70], (340, 340))
+            cv2.putText(im, f"{f} r{f - r}", (8, 36), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 255, 255), 3)
+            tiles.append(im)
+        cap.release()
+        while len(tiles) % 5:
+            tiles.append(np.zeros_like(tiles[0]))
+        grid = np.vstack([np.hstack(tiles[i:i + 5]) for i in range(0, len(tiles), 5)])
+        cv2.imwrite(str(d / "labels" / f"fs_{clip.replace('.mp4', '')}.jpg"), grid, [cv2.IMWRITE_JPEG_QUALITY, 80])
+
+
+def fs_score(d: Path):
+    """Foot-strike detector (release.foot_strike_frame) vs hand labels.  In-sample: its tolerance was
+    picked on these labels."""
+    from pitchsim.pose.pose2d import load_pose2d
+    from pitchsim.pose.release import foot_strike_frame
+    lab = pd.read_csv(FS_LABELS)
+    rows = []
+    for c, lf in zip(lab["clip"], lab["foot_strike_frame_label"]):
+        r = release_pose(d, c)
+        f = foot_strike_frame(load_pose2d(d / "pose2d" / c.replace(".mp4", ".npz")), "R", r)
+        rows.append({"clip": c, "label": lf, "label_to_release": r - lf, "detected": f,
+                     "err": None if f is None else f - lf})
+    t = pd.DataFrame(rows)
+    e = t["err"].dropna().abs()
+    print(t.to_string(index=False))
+    print(f"n={len(t)} found={len(e)} median |err|={e.median()} max |err|={e.max()} "
+          f"within 2={(e <= 2).sum()}/{len(t)}; label -> release median {t['label_to_release'].median()} frames")
+
+
 if __name__ == "__main__":
     d = Path(sys.argv[2])
-    sheets(d, sys.argv[3:]) if sys.argv[1] == "sheets" else score(d)
+    {"sheets": lambda: sheets(d, sys.argv[3:]), "score": lambda: score(d),
+     "fssheets": lambda: fs_sheets(d, sys.argv[3:]), "fsscore": lambda: fs_score(d)}[sys.argv[1]]()

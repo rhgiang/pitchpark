@@ -34,3 +34,33 @@ def release_frame(p: Pose2D, throws: str) -> int:
     # (0.25 s) merges the double bumps one swing can produce.
     peaks, _ = find_peaks(speed, height=0.5 * speed.max(), distance=15)
     return int(peaks[0]) if len(peaks) else int(np.argmax(speed))
+
+
+def foot_strike_frame(p: Pose2D, throws: str, release: int, tol_torso: float = 0.13) -> int | None:
+    """Frame the lead (glove-side) foot plants, from the 2D lead ankle; None if it never settles.
+
+    Why 2D and not the 3D lift: from the centre-field camera the stride runs along the camera axis, and
+    the monocular lift compresses that depth, so its 3D lead ankle slows ~0.45 s before release while the
+    real foot is still reaching forward just above the dirt.  In the image the foot keeps moving (down and
+    sideways) until it plants, so "the ankle reaches its planted spot and stays there" is visible in 2D.
+    Planted spot = median ankle position over the last 3 frames up to release (the lead foot is down at
+    release).  Foot strike = first frame, after the leg-lift peak (highest ankle in the image) and within
+    release - 0.6 s .. release - 0.05 s, from which the ankle stays within `tol_torso` x torso length
+    (shoulder-mid to hip-mid, px) of that spot through release.  Both x and y count: the ankle reaches
+    ground height in the image while the foot is still sliding toward the plate.  Position is 5-frame
+    median filtered (one- or two-frame tracker swaps onto the other foot are common at landing).
+    tol_torso = 0.13 was picked against 12 hand labels (in-sample; it lands ~2-3 frames before the
+    "foot flat" label, i.e. near heel contact).  Biomechanics: foot contact -> release is ~0.15-0.2 s in
+    pro pitchers (Fleisig et al. 1999), which bounds the window.
+    """
+    k = 15 if throws == "R" else 16          # COCO 15 left ankle, 16 right ankle
+    a = np.stack([medfilt(p.xy[:, k, d], 5) for d in (0, 1)], 1)
+    w = slice(max(release - 30, 0), release)
+    torso = np.median(np.linalg.norm(p.xy[w, 5:7].mean(1) - p.xy[w, 11:13].mean(1), axis=1))
+    near = np.linalg.norm(a - np.median(a[release - 2: release + 1], axis=0), axis=1) < tol_torso * torso
+    lo, hi = max(release - int(round(0.6 * p.fps)), 0), release - int(round(0.05 * p.fps))
+    lo = lo + int(np.argmin(a[lo:release, 1]))  # leg-lift peak: image y grows downward
+    for f in range(lo, hi + 1):
+        if near[f: release + 1].all():
+            return f
+    return None

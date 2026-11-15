@@ -2,7 +2,7 @@
 import numpy as np
 
 from pitchsim.pose.pose2d import Pose2D
-from pitchsim.pose.release import release_frame
+from pitchsim.pose.release import foot_strike_frame, release_frame
 from pitchsim.pose.screen import screen
 
 W, H, FPS = 1280, 720, 60.0
@@ -55,3 +55,32 @@ def test_release_frame_first_peak_beats_larger_later_peak():
     later = 60 * np.exp(-0.5 * ((np.arange(200) - 150) / 5.0) ** 2)
     p.xy[:, 10, 0] += np.cumsum(later)
     assert abs(release_frame(p, "R") - 40) <= 1
+
+
+def stride(ankle=15, settle=85, release=95, n=120):
+    """Synthetic stride: lead ankle rises to a leg-lift peak at frame 40, comes down near the ground by 60,
+    then reaches forward along the ground (in the image) until it plants at `settle`."""
+    p = synth(n=n)
+    t = np.arange(n)
+    ground = p.xy[0, ankle, 1]
+    p.xy[:, ankle, 1] = ground - 100 * np.exp(-0.5 * ((t - 40) / 10.0) ** 2)
+    u = np.clip((t - 60) / (settle - 60), 0, 1)
+    p.xy[:, ankle, 0] += 200 * u   # slides 8 px/frame, then plants (stops) at `settle`
+    return p, release
+
+
+def test_foot_strike_frame_finds_plant():
+    p, r = stride()
+    assert abs(foot_strike_frame(p, "R", r) - 85) <= 2
+
+
+def test_foot_strike_frame_lefty_uses_right_ankle():
+    p, r = stride(ankle=16)
+    p.xy[:, 15, 0] += 3 * np.arange(120)  # left ankle keeps moving: must be ignored for a LHP
+    assert abs(foot_strike_frame(p, "L", r) - 85) <= 2
+
+
+def test_foot_strike_frame_none_when_foot_never_settles():
+    p, r = stride()
+    p.xy[:, 15, 0] += 10 * np.arange(120)  # still sliding 10 px/frame at release: no plant to find
+    assert foot_strike_frame(p, "R", r) is None
