@@ -99,3 +99,18 @@ def test_ground_root_removes_root_depth_noise():
     g = ground_root(jn, "R", fs)
     assert np.allclose(g[: fs + 1, 11], g[0, 11], atol=0.05)          # pivot pinned until strike
     assert np.allclose(g[fs:, 10], g[fs, 10], atol=0.05)              # lead pinned afterwards
+
+
+def test_time_warp_is_smooth_monotone_and_hits_the_knots():
+    """SYNTHETIC knots.  A piecewise-linear warp kinks at each landmark (the warped clip's speed jumps
+    there); the smooth warp passes through the same knots with continuous slope."""
+    from pitchsim.pose.delivery import time_warp
+    tmpl, clip = np.array([-2.5, -1.0, -0.2, 0.0]), np.array([-2.7, -1.3, -0.15, 0.0])
+    w = time_warp(tmpl, clip)
+    assert np.allclose(w(tmpl), clip)
+    x = np.linspace(-3, 0.6, 2001)
+    assert np.all(np.diff(w(x)) > 0)
+    h = 1e-5
+    for k in tmpl:
+        left, right = (w(k) - w(k - h)) / h, (w(k + h) - w(k)) / h
+        assert abs(left - right) < 1e-3, (k, left, right)

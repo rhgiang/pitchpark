@@ -4,6 +4,7 @@ One delivery from many clips: landmarks, time-warp alignment, averaging, smoothi
 Frame-agnostic: nothing here assumes which axis is up except `landmarks`, which takes `up` explicitly.
 """
 import numpy as np
+from scipy.interpolate import PchipInterpolator
 from scipy.signal import savgol_filter
 
 # SMPL joint indices (same order as JOINTS in web/src/skeleton.js)
@@ -52,18 +53,31 @@ def jitter(j: np.ndarray, fps: float) -> float:
     return float(np.sqrt(np.mean(d3 ** 2)))
 
 
+def time_warp(tmpl_s: np.ndarray, clip_s: np.ndarray) -> PchipInterpolator:
+    """Monotone map from template time to a clip's time (s from release) through the landmark knots.
+
+    tmpl_s / clip_s: increasing landmark times (template, this clip), release last.  Knots at -10 s / +10 s
+    with slope-1 offsets keep the wind-up and follow-through at their natural speed.
+    Why PCHIP (Fritsch & Carlson 1980) and not piecewise-linear: a linear warp changes slope at each
+    landmark, so the warped clip's speed jumps there (a visible hitch at leg lift / foot strike).  PCHIP is
+    a cubic through the same knots with continuous slope, and it never overshoots, so time stays monotone.
+    """
+    kx = np.concatenate([[tmpl_s[0] - 10], tmpl_s, [10.0]])
+    ky = np.concatenate([[clip_s[0] - 10], clip_s, [10.0]])
+    return PchipInterpolator(kx, ky)
+
+
 def average_delivery(seqs: list[np.ndarray], marks: list[dict], pre_s: float, fps_out: float = 60.0,
                      post_s: float = 0.6, excluded: list | None = None) -> tuple[np.ndarray, int]:
     """Time-warp clips so their landmarks coincide, average, smooth.  Returns (joints (T,24,3), release_index).
 
     marks[i]: dict with leg_lift, foot_strike, release (frame indices, from `landmarks`) and "fps" (that
-      clip's frame rate; the brief's signature carries no per-clip fps, so it rides in the marks).
+      clip's frame rate; the brief's signature carries no per-clip fps, so it rides in the marks).  Any
+      other int entries (e.g. "rocker") are extra landmark knots; every clip must have the same keys.
     pre_s / post_s: seconds kept before / after release.  release_index == round(pre_s * fps_out).
     excluded: optional out-parameter; a clip that does not cover [release - pre_s, release + post_s] is
       appended as (clip_index, "short").  An out-list keeps the return a plain 2-tuple as the brief says.
-    Warp: piecewise-linear in time through (leg_lift, foot_strike, release) -> their median times relative
-      to release; slope 1 outside the first and last landmark so the wind-up and follow-through keep their
-      natural speed.
+    Warp: `time_warp` (smooth, monotone) through the landmarks -> their median times relative to release.
     """
     keep = []
     for i, (s, m) in enumerate(zip(seqs, marks)):
@@ -79,9 +93,12 @@ def average_delivery(seqs: list[np.ndarray], marks: list[dict], pre_s: float, fp
         raise ValueError("no clip covers the requested window")
 
     # landmark times relative to release, seconds; template = median over clips
-    rel_t = np.array([[(marks[i][k] - marks[i]["release"]) / marks[i]["fps"]
-                       for k in ("leg_lift", "foot_strike")] + [0.0] for i in keep])
+    keys = [k for k in marks[keep[0]] if k not in ("fps", "release")]
+    rel_t = np.array([[(marks[i][k] - marks[i]["release"]) / marks[i]["fps"] for k in keys] + [0.0]
+                      for i in keep])
     tmpl = np.median(rel_t, axis=0)
+    order = np.argsort(tmpl, kind="stable")
+    tmpl, rel_t = tmpl[order], rel_t[:, order]
 
     ri = int(round(pre_s * fps_out))
     n_out = ri + int(round(post_s * fps_out)) + 1
@@ -90,10 +107,11 @@ def average_delivery(seqs: list[np.ndarray], marks: list[dict], pre_s: float, fp
     used = 0
     for c, i in enumerate(keep):
         s = np.asarray(seqs[i], float)
-        # knots extended with slope 1 past both ends
-        kx = np.concatenate([[tmpl[0] - 10], tmpl, [10.0]])
-        ky = np.concatenate([[rel_t[c, 0] - 10], rel_t[c], [10.0]])
-        pos = marks[i]["release"] + np.interp(tau, kx, ky) * marks[i]["fps"]  # fractional clip frames
+        if np.any(np.diff(rel_t[c]) <= 0):  # landmarks out of order: no monotone warp exists
+            if excluded is not None:
+                excluded.append((i, "landmark_order"))
+            continue
+        pos = marks[i]["release"] + time_warp(tmpl, rel_t[c])(tau) * marks[i]["fps"]  # fractional clip frames
         # Coverage on the WARPED positions: a clip whose wind-up is longer than the template's needs frames
         # before frame 0 once stretched; clamping would contribute frozen frames, so exclude it instead.
         if pos.min() < 0 or pos.max() > len(s) - 1:
