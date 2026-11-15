@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Vector3 } from "three";
+import { Vector3, Quaternion, Line3 as THREE_Line } from "three";
 import { readFileSync } from "node:fs";
 import { JOINTS, J } from "../src/skeleton.js";
 import { makePitcher, poseAtRelease, poseAtTime, handPosition } from "../src/pitcher.js";
@@ -142,4 +142,118 @@ test("delivery: hand velocity is continuous across frame boundaries (slow motion
     const jump = after.distanceTo(before);
     assert.ok(jump < 0.25 * (2 * A) / fps, `t=${tb}: velocity jumps ${jump.toFixed(4)} ft/s at the frame boundary (linear: ~${((2 * A) / fps).toFixed(3)})`);
   }
+});
+
+// --- The figure's meshes (figure.js). Skinned vertex positions come from three's own skinning
+// maths (SkinnedMesh.applyBoneTransform), so these check what is drawn.
+const meshOf = (fig) => fig.children[0];
+/** World positions of the vertices whose main bone is `bone` (all vertices if null), in group `mat`. */
+function skinnedVerts(fig, { bone = null, mat = null } = {}) {
+  const mesh = meshOf(fig);
+  fig.updateMatrixWorld(true);
+  const g = mesh.geometry, si = g.attributes.skinIndex, ix = g.index.array;
+  const groups = mat == null ? [{ start: 0, count: ix.length }]
+    : g.groups.filter((gr) => mesh.material[gr.materialIndex].name === mat);
+  const seen = new Set(), out = [];
+  for (const gr of groups) for (let n = gr.start; n < gr.start + gr.count; n++) {
+    const i = ix[n];
+    if (seen.has(i) || (bone != null && si.getX(i) !== bone)) continue;
+    seen.add(i);
+    out.push({ bone: si.getX(i), p: mesh.applyBoneTransform(i, new Vector3().fromBufferAttribute(g.attributes.position, i)).applyMatrix4(mesh.matrixWorld) });
+  }
+  return out;
+}
+
+for (const [throws, G] of [["R", "left"], ["L", "right"]]) {
+  test(`glove (${throws}HP): the mitt is bound to the ${G} (glove-side) hand and sits on it`, () => {
+    const fig = makePitcher(throws);
+    const verts = skinnedVerts(fig, { mat: "glove" });
+    assert.ok(verts.length > 100, "a mitt with some shape");
+    for (const { bone } of verts) assert.equal(bone, J[`${G}_wrist`]);
+    const c = verts.reduce((s, v) => s.add(v.p), new Vector3()).divideScalar(verts.length);
+    const hand = worldPos(fig, handName(G));
+    assert.ok(c.distanceTo(hand) < 0.5, `mitt centre ${c.distanceTo(hand).toFixed(2)} ft from the ${G} knuckles`);
+  });
+}
+
+test("ball grip: through the windup the ball at handPosition sits between fingers and thumb", () => {
+  const BALL_FT = 1.45 / 12;
+  for (const [throws, T] of [["R", "right"], ["L", "left"]]) {
+    const fig = makePitcher(throws);
+    for (const t of [-2, -1.2, -0.6, -0.2, 0]) {
+      if (throws === "R") poseAtTime(fig, DELIVERY, t, null, 45);
+      const ball = handPosition(fig, throws);
+      const hand = skinnedVerts(fig, { bone: J[`${T}_wrist`] }).map((v) => v.p);
+      const d = hand.map((p) => p.distanceTo(ball));
+      // Nothing of the hand inside the ball (a little overlap allowed for the touching pads)...
+      assert.ok(Math.min(...d) > BALL_FT - 0.02, `${throws} t=${t}: hand ${Math.min(...d).toFixed(3)} ft from the ball centre`);
+      // ...and the hand touches it on opposite sides (fingers over, thumb under): hand points
+      // within a finger's thickness of the surface, in directions more than 120 deg apart.
+      const touch = hand.filter((p, i) => d[i] < BALL_FT + 0.03).map((p) => p.clone().sub(ball).normalize());
+      const spread = Math.max(...touch.flatMap((a) => touch.map((b) => a.angleTo(b))));
+      assert.ok(spread > (120 * Math.PI) / 180, `${throws} t=${t}: grip spans ${((spread * 180) / Math.PI).toFixed(0)} deg`);
+      if (throws === "L") break; // the fixture is a right-hander's: the left grip is checked at rest
+    }
+  }
+});
+
+test("no part detaches: every vertex stays within reach of its bone through the delivery", () => {
+  for (const heightIn of [75, 80]) {
+    const fig = makePitcher("R", heightIn);
+    const k = heightIn / 75;
+    const bones = fig.userData.bones;
+    const kids = JOINTS.map((_, i) => JOINTS.findIndex((j) => j.parent === i));
+    for (const t of [-2.5, -1.5, -0.9, -0.4, -0.1, 0, 0.3]) {
+      poseAtTime(fig, DELIVERY, t, add(ownHand0, [0.12, -0.1, -0.1]), 45);
+      const at = bones.map((b) => b.getWorldPosition(new Vector3()));
+      for (const { bone, p } of skinnedVerts(fig)) {
+        // Distance to the bone's segment (joint -> first child; a leaf is a point). The farthest
+        // legitimate parts: the mitt's tip ~1 ft past the wrist, the shoe's toe past the ankle.
+        const a = at[bone], b = kids[bone] >= 0 ? at[kids[bone]] : a;
+        const d = a === b ? a.distanceTo(p) : new THREE_Line(a, b).closestPointToPoint(p, true, new Vector3()).distanceTo(p);
+        assert.ok(d < 1.1 * k, `t=${t}: a vertex on ${JOINTS[bone].smpl} is ${d.toFixed(2)} ft off its bone`);
+      }
+    }
+  }
+});
+
+test("steady arm roll: arm bones turn no faster than the arm swings (no added twist)", () => {
+  // The fixture's arm swings at 200 deg/s, i.e. 0.83 deg per 1/240 s sample. The smallest swing
+  // from the parent adds roll about the bone's own axis as the arm passes overhead (1.36 deg per
+  // sample with it); rolled by the elbow's hinge plane the bones turn only as the arm does.
+  // Windup bound 1.0 deg (the true 0.83 + interpolation slack); after it, a loose 3 deg.
+  const fig = makePitcher("R");
+  const arm = ["shoulder", "elbow", "wrist", "hand"].flatMap((n) => [`left_${n}`, `right_${n}`]);
+  const quat = () => arm.map((n) => fig.getObjectByName(JOINTS[J[n]].mixamo).getWorldQuaternion(new Quaternion()));
+  let prev = null;
+  for (let i = -240; i <= 72; i++) {
+    poseAtTime(fig, DELIVERY, i / 240, null, 45);
+    const q = quat();
+    if (prev) q.forEach((x, b) => {
+      const deg = (x.angleTo(prev[b]) * 180) / Math.PI, bound = i < -72 ? 1.0 : 3;
+      assert.ok(deg <= bound, `t=${(i / 240).toFixed(3)}: ${arm[b]} turned ${deg.toFixed(2)} deg in 1/240 s`);
+    });
+    prev = q;
+  }
+});
+
+test("no bob: frame-to-frame jitter in the video's height does not reach the pelvis", () => {
+  // SYNTHETIC: the fixture with the whole body jittering up and down 0.08 ft on alternate frames
+  // (what blur at release does to a video skeleton). High-frequency part of the pelvis height =
+  // height minus its 0.25 s moving average, over the windup.
+  const jitter = { ...DELIVERY, joints_ft: DELIVERY.joints_ft.map((fr, i) => fr.map(([x, y, z]) => [x, y, z + (i % 2 ? 0.08 : -0.08)])) };
+  const fig = makePitcher("R");
+  const ts = [], ys = [];
+  for (let i = -240; i <= -72; i++) {
+    poseAtTime(fig, jitter, i / 240, null, 45);
+    ts.push(i / 240);
+    ys.push(fig.userData.bones[0].getWorldPosition(new Vector3()).y);
+  }
+  const W = 30; // +-0.125 s at 240 samples/s
+  let worst = 0;
+  for (let i = W; i < ys.length - W; i++) {
+    const avg = ys.slice(i - W, i + W + 1).reduce((s, v) => s + v) / (2 * W + 1);
+    worst = Math.max(worst, Math.abs(ys[i] - avg));
+  }
+  assert.ok(worst < 0.01, `pelvis bobs ${worst.toFixed(3)} ft`);
 });

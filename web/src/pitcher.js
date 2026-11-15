@@ -1,9 +1,8 @@
 import * as THREE from "three";
-import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { JOINTS, J, buildSkeleton } from "./skeleton.js";
 import { toScene } from "./coords.js";
 import { groundHeightFt, RUBBER_FRONT_Y_FT } from "./field.js";
-import { PALETTE, makeToonMaterial } from "./look.js";
+import { figureGeometry } from "./figure.js";
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const DEG = Math.PI / 180;
@@ -200,6 +199,43 @@ function frame(pts, i) {
   return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, x.clone().cross(y)));
 }
 
+// Hinge chains: [upper bone, lower bone, end joint, rest flexion direction of the lower bone].
+// The elbow, in the palm-down T-pose, bends the forearm forwards (+z). Arms only: the legs are
+// often nearly straight (the pelvis sits as high as they reach), where the hinge plane is
+// undefined and fading between rolls turned the knee up to 25 deg in 1/240 s; their roll only
+// shows on the shoe, and the smallest swing keeps it steady there.
+const HINGES = ["left", "right"].map((s) => [J[`${s}_shoulder`], J[`${s}_elbow`], J[`${s}_wrist`], V(0, 0, 1)]);
+/** Bone index -> its hinge: [a, b, c, rest hinge axis]. */
+const HINGE_OF = Object.fromEntries(HINGES.flatMap(([a, b, c, flex]) => {
+  const n = REST[b].clone().sub(REST[a]).normalize().cross(flex).normalize();
+  return [[a, [a, b, c, n]], [b, [a, b, c, n]]];
+}));
+/**
+ * World rotation of an arm bone with its roll set by the elbow hinge it belongs to.
+ * Why: the smallest swing from the parent picks the bone's roll about its own axis implicitly,
+ * and that choice turns fast (and flips at 180 deg) when the limb points nearly opposite its
+ * rest direction (an arm folded across the chest or swung overhead). The arm looks the same
+ * rolled, but the roll carries down to the hand and glove, which visibly wobbled.
+ * An elbow only bends about one axis, so the plane of (upper, lower) segment fixes the
+ * roll for both bones. The plane is undefined when the limb is straight: there the bone fades
+ * back to the smallest swing (weight by how bent it is, sin of the bend from 0.1 to 0.4).
+ */
+function hingeRotation(pts, i, swing) {
+  const [a, b, c, nRest] = HINGE_OF[i];
+  const n = pts[b].clone().sub(pts[a]).normalize().cross(pts[c].clone().sub(pts[b]).normalize());
+  const w = smoothstep((n.length() - 0.1) / 0.3);
+  if (w === 0) return swing;
+  const kid = i === a ? b : c;
+  const basis = (d, nn) => new THREE.Matrix4().makeBasis(d, nn, d.clone().cross(nn));
+  const dRest = REST[kid].clone().sub(REST[i]).normalize();
+  const nr = nRest.clone().addScaledVector(dRest, -nRest.dot(dRest)).normalize();
+  const d = dirTo(pts, i, kid);
+  n.addScaledVector(d, -n.dot(d)).normalize();
+  const hinge = new THREE.Quaternion().setFromRotationMatrix(basis(d, n))
+    .multiply(new THREE.Quaternion().setFromRotationMatrix(basis(dRest, nr)).invert());
+  return swing.clone().slerp(hinge, w);
+}
+
 /**
  * Turn joint positions into bone rotations (rest rotations are identity, so rest offsets are in
  * world axes). A bone with several children (pelvis, spine3) takes the rotation mapping its rest
@@ -219,6 +255,7 @@ function setBones(bones, pts, scale = 1) {
     else if (k.length === 1) {
       const from = REST[k[0]].clone().sub(REST[i]).normalize().applyQuaternion(parent);
       q = new THREE.Quaternion().setFromUnitVectors(from, dirTo(pts, i, k[0])).multiply(parent);
+      if (HINGE_OF[i]) q = hingeRotation(pts, i, q);
     } else q = frame(pts, i).multiply(frame(REST, i).invert());
     world[i] = q;
     bones[i].quaternion.copy(parent.clone().invert().multiply(q));
@@ -296,7 +333,7 @@ function footTarget(src, sd, k) {
  * How far (ft) to lower the pelvis at each delivery frame so the rig's legs reach the delivery's
  * ankles. The video skeleton's legs (and its pelvis-to-hip drop) are ~0.3 ft longer than the
  * stylised rig's, so with the pelvis where the video has it the planted pivot foot would float
- * and slide. Smoothed (max, then mean, over +-0.1 s) so the body does not bob. Cached per
+ * and slide. The resulting pelvis height is smoothed (below) so the body does not bob. Cached per
  * delivery on the figure: computed once, 187 frames of FK.
  */
 function pelvisDrops(figure, delivery) {
@@ -314,10 +351,20 @@ function pelvisDrops(figure, delivery) {
       return h < R ? d.y - Math.sqrt(R * R - h * h) : d.y; // drop that brings the ankle into reach
     }));
   });
-  const W = Math.round(0.1 * delivery.fps);
-  const around = (a, i) => a.slice(Math.max(0, i - W), i + W + 1);
-  const high = raw.map((_, i) => Math.max(...around(raw, i)));
-  ud.drops = high.map((_, i) => around(high, i).reduce((s, v) => s + v) / around(high, i).length);
+  // Smooth the pelvis HEIGHT, not just the drop: the video's own pelvis height jitters near
+  // release (blur: +-0.15 ft frame to frame), and "lower by just enough" passed that through
+  // as a bounce. top[i] is the highest the pelvis may be (the video's height, or lower if the
+  // legs would not reach). Min over +-W, then two box means over +-W/2 (a triangle kernel, so
+  // the height's velocity is continuous): each smoothed value averages minima whose windows all
+  // contain the frame, so it is never above top[i] and the legs always reach. W = 0.18 s:
+  // wide enough to remove the release jitter, short enough that the pelvis does not start its
+  // stride descent visibly early (a min filter leads the motion by up to W).
+  const vid = delivery.joints_ft.map((fr) => fr[J.pelvis][2]);
+  const top = raw.map((r, i) => vid[i] - r);
+  const W = Math.round(0.18 * delivery.fps), h = Math.floor(W / 2); // 2h <= W keeps the guarantee
+  const around = (a, i, r) => a.slice(Math.max(0, i - r), i + r + 1);
+  const mean = (a) => a.map((_, i) => around(a, i, h).reduce((s, v) => s + v) / around(a, i, h).length);
+  ud.drops = mean(mean(top.map((_, i) => Math.min(...around(top, i, W))))).map((y, i) => vid[i] - y);
   ud.dropsFor = delivery;
   return ud.drops;
 }
@@ -397,91 +444,16 @@ export function handPosition(figure, throws = figure.userData.throws) {
   return figure.userData.bones[J[`${throws === "L" ? "left" : "right"}_hand`]].getWorldPosition(new THREE.Vector3());
 }
 
-// Materials: one park-style toon material per body part (look.js), all made here.
-const COLORS = {
-  jersey: PALETTE.jersey, sleeve: PALETTE.navy, pants: PALETTE.pants, skin: PALETTE.skin,
-  cap: PALETTE.navy, glove: PALETTE.glove, shoe: PALETTE.shoe,
-};
-const makeMaterials = () => Object.fromEntries(
-  Object.entries(COLORS).map(([k, c]) => [k, makeToonMaterial(c)]));
-
-/** Rigid skinning: each vertex follows one bone, chosen from its rest position. */
-function skin(geo, boneOf) {
-  const pos = geo.attributes.position;
-  const idx = new Uint16Array(pos.count * 4);
-  const wt = new Float32Array(pos.count * 4);
-  const v = new THREE.Vector3();
-  for (let i = 0; i < pos.count; i++) {
-    idx[i * 4] = boneOf(v.fromBufferAttribute(pos, i));
-    wt[i * 4] = 1;
-  }
-  geo.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(idx, 4));
-  geo.setAttribute("skinWeight", new THREE.Float32BufferAttribute(wt, 4));
-  return geo;
-}
-
-/** Capsule of radius r between two rest joints (ends extended by `ext` ft), on joint a's bone. */
-function limb(a, b, r, ext = 0) {
-  const pa = REST[J[a]], pb = REST[J[b]];
-  const d = pb.clone().sub(pa);
-  const g = new THREE.CapsuleGeometry(r, Math.max(d.length() + 2 * ext - 2 * r, 0.01), 6, 14);
-  g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), d.clone().normalize()));
-  g.translate(...pa.clone().add(pb).multiplyScalar(0.5).toArray());
-  return skin(g, () => J[a]);
-}
-
-/** A lathe (radius, height) profile, squashed to an oval body cross-section. */
-function lathe(profile, sx, sz) {
-  const g = new THREE.LatheGeometry(profile.map(([r, y]) => new THREE.Vector2(r, y)), 28);
-  g.scale(sx, 1, sz);
-  return g;
-}
-
-/** Stylised body: lathe torso and hips, capsule limbs, head with a cap, glove on the glove hand. */
-function bodyParts(throws) {
-  const G = throws === "L" ? "right" : "left";
-  // The torso follows the spine bone whose segment each vertex sits in (heights from the rest pose).
-  const spineAt = (v) => (v.y < REST[J.spine1].y ? J.pelvis
-    : v.y < REST[J.spine2].y ? J.spine1 : v.y < REST[J.spine3].y ? J.spine2 : J.spine3);
-  const parts = [
-    ["jersey", skin(lathe([[0, 3.4], [0.44, 3.42], [0.42, 3.8], [0.44, 4.2], [0.5, 4.6], [0.54, 4.95],
-      [0.46, 5.15], [0.24, 5.3], [0, 5.32]], 1.3, 0.72), spineAt)],
-    ["pants", skin(lathe([[0, 2.85], [0.36, 2.9], [0.47, 3.15], [0.46, 3.5], [0, 3.55]], 1.25, 0.75), () => J.pelvis)],
-    ["skin", limb("neck", "head", 0.17)],
-    ["skin", skin(new THREE.SphereGeometry(0.36, 24, 16).translate(0, 5.86, 0.04), () => J.head)],
-    // Cap crown and a brim pointing forward.
-    ["cap", skin(new THREE.SphereGeometry(0.375, 24, 8, 0, 2 * Math.PI, 0, Math.PI / 2)
-      .scale(1, 0.85, 1).translate(0, 5.92, 0.03), () => J.head)],
-    ["cap", skin(new THREE.CylinderGeometry(0.26, 0.26, 0.03, 20).scale(1, 1, 0.8)
-      .translate(0, 5.94, 0.42), () => J.head)],
-  ];
-  for (const sd of ["left", "right"]) {
-    parts.push(
-      ["sleeve", limb(`${sd}_shoulder`, `${sd}_elbow`, 0.19, 0.12)],
-      ["skin", limb(`${sd}_elbow`, `${sd}_wrist`, 0.14, 0.05)],
-      ["pants", limb(`${sd}_hip`, `${sd}_knee`, 0.27, 0.1)],
-      ["pants", limb(`${sd}_knee`, `${sd}_ankle`, 0.19, 0.05)],
-      ["shoe", limb(`${sd}_ankle`, `${sd}_foot`, 0.14, 0.12)],
-      sd === G
-        ? ["glove", skin(new THREE.SphereGeometry(0.3, 18, 12).scale(1, 1.15, 0.7)
-          .translate(...REST[J[`${sd}_hand`]].toArray()), () => J[`${sd}_wrist`])]
-        : ["skin", limb(`${sd}_wrist`, `${sd}_hand`, 0.11, 0.06)],
-    );
-  }
-  return parts;
-}
-
 /**
- * The pitcher: a Group holding one SkinnedMesh on the SMPL/Mixamo skeleton (skeleton.js),
+ * The pitcher: a Group holding one SkinnedMesh (figure.js) on the SMPL/Mixamo skeleton (skeleton.js),
  * posed at a typical release until poseAtRelease is called with a real pitch. The rest skeleton
  * is 75 in tall; the figure is scaled by heightIn / 75.
  * userData: {throws, bones (JOINTS order), scale, armAngleDeg}.
  */
 export function makePitcher(throws, heightIn = 75) {
   const { bones, skeleton } = buildSkeleton();
-  const parts = bodyParts(throws);
-  const mats = makeMaterials();
-  const mesh = new THREE.SkinnedMesh(mergeGeometries(parts.map((p) => p[1]), true), parts.map((p) => mats[p[0]]));
+  const { geometry, materials } = figureGeometry(throws);
+  const mesh = new THREE.SkinnedMesh(geometry, materials);
   mesh.add(bones[0]);
   mesh.bind(skeleton); // at rest: T-pose is the bind pose
   mesh.frustumCulled = false; // bounds are from the rest pose at the origin, not on the mound
