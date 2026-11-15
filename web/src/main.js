@@ -1,26 +1,29 @@
 import "./ui.css";
 import * as THREE from "three";
 import { toScene } from "./coords.js";
-import { buildField, buildZone } from "./field.js";
+import { buildField, buildZone, RUBBER_FRONT_Y_FT } from "./field.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
-  batterEye, umpireView, sideView, rideAlong, BATTER_EYE_VFOV_DEG, UMPIRE_VFOV_DEG, SIDE_VFOV_DEG,
-  RIDE_VFOV_DEG, FREE_VFOV_DEG, FREE_START, FREE_MIN_DIST_FT, FREE_MAX_DIST_FT, introSweep, INTRO_S,
+  batterEye, umpireView, tvView, sideView, rideAlong, BATTER_EYE_VFOV_DEG, UMPIRE_VFOV_DEG, SIDE_VFOV_DEG,
+  RIDE_VFOV_DEG, FREE_VFOV_DEG, TV_VFOV_DEG, FREE_START, FREE_MIN_DIST_FT, FREE_MAX_DIST_FT, introSweep, INTRO_S, nearFor,
 } from "./cameras.js";
-import { loadIndex, loadPitcher } from "./data.js";
+import { loadIndex, loadPitcher, loadDelivery } from "./data.js";
 import {
-  initialState, reduce, currentAtBat, currentPitch, shownPaths, MODES, SPEEDS, VIEWS, spinFactor,
+  initialState, reduce, preroll, currentAtBat, currentPitch, shownPaths, MODES, SPEEDS, VIEWS, spinFactor,
 } from "./state.js";
 import { makeTube, updateTube } from "./trail.js";
 import { makeBall, makeGhost, updateBall, spinBall } from "./ball.js";
 import { renderHud, buildStrip } from "./hud.js";
-import { makePitcher, poseAtRelease } from "./pitcher.js";
+import { makePitcher, poseAtRelease, poseAtTime, handPosition } from "./pitcher.js";
 import { buildPark } from "./park/index.js";
 import { initLook, setTimeOfDay, refreshShadows, inkProof, timeOfDay, TIMES } from "./look.js";
+import { showMenu } from "./menu.js";
+import { menuPick } from "./menu-ui.js";
+import { frameSlot, shouldDraw, pixelRatio } from "./pacing.js";
 
 // No MSAA: the composer renders to its own targets, and SMAA (look.js) anti-aliases instead.
 const renderer = new THREE.WebGLRenderer({ antialias: false });
-renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setPixelRatio(pixelRatio(window.devicePixelRatio)); // capped: see pacing.js
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -50,12 +53,35 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enabled = false;
 controls.minDistance = FREE_MIN_DIST_FT;
 controls.maxDistance = FREE_MAX_DIST_FT;
+// Draw on demand (pacing.js): a frame is drawn when t or the camera moved, or `dirty` says
+// something else the picture shows changed (a pitch, view, mode or time of day; a resize).
+let dirty = true;
+controls.addEventListener("change", () => { dirty = true; });
 let freePose = { position: toScene(FREE_START.position), target: toScene(FREE_START.target) };
 let appliedView = null;
 const VFOV = {
   umpire: UMPIRE_VFOV_DEG, batter: BATTER_EYE_VFOV_DEG, side: SIDE_VFOV_DEG, free: FREE_VFOV_DEG,
-  ride: RIDE_VFOV_DEG,
+  ride: RIDE_VFOV_DEG, tv: TV_VFOV_DEG,
 };
+
+/**
+ * The delivery's pelvis (joint 0, Statcast ft) at t s from release: mean of the frames within
+ * +-0.15 s, so per-frame lifting noise does not shake the windup camera.
+ */
+function pelvisAt(d, t) {
+  const c = d.release_index + t * d.fps, r = 0.15 * d.fps;
+  const lo = Math.max(0, Math.ceil(c - r)), hi = Math.min(d.joints_ft.length - 1, Math.floor(c + r));
+  const m = [0, 0, 0];
+  for (let i = lo; i <= hi; i++) d.joints_ft[i][0].forEach((v, k) => { m[k] += v / (hi - lo + 1); });
+  return m;
+}
+
+/** The near plane for a pose (cameras.nearFor), applied for every pose, sweeps included. */
+function setNear(pose) {
+  const near = nearFor(pose);
+  if (camera.near !== near) camera.near = near;
+  camera.updateProjectionMatrix();
+}
 
 /** Point the camera for the current view. Runs every frame: cheap, and ride follows t. */
 function updateCamera() {
@@ -66,6 +92,7 @@ function updateCamera() {
     if (appliedView === "free") freePose = { position: camera.position.clone(), target: controls.target.clone() };
     appliedView = state.view;
     camera.fov = VFOV[state.view];
+    camera.near = nearFor(null); // Free has no pose; every other pose sets its own below
     camera.updateProjectionMatrix();
     controls.enabled = state.view === "free";
     if (state.view === "free") { // first visit: FREE_START; later: where the user left it
@@ -76,10 +103,14 @@ function updateCamera() {
   if (state.view === "free") { controls.update(); return; }
   let pose = null;
   if (state.view === "umpire") pose = umpireView();
+  else if (state.view === "tv") pose = tvView();
   else if (state.view === "batter") pose = batterEye(ab.stand);
-  else if (path && state.view === "side") pose = sideView(path, camera.aspect);
-  else if (path) pose = rideAlong(path, state.t, currentPitch(state).release, state.data.pitcher.throws);
+  // With a delivery the windup happens on the rubber, behind release: keep the pitcher in shot.
+  else if (path && state.view === "side") pose = sideView(path, camera.aspect, state.delivery ? RUBBER_FRONT_Y_FT + 1.5 : null);
+  else if (path) pose = rideAlong(path, state.t, currentPitch(state).release, state.data.pitcher.throws,
+    state.delivery ? { pelvis: pelvisAt(state.delivery, state.t) } : null);
   if (!pose) return;
+  setNear(pose);
   camera.position.copy(toScene(pose.position));
   camera.lookAt(toScene(pose.target));
 }
@@ -111,7 +142,7 @@ function updateIntro(dt) {
   if (intro.t >= INTRO_S && !intro.frozen) return endIntro();
   const pose = introSweep(intro.t);
   camera.fov = pose.vfovDeg;
-  camera.updateProjectionMatrix();
+  setNear(pose);
   camera.position.copy(toScene(pose.position));
   camera.lookAt(toScene(pose.target));
   const focus = Math.hypot(...pose.position.map((v, i) => v - pose.target[i]));
@@ -119,7 +150,39 @@ function updateIntro(dt) {
 }
 for (const ev of ["pointerdown", "wheel"]) window.addEventListener(ev, () => { if (intro && !intro.frozen) endIntro(); });
 
+/*
+ * Start screen (menu-ui.js): the page shows one still frame of the park (the intro's early,
+ * high view), blurred by CSS, and 3D drawing stops until a pitcher is chosen. menuDrawn: that
+ * still frame is on screen (cleared by a resize, which redraws it).
+ */
+let menuOpen = false, menuDrawn = false;
+const MENU_VIEW_S = 3; // seconds into introSweep: the island from above and behind home
+function openMenu() {
+  if (intro) endIntro();
+  if (appliedView === "free") freePose = { position: camera.position.clone(), target: controls.target.clone() };
+  appliedView = null; // the still frame moved the camera: re-apply the view's FOV and controls later
+  menuOpen = true;
+  menuDrawn = false;
+  document.body.classList.add("menu");
+  $("menu").hidden = false;
+}
+function closeMenu() {
+  menuOpen = false;
+  dirty = true;
+  document.body.classList.remove("menu");
+  $("menu").hidden = true;
+}
+/** Menu -> chosen pitcher loaded -> menu closed. */
+async function chooseFromMenu(index, preselect) {
+  openMenu();
+  await pickPitcher(await menuPick(index, preselect));
+  closeMenu();
+}
+
 function resize() {
+  menuDrawn = false;
+  dirty = true;
+  renderer.setPixelRatio(pixelRatio(window.devicePixelRatio)); // the window may have moved screens
   renderer.setSize(window.innerWidth, window.innerHeight);
   look.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -136,6 +199,7 @@ let shown = { ab: null, pitch: null }; // what the camera and zone are set up fo
 function dispatch(action) {
   const before = state;
   state = reduce(state, action);
+  if (action.type !== "tick") dirty = true;
   if (action.type === "tick") {
     // The pitch just landed: re-render so the result (and "in the dirt") appears now.
     if (before.playing && !state.playing) renderHud(state, currentPitch(state));
@@ -150,7 +214,8 @@ function dispatch(action) {
     if (zone) scene.add(zone);
     // Each pitch has its own release and arm angle; a no_tracking row may have no release, so
     // the figure keeps the previous pose (and a missing arm angle keeps the previous one).
-    if (pitch.release?.every(Number.isFinite)) {
+    // With a delivery the figure is posed every frame instead (render loop).
+    if (!state.delivery && pitch.release?.every(Number.isFinite)) {
       poseAtRelease(figure, pitch.release, pitch.arm_angle_deg ?? figure.userData.armAngleDeg);
       refreshShadows(); // the pitcher moved: redraw his shadow
     }
@@ -164,7 +229,7 @@ function dispatch(action) {
 const randomSeed = () => Math.floor(Math.random() * 2 ** 31);
 
 async function pickPitcher(slug) {
-  const data = await loadPitcher(slug);
+  const [data, delivery] = await Promise.all([loadPitcher(slug), loadDelivery(slug)]);
   if (figure) {
     scene.remove(figure);
     figure.traverse((o) => {
@@ -173,7 +238,8 @@ async function pickPitcher(slug) {
       o.skeleton?.dispose(); // bone texture
     });
   }
-  figure = makePitcher(data.pitcher.throws);
+  figure = makePitcher(data.pitcher.throws, data.pitcher.height_in ?? 75); // scaled to his height
+  posedAt = null; // new figure is in makePitcher's static pose: the poseFigure memo must not skip it (same t|ab|pitch after a round trip)
   refreshShadows(); // new figure: redraw even if this at-bat's first pitch has no release
   scene.add(figure);
   for (const b of $("pitchers").children) b.classList.toggle("on", b.dataset.slug === slug);
@@ -186,7 +252,7 @@ async function pickPitcher(slug) {
     return b;
   }));
   $("ab-count").textContent = `(${data.at_bats.length} held-out)`;
-  dispatch({ type: "pickPitcher", slug, data });
+  dispatch({ type: "pickPitcher", slug, data, delivery });
   dispatch({ type: "pickAtBat", index: 0 });
 }
 
@@ -201,7 +267,7 @@ const KEYS = {
   Space: { type: "replay" }, ArrowRight: { type: "nextPitch" }, ArrowLeft: { type: "prevPitch" },
   KeyR: { type: "setMode", mode: "real" }, KeyS: { type: "setMode", mode: "sim" },
   KeyG: { type: "setMode", mode: "ghost" },
-  // 1-5: Umpire, Batter, Side, Ride, Free (the order of VIEWS and of the tabs).
+  // 1-6: Umpire, Batter, Side, Ride, Free, TV (the order of VIEWS and of the tabs).
   ...Object.fromEntries(VIEWS.map((view, i) => [`Digit${i + 1}`, { type: "setView", view }])),
   KeyN: { type: "toggleNoSpin" },
   KeyZ: { type: "setSpeed", speed: 1 }, KeyX: { type: "setSpeed", speed: 0.25 },
@@ -210,13 +276,14 @@ const KEYS = {
 const TOD_NAMES = Object.keys(TIMES);
 /** Next time of day: day -> sunset -> night -> day. */
 const cycleTimeOfDay = () => {
+  dirty = true;
   setTimeOfDay(TOD_NAMES[(TOD_NAMES.indexOf(timeOfDay()) + 1) % TOD_NAMES.length]);
   $("tod").textContent = `${timeOfDay()[0].toUpperCase()}${timeOfDay().slice(1)}`;
 };
 window.addEventListener("keydown", (e) => {
   // Leave browser shortcuts (Ctrl+R, ...) alone, and keys aimed at a focused control: a select
   // uses arrows itself, and Space on a focused button would also click it (a double replay).
-  if (!state.data || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (menuOpen || !state.data || e.ctrlKey || e.metaKey || e.altKey) return;
   if (intro && !intro.frozen) { e.preventDefault(); return endIntro(); } // any key skips the intro
   if (e.code === "KeyI") return startIntro();
   if (["SELECT", "BUTTON", "SUMMARY"].includes(e.target.tagName)) return;
@@ -245,6 +312,8 @@ for (const m of MODES) $(`mode-${m}`).onclick = () => dispatch({ type: "setMode"
 for (const v of VIEWS) $(`view-${v}`).onclick = () => dispatch({ type: "setView", view: v });
 for (const v of SPEEDS) $(`speed-${v}`).onclick = () => dispatch({ type: "setSpeed", speed: v });
 $("tod").onclick = cycleTimeOfDay;
+let pitcherIndex = [];
+$("change").onclick = async () => { await chooseFromMenu(pitcherIndex, state.slug); startIntro(); };
 
 // Initial state from the URL, e.g. ?pitcher=sale-chris&ab=0&pitch=2&t=0.3&mode=ghost&nospin=1&view=umpire
 // (frozen at t, for screenshots); ab=random&seed=N picks a seeded random at-bat.
@@ -262,7 +331,9 @@ async function start() {
     b.onclick = () => pickPitcher(p.slug);
     return b;
   }));
-  await pickPitcher(q.get("pitcher") ?? index[0].slug);
+  pitcherIndex = index;
+  if (showMenu(location.search)) await chooseFromMenu(index, index[0].slug);
+  else await pickPitcher(q.get("pitcher"));
   if (q.has("ab")) {
     const ab = q.get("ab");
     dispatch(ab === "random"
@@ -290,7 +361,7 @@ async function start() {
   if (q.get("panel") === "help") $("help").open = true;
   if (q.get("panel") === "nolook") $("look").open = false;
   // Freeze at t (no playback) so a headless screenshot catches the ball mid-flight.
-  dispatch({ type: "seek", t: Number(q.get("t") ?? 0) });
+  dispatch({ type: "seek", t: q.has("t") ? Number(q.get("t")) : 0 - preroll(state) }); // no ?t=: from the start of the delivery
   if (fpsBox) benchmark();
 }
 start();
@@ -298,18 +369,20 @@ start();
 // ?fps=1: frame-rate readout, averaged over half-second windows.
 const fpsBox = q.get("fps") === "1" ? $("fps") : null;
 if (fpsBox) fpsBox.hidden = false;
-let fpsFrames = 0, fpsSince = null;
+let fpsFrames = 0, fpsTicks = 0, fpsSince = null; // frames drawn, display frames
 // Which GPU the browser gave WebGL (a software renderer such as SwiftShader is far slower).
 const gl = renderer.getContext();
 const gpu = gl.getExtension("WEBGL_debug_renderer_info");
 const gpuName = gpu ? gl.getParameter(gpu.UNMASKED_RENDERER_WEBGL) : "unknown GPU";
-function countFrame(now) {
+function countFrame(now, drew) {
   if (!fpsBox) return;
   fpsSince ??= now;
-  fpsFrames++;
+  fpsTicks++;
+  if (drew) fpsFrames++;
   if (now - fpsSince >= 500) {
-    fpsBox.innerHTML = `${((fpsFrames * 1000) / (now - fpsSince)).toFixed(1)} fps · ${renderer.info.render.calls} draws · ${(renderer.info.render.triangles / 1e6).toFixed(2)} M tris<br>${gpuName}${burst}`;
-    fpsFrames = 0;
+    const fps = (fpsFrames * 1000) / (now - fpsSince);
+    fpsBox.innerHTML = `${fps.toFixed(1)} fps drawn (${Math.round((100 * fpsFrames) / fpsTicks)}% of display frames) · ${renderer.info.render.calls} draws · ${(renderer.info.render.triangles / 1e6).toFixed(2)} M tris<br>${gpuName}${burst}`;
+    fpsFrames = fpsTicks = 0;
     fpsSince = now;
   }
 }
@@ -350,11 +423,41 @@ function boardInfo() {
   };
 }
 
+/**
+ * With a delivery (M5), pose the figure at the current t; the hand blends onto this pitch's
+ * release just before t = 0. Re-posed (and its shadow redrawn) only when t or the pitch changed,
+ * so a frozen frame costs nothing.
+ */
+let posedAt = null;
+function poseFigure(p) {
+  const key = `${state.t}|${state.abIndex}|${state.pitchIndex}`;
+  if (!state.delivery || !figure || key === posedAt) return;
+  posedAt = key;
+  const release = p.release?.every(Number.isFinite) ? p.release : null;
+  poseAtTime(figure, state.delivery, state.t, release, p.arm_angle_deg ?? figure.userData.armAngleDeg);
+  refreshShadows();
+}
+
 let last = null;
+let nextSlot = 0; // when the next capped frame is due (ms)
+let lastDraw = -Infinity;
+let drawnKey = null; // t and camera of the last drawn frame
 renderer.info.autoReset = false; // count the whole frame (all passes), reset below
 renderer.setAnimationLoop((now) => {
-  countFrame(now);
-  renderer.info.reset();
+  const slot = frameSlot(now, nextSlot); // 60 fps cap, whatever the display's rate
+  nextSlot = slot.next;
+  if (!slot.due) return countFrame(now, false);
+  if (menuOpen) { // one still frame behind the blur, then nothing until Play ball
+    if (menuDrawn) return countFrame(now, false);
+    const pose = introSweep(MENU_VIEW_S);
+    camera.fov = pose.vfovDeg;
+    setNear(pose);
+    camera.position.copy(toScene(pose.position));
+    camera.lookAt(toScene(pose.target));
+    look.render();
+    menuDrawn = true;
+    return countFrame(now, true);
+  }
   // Real time: 1 s of animation per 1 s of flight (times speed), from the exported timestamps.
   // dt is capped so a backgrounded tab does not jump the ball to the plate on return.
   const dt = last === null ? 0 : Math.min((now - last) / 1000, 0.1);
@@ -362,15 +465,34 @@ renderer.setAnimationLoop((now) => {
   if (state.data) {
     dispatch({ type: "tick", dt });
     const p = currentPitch(state);
-    updateBall(ball, state.mode === "sim" ? p.sim : p.real, state.t);
-    spinBall(ball, p.spin_rpm == null ? null : p.spin_axis_deg, 2 * Math.PI * (p.spin_rpm / 60) * state.t * spinFactor(state.speed));
-    updateBall(ghost, state.mode === "ghost" ? p.sim : null, state.t);
-    updateTube(trail, state.mode === "sim" ? p.sim : p.real, state.t);
-    updateTube(ghostTrail, state.mode === "ghost" ? p.sim : null, state.t);
-    updateTube(noSpinLine, state.showNoSpin ? p.nospin : null, state.t);
+    poseFigure(p);
+    // Before release (t < 0) everything that follows the flight is hidden (it would clamp to the
+    // release point); the ball rides in the hand instead. At t = 0 the hand is on the release
+    // point, which is where the flight starts, so the hand-off is seamless.
+    const flying = state.t >= 0;
+    const ft = Math.max(state.t, 0);
+    updateBall(ball, flying ? (state.mode === "sim" ? p.sim : p.real) : null, ft);
+    if (!flying && figure) {
+      ball.visible = true;
+      ball.position.copy(handPosition(figure));
+    }
+    spinBall(ball, p.spin_rpm == null ? null : p.spin_axis_deg, 2 * Math.PI * (p.spin_rpm / 60) * ft * spinFactor(state.speed));
+    updateBall(ghost, flying && state.mode === "ghost" ? p.sim : null, ft);
+    updateTube(trail, flying ? (state.mode === "sim" ? p.sim : p.real) : null, ft);
+    updateTube(ghostTrail, flying && state.mode === "ghost" ? p.sim : null, ft);
+    updateTube(noSpinLine, flying && state.showNoSpin ? p.nospin : null, ft);
   }
   if (intro) updateIntro(dt);
   else if (state.data) updateCamera();
+  // Still frame (paused, camera at rest): skip the GPU work, but for the park's idle animation.
+  const key = [state.t, ...camera.position.toArray(), ...camera.quaternion.toArray(), camera.fov, camera.aspect].join();
+  const draw = shouldDraw(dirty || key !== drawnKey, now, lastDraw);
+  countFrame(now, draw);
+  if (!draw) return;
+  dirty = false;
+  drawnKey = key;
+  lastDraw = now;
+  renderer.info.reset();
   park.userData.update?.({ timeS: now / 1000, board: boardInfo() });
   look.render();
 });

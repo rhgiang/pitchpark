@@ -31,9 +31,11 @@
       <button id="view-side" class="tab">Side<kbd>3</kbd></button>
       <button id="view-ride" class="tab">Ride<kbd>4</kbd></button>
       <button id="view-free" class="tab">Free<kbd>5</kbd></button>
+      <button id="view-tv" class="tab">TV<kbd>6</kbd></button>
       <span class="sep"></span>
       <button id="tod" class="tab" title="Time of day (T)">Day</button>
     </nav>
+    <button id="change" class="glass btn" title="Back to the pitcher menu">Change pitcher</button>
     <div id="fps" class="glass" hidden></div>
 
     <div id="picker" class="glass" hidden>
@@ -81,7 +83,7 @@
       <table>
         <tr><td><kbd>Space</kbd></td><td>Throw / replay</td></tr>
         <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Previous / next pitch</td></tr>
-        <tr><td><kbd>1</kbd>–<kbd>5</kbd></td><td>Umpire, Batter, Side, Ride, Free view</td></tr>
+        <tr><td><kbd>1</kbd>–<kbd>6</kbd></td><td>Umpire, Batter, Side, Ride, Free, TV view</td></tr>
         <tr><td><kbd>Z</kbd> <kbd>X</kbd> <kbd>C</kbd></td><td>Speed 1×, ¼×, ⅒×</td></tr>
         <tr><td><kbd>R</kbd> <kbd>S</kbd> <kbd>G</kbd></td><td>Statcast fit, M1 + M3, both (ghost)</td></tr>
         <tr><td><kbd>N</kbd></td><td>No-spin reference path</td></tr>
@@ -98,6 +100,17 @@
       </p>
       <p class="legend"><i class="swatch trail"></i>trail <i class="swatch ghost"></i>M1 + M3 ghost <i class="dash"></i>no spin</p>
     </details>
+
+    <!-- Start screen: a blurred still of the park behind (main.js stops drawing 3D while it is open). -->
+    <div id="menu" hidden>
+      <div class="menu-inner">
+        <h1>Pitch <span>Park</span></h1>
+        <p class="tag">Pick a pitcher</p>
+        <div id="cards" role="radiogroup" aria-label="Pitcher"></div>
+        <button id="play-ball" class="btn big" disabled>Play ball <kbd>Enter</kbd></button>
+        <p class="hint"><kbd>←</kbd> <kbd>→</kbd> choose</p>
+      </div>
+    </div>
 
     <script type="module" src="/src/main.js"></script>
   </body>

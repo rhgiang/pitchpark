@@ -123,6 +123,10 @@ export const ISLAND = { centre: [0, 165], radiusFt: 560 };
 // Outfield: bleachers start this far behind the fence; the gap holds the bullpens.
 export const BLEACHER_GAP_FT = 32;
 export const BATTERS_EYE_HALF_DEG = 9; // centre-field batter's eye: no seats in |angle| < 9 deg
+// The eye wall: this far behind the fence, this tall and thick (props.js builds it; cameras.js clears it).
+export const BATTERS_EYE_GAP_FT = 26;
+export const BATTERS_EYE_HEIGHT_FT = 36;
+export const BATTERS_EYE_THICK_FT = 3;
 
 /*
  * Chalk lines, as centre-line segments [a, b, kind] in Statcast ft. The ground shader draws them

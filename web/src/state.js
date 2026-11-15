@@ -4,7 +4,7 @@ import { duration } from "./trajectory.js";
 
 export const MODES = ["real", "sim", "ghost"]; // "Statcast fit", "M1 + M3", both
 export const SPEEDS = [1, 0.25, 0.1];
-export const VIEWS = ["umpire", "batter", "side", "ride", "free"]; // keys 1-5
+export const VIEWS = ["umpire", "batter", "side", "ride", "free", "tv"]; // keys 1-6
 
 // Ball rotation on screen. True spin is ~40 rev/s, which a 60 Hz screen cannot show at 1x (it
 // would alias), so at 1x we show 1/20 of it; in slow motion the true rate is shown (angle =
@@ -14,7 +14,7 @@ export const spinFactor = (speed) => (speed >= 1 ? SLOWED_SPIN_FACTOR : 1);
 
 export function initialState() {
   return {
-    slug: null, data: null, abIndex: 0, pitchIndex: 0,
+    slug: null, data: null, delivery: null, abIndex: 0, pitchIndex: 0,
     t: 0, playing: false, speed: 1, view: "umpire",
     showNoSpin: false, // the "no spin" reference path (export's nospin), toggled with N
     seen: 0, // pitches of this at-bat whose result may show: landed or passed (see revealed)
@@ -26,6 +26,13 @@ export function initialState() {
 
 export const currentAtBat = (s) => s.data?.at_bats[s.abIndex] ?? null;
 export const currentPitch = (s) => currentAtBat(s)?.pitches[s.pitchIndex] ?? null;
+
+/**
+ * Seconds of delivery before release (t < 0), 0 for a pitcher with no delivery. The windup is part
+ * of the timeline; release stays t = 0 so the flight, ?t= and the tests keep their meaning.
+ */
+export const preroll = (s) => s.delivery?.pre_s ?? 0;
+// (callers use 0 - preroll, not -preroll: -0 would fail strict equality with 0)
 
 /** Paths the current mode flies: [] for no_tracking; real only unless the pitch is modelled. */
 export function shownPaths(s) {
@@ -66,27 +73,28 @@ function step(s, a) {
     case "pickPitcher":
       return derive({
         ...initialState(), speed: s.speed, view: s.view, showNoSpin: s.showNoSpin,
-        slug: a.slug, data: a.data,
+        slug: a.slug, data: a.data, delivery: a.delivery ?? null,
+        t: 0 - (a.delivery?.pre_s ?? 0),
       });
     case "pickAtBat": {
       const n = s.data.at_bats.length;
       const abIndex = a.index === "random" ? Math.floor(mulberry32(a.seed) * n) : a.index;
-      return derive({ ...s, abIndex, pitchIndex: 0, t: 0, playing: false, wantMode: "real", seen: 0 });
+      return derive({ ...s, abIndex, pitchIndex: 0, t: 0 - preroll(s), playing: false, wantMode: "real", seen: 0 });
     }
     case "goPitch": { // a pitch-strip click: that pitch, thrown from release
       const last = currentAtBat(s).pitches.length - 1;
-      return derive({ ...s, pitchIndex: Math.min(last, Math.max(0, a.index)), t: 0, playing: true });
+      return derive({ ...s, pitchIndex: Math.min(last, Math.max(0, a.index)), t: 0 - preroll(s), playing: true });
     }
     case "nextPitch":
     case "prevPitch": {
       const last = currentAtBat(s).pitches.length - 1;
       const i = Math.min(last, Math.max(0, s.pitchIndex + (a.type === "nextPitch" ? 1 : -1)));
-      return derive({ ...s, pitchIndex: i, t: 0, playing: true });
+      return derive({ ...s, pitchIndex: i, t: 0 - preroll(s), playing: true });
     }
     case "replay":
-      return { ...s, t: 0, playing: true };
+      return { ...s, t: 0 - preroll(s), playing: true };
     case "seek": // frozen at t (clamped to the flight), e.g. ?t= for screenshots
-      return { ...s, t: Math.min(flightEnd(s), Math.max(0, a.t)), playing: false };
+      return { ...s, t: Math.min(flightEnd(s), Math.max(0 - preroll(s), a.t)), playing: false };
     case "toggleNoSpin":
       return { ...s, showNoSpin: !s.showNoSpin };
     case "setMode": // unknown values (e.g. a bad ?mode=) are ignored

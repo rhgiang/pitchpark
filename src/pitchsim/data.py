@@ -6,6 +6,7 @@ temperature comes from the MLB StatsAPI live game feed, not from Statcast.
 """
 
 import json
+import re
 import urllib.request
 from collections.abc import Iterable
 from pathlib import Path
@@ -190,3 +191,43 @@ def add_air_density(df: pd.DataFrame, conditions: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["rho"] = [air_density(t, e) for t, e in zip(temp.fillna(70.0), elev)]
     return out
+
+
+PEOPLE_URL = "https://statsapi.mlb.com/api/v1/people/{id}"
+
+
+def parse_height(text: str) -> int:
+    """StatsAPI height like ``6' 3"`` -> inches (75)."""
+    m = re.fullmatch(r"\s*(\d+)'\s*(\d+)\"?\s*", text)
+    if not m:
+        raise ValueError(f"unparseable height: {text!r}")
+    return int(m[1]) * 12 + int(m[2])
+
+
+def fetch_heights(ids: Iterable[int], cache_path: Path = RAW_DIR / "people.csv") -> pd.Series:
+    """Height in inches per MLBAM id (index = id; NaN where unknown).  Only uncached ids hit the network.
+
+    The request carries a generic User-Agent and nothing else.  A failed request or a record without a
+    height gives NaN and a printed warning, and is not cached (a later run retries it), so one bad id
+    does not stop an export.  An empty cache file counts as no cache."""
+    ids = [int(i) for i in dict.fromkeys(ids)]
+    cache_path = Path(cache_path)
+    has_cache = cache_path.exists() and cache_path.stat().st_size > 0
+    have = pd.read_csv(cache_path) if has_cache else pd.DataFrame(columns=["id", "height_in"])
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    got = {}
+    for i in [i for i in ids if i not in set(have["id"])]:
+        req = urllib.request.Request(PEOPLE_URL.format(id=i), headers={"User-Agent": "Mozilla/5.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                h = parse_height(json.load(r)["people"][0]["height"])
+        except (OSError, KeyError, IndexError, ValueError) as e:  # URLError/timeout are OSErrors
+            print(f"WARNING: no height for MLBAM id {i} ({type(e).__name__}: {e}); using NaN")
+            got[i] = float("nan")
+            continue
+        new = not (cache_path.exists() and cache_path.stat().st_size > 0)
+        pd.DataFrame([{"id": i, "height_in": h}]).to_csv(cache_path, mode="w" if new else "a",
+                                                          header=new, index=False)
+        got[i] = h
+    out = have.drop_duplicates("id").set_index("id")["height_in"].astype(float).to_dict() | got
+    return pd.Series([out[i] for i in ids], index=pd.Index(ids, name="id"), name="height_in")

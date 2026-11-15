@@ -69,12 +69,15 @@ def _sampled(tr: dict, dt_s: float) -> tuple[dict, list, list]:
     return _path(s, p), [_num(p[-1, 0]), _num(p[-1, 2]), _num(s[-1])], np.round(check, 4).tolist()
 
 
-def export_pitcher(raw: pd.DataFrame, rho: pd.Series, dt_s: float = 0.005) -> dict:
+def export_pitcher(raw: pd.DataFrame, rho: pd.Series, dt_s: float = 0.005,
+                   height_in: int | None = None) -> dict:
     """One pitcher's held-out at-bats in the viewer's JSON layout (schema 2).
 
     raw: this pitcher's Statcast rows, uncleaned (rows with no tracking still count).
     rho: air density (lb/ft^3) per row of raw (same index).
     dt_s: path sampling step in seconds; each path also ends exactly at y = 17/12 ft.
+    height_in: the pitcher's height (StatsAPI) for the 3D delivery's scale; None if unknown.
+    Added to schema 2 as an optional field, so readers of older files still work.
     """
     # copy() consolidates read_csv's ~120 column blocks (else pandas warns on assign).
     raw = raw.reset_index(drop=True).copy().assign(rho=np.asarray(rho), _raw=lambda d: d.index)
@@ -191,7 +194,7 @@ def export_pitcher(raw: pd.DataFrame, rho: pd.Series, dt_s: float = 0.005) -> di
                  "real_label": "Statcast fit", "sim_label": "M1 + M3",
                  "decision_y_ft": DECISION_Y_FT, "synthetic": "Synthetic" in name},
         "pitcher": {"name": name, "id": int(raw["pitcher"].iloc[0]),
-                    "throws": str(raw["p_throws"].iloc[0])},
+                    "throws": str(raw["p_throws"].iloc[0]), "height_in": height_in},
         "pitch_types": pitch_types,
         "at_bats": at_bats}
 

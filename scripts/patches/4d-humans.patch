@@ -1,0 +1,24 @@
+diff --git a/hmr2/configs/__init__.py b/hmr2/configs/__init__.py
+index bbf96f0..5345639 100644
+--- a/hmr2/configs/__init__.py
++++ b/hmr2/configs/__init__.py
+@@ -2,7 +2,7 @@ import os
+ from typing import Dict
+ from yacs.config import CfgNode as CN
+ 
+-CACHE_DIR = os.path.join(os.environ.get("HOME"), ".cache")
++CACHE_DIR = os.environ.get("HMR2_CACHE_PARENT") or os.path.join(os.environ.get("HOME"), ".cache")
+ CACHE_DIR_4DHUMANS = os.path.join(CACHE_DIR, "4DHumans")
+ 
+ def to_lower(x: Dict) -> Dict:
+diff --git a/hmr2/models/__init__.py b/hmr2/models/__init__.py
+index a42b8fe..7bd4b93 100644
+--- a/hmr2/models/__init__.py
++++ b/hmr2/models/__init__.py
+@@ -81,5 +81,5 @@ def load_hmr2(checkpoint_path=DEFAULT_CHECKPOINT):
+     # Ensure SMPL model exists
+     check_smpl_exists()
+ 
+-    model = HMR2.load_from_checkpoint(checkpoint_path, strict=False, cfg=model_cfg)
++    model = HMR2.load_from_checkpoint(checkpoint_path, strict=False, cfg=model_cfg, init_renderer=False)
+     return model, model_cfg

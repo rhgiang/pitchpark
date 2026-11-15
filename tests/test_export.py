@@ -160,6 +160,14 @@ def test_nospin_null_without_model(exported):
         assert p["tunnel"]["break_x_in"] is None and p["tunnel"]["break_z_in"] is None
 
 
+def test_export_height():
+    """SYNTHETIC data: height_in is written when given, and absent (None) otherwise."""
+    raw, _ = synthetic_raw(n=300)
+    rho = pd.Series(air_density(), index=raw.index)
+    assert export_pitcher(raw, rho, height_in=75)["pitcher"]["height_in"] == 75
+    assert export_pitcher(raw, rho)["pitcher"]["height_in"] is None
+
+
 def test_synthetic_flag(exported):
     _, _, out = exported
     assert out["meta"]["synthetic"] is True and "Synthetic" in out["pitcher"]["name"]
