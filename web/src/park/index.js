@@ -5,6 +5,7 @@ import { buildStands, mainPath, upperPath, bleacherPaths, MAIN_DEPTH_FT, BLEACHE
 import { buildProps, ISLETS } from "./props.js";
 import { buildSurrounds, buildFlags } from "./surrounds.js";
 import { mergeStatic } from "./build.js";
+import { buildBrand, PARK_NAME } from "./brand.js";
 import {
   ISLAND, fieldBoundary, fencePath, polar, fenceDistFt, resample, normals, rng, inside,
   BATTERS_EYE_HALF_DEG, FIELD_CENTRE_FT,
@@ -191,7 +192,7 @@ function makePlan() {
 
   // Banners along the upper-deck fascia, behind home.
   const fascia = offsetPath(upper, 49.85);
-  const words = ["PITCHSIM", "STATCAST FIT", "M1 · M2 · M3", "BATTER'S EYE", "PITCHSIM", "HELD-OUT GAMES"];
+  const words = [PARK_NAME, "STATCAST FIT", "M1 · M2 · M3", "BATTER'S EYE", PARK_NAME, "HELD-OUT GAMES"];
   const mid = Math.floor(fascia.length / 2);
   words.forEach((w, k) => {
     const i = mid + (k - 2.5) * 9;
@@ -236,7 +237,7 @@ export function buildPark() {
   g.add(buildStands());
   const flags = [], poles = [];
   const props = buildProps(plan, flags, poles);
-  g.add(props, buildSurrounds(plan, flags, poles), ...buildFlags(flags, poles));
+  g.add(props, buildSurrounds(plan, flags, poles), ...buildFlags(flags, poles), buildBrand(plan));
   mergeStatic(g); // fewer draw calls (see build.js)
   // Everything animated registers a tick(t); collected once here, not traversed every frame.
   const tickers = [];

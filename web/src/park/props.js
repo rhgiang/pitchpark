@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { PALETTE, makeToonMaterial, lampMaterial, makeGlowSprite, noOutline, terrain } from "../look.js";
+import { PARK_NAME, wordmarkTexture } from "./brand.js";
 import { sweep, frameAt, radialFrame, box, place, textTexture, shadeOf } from "./build.js";
 import {
   POLE_R, POLE_L, ISLAND, polar, fenceDistFt, normals, rng, BLEACHER_GAP_FT,
@@ -59,7 +60,7 @@ export function boardLines(info) {
 function drawBoard(x, info) {
   x.fillStyle = "#1d3550"; x.fillRect(0, 0, 1024, 500);
   x.fillStyle = "#f2c14e"; x.font = "bold 64px sans-serif"; x.textAlign = "center";
-  x.fillText("PITCHSIM PARK", 512, 82);
+  x.fillText(PARK_NAME, 512, 82);
   x.font = "bold 34px sans-serif";
   ["1", "2", "3", "4", "5", "6", "7", "8", "9", "R", "H", "E"].forEach((t, i) => {
     x.fillStyle = info && i === info.inning - 1 ? "#f2c14e" : "#f4ead2";
@@ -123,7 +124,8 @@ function scoreboard(angleDeg, r) {
  */
 function wallAds() {
   const g = new THREE.Group();
-  const words = ["PITCHSIM", "RK4 PHYSICS", "SEAM WAKE", "TUNNEL VISION", "HELD-OUT", "SPIN AXIS", "STATCAST FIT", "M1 · M2 · M3"];
+  // PARK_NAME appears twice (one per side) among the project boards, in the wordmark's own colours.
+  const words = ["PITCHSIM", "RK4 PHYSICS", "SEAM WAKE", "TUNNEL VISION", PARK_NAME, "HELD-OUT", "SPIN AXIS", "STATCAST FIT", "M1 · M2 · M3", PARK_NAME];
   const cols = [["#e5604b", "#f4ead2"], ["#f2c14e", "#2a4a6b"], ["#f4ead2", "#2a4a6b"], ["#3fa7a0", "#f4ead2"]];
   let k = 0;
   for (const side of [-1, 1]) for (let a = 13; a <= 41; a += 4.6) {
@@ -135,7 +137,8 @@ function wallAds() {
     const m = new THREE.Mesh(new THREE.PlaneGeometry(22, 4.6),
       // Polygon offset: 0.3 ft off a wall 400 ft away is below the depth buffer's resolution.
       makeToonMaterial(0xffffff, { surface: "none", polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8,
-        map: textTexture(words[k % words.length], { w: 640, h: 134, bg, fg, font: "bold 64px sans-serif" }) }));
+        map: words[k % words.length] === PARK_NAME ? wordmarkTexture(640, 134)
+          : textTexture(words[k % words.length], { w: 640, h: 134, bg, fg, font: "bold 64px sans-serif" }) }));
     m.position.set(0, 3.3, 0);
     f.add(m);
     g.add(f);
@@ -381,7 +384,8 @@ export function buildProps(plan, flags, poles) {
   for (const b of plan.banners) {
     const f = frameAt(b.p, b.dir);
     const s = new THREE.Mesh(new THREE.PlaneGeometry(24, 4.2),
-      makeToonMaterial(0xffffff, { map: textTexture(b.text, { w: 512, h: 90, bg: "#f4ead2", fg: "#2a4a6b", font: "bold 62px sans-serif" }) }));
+      makeToonMaterial(0xffffff, { map: b.text === PARK_NAME ? wordmarkTexture(512, 90)
+        : textTexture(b.text, { w: 512, h: 90, bg: "#f4ead2", fg: "#2a4a6b", font: "bold 62px sans-serif" }) }));
     s.position.set(0, 38.5, 0.15);
     f.add(s);
     g.add(f);

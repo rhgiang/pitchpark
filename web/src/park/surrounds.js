@@ -3,8 +3,9 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import {
   PALETTE, makeToonMaterial, lampMaterial, noOutline, windowMaterial, windowLitMaterial,
 } from "../look.js";
-import { frameAt, box, place, textTexture, shadeOf } from "./build.js";
+import { frameAt, box, place, shadeOf } from "./build.js";
 import { rng } from "./layout.js";
+import { wordmarkTexture } from "./brand.js";
 
 /*
  * The island around the stadium (art pass 2): what makes the cricket clip's island read as a
@@ -148,7 +149,7 @@ function gate({ p, yaw }, poles, flags) {
     hall.add(a);
   }
   const sign = new THREE.Mesh(new THREE.PlaneGeometry(56, 6),
-    makeToonMaterial(0xffffff, { surface: "none", map: textTexture("PITCHSIM PARK", { w: 1024, h: 110, bg: "#f4ead2", fg: "#2a4a6b", font: "bold 86px sans-serif" }) }));
+    makeToonMaterial(0xffffff, { surface: "none", map: wordmarkTexture(1024, 110) }));
   sign.position.set(0, 25, D / 2 + 0.2);
   hall.add(sign);
   // Upper windows.
