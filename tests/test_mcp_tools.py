@@ -49,3 +49,38 @@ def test_load_rejects_path_traversal(tmp_path):
 def test_runs_on_synthetic_fixture():
     d = json.loads((ROOT / "web" / "test" / "fixtures" / "synthetic.json").read_text())
     assert d["meta"]["synthetic"] and T.arsenal(d) and T.plate_error(d)
+
+
+def test_compare_diffs_shared_types_only():
+    other = {"pitcher": {"name": "Other"}, "at_bats": [{"id": "9-1", "pitches": [
+        _p("FF", 97), _p("CU", 78)]}]}
+    r = T.compare(DATA, other)
+    assert r["shared"]["FF"]["median_mph"] == {"a": 95.0, "b": 97.0, "diff": 2.0}   # a: median(95, 95, 96)
+    assert r["only_a"] == ["CH", "SL"] and r["only_b"] == ["CU"]
+    assert r["shared"].keys() == {"FF"}
+
+
+def test_sequence_transitions_filters_and_start_row():
+    def ab(stand, *ps):
+        return {"stand": stand, "pitches": [dict(_p(t, 90, sep=s), balls=b, strikes=k) for t, s, b, k in ps]}
+    d = {"at_bats": [ab("R", ("FF", None, 0, 0), ("SL", 2.0, 0, 1), ("FF", 9.0, 0, 2)),
+                     ab("R", ("FF", None, 0, 0), ("SL", 4.0, 0, 1)),
+                     ab("L", ("FF", None, 0, 0), ("CH", 6.0, 0, 1))]}
+    r = T.sequence(d)
+    assert r["start"]["n"] == 3 and r["start"]["next"]["FF"]["p"] == 1.0
+    assert r["FF"]["n"] == 3 and r["FF"]["next"]["SL"] == {"n": 2, "p": 0.667, "median_sep_in": 3.0}
+    assert T.sequence(d, stand="L")["FF"]["next"].keys() == {"CH"}
+    assert T.sequence(d, strikes=2) == {"SL": {"n": 1, "next": {"FF": {"n": 1, "p": 1.0, "median_sep_in": 9.0}}}}
+
+
+def test_generator_check_filters_and_rejects_bad_input(tmp_path):
+    (tmp_path / "x").mkdir()
+    (tmp_path / "x" / "summary.csv").write_text(
+        "pitch_type,model,auc,auc_gap,pass\nFF,gaussian,0.66,0.01,True\nSL,gaussian,,,\n")
+    assert T.generator_check("x", "FF", tmp_path) == [
+        {"pitch_type": "FF", "model": "gaussian", "auc": 0.66, "auc_gap": 0.01, "pass": True}]
+    assert T.generator_check("x", "SL", tmp_path)[0]["auc"] is None     # NaN becomes null
+    with pytest.raises(FileNotFoundError):
+        T.generator_check("nobody", None, tmp_path)
+    with pytest.raises(ValueError):
+        T.generator_check("../x", None, tmp_path)

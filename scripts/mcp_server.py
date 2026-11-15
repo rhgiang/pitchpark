@@ -40,5 +40,29 @@ def plate_error(slug: str) -> dict:
     return T.plate_error(T.load(slug))
 
 
+@mcp.tool()
+def compare_pitchers(slug_a: str, slug_b: str) -> dict:
+    """Side-by-side arsenal for two pitchers, per pitch type both throw: n, mph, rpm, approach
+    angles, perceived mph, break, and simulation miss, each as {a, b, diff = b - a}. Check n first."""
+    return T.compare(T.load(slug_a), T.load(slug_b))
+
+
+@mcp.tool()
+def sequence(slug: str, stand: str | None = None, balls: int | None = None,
+             strikes: int | None = None) -> dict:
+    """What he throws next given the previous pitch type in the at-bat ("start" = first pitch):
+    count n, share p, and median tunnel separation (in) per transition. Optional filters: stand
+    ("L"/"R" batter) and the balls/strikes the next pitch is thrown in. Unsmoothed; check n."""
+    return T.sequence(T.load(slug), stand, balls, strikes)
+
+
+@mcp.tool()
+def generator_check(slug: str, pitch_type: str | None = None) -> list[dict]:
+    """M2 check on the per-pitcher generative model: per pitch type and model (gaussian/mixture),
+    classifier AUC of real held-out vs generated pitches, the real-vs-real floor (auc_floor), gap,
+    margin, and pass (gap <= margin). Not every pitcher has results; graded=false means too few pitches."""
+    return T.generator_check(slug, pitch_type)
+
+
 if __name__ == "__main__":
     mcp.run()
