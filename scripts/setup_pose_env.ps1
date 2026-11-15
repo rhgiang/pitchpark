@@ -10,7 +10,7 @@
 # - torch from the cu128 index: the RTX 5060 Ti is Blackwell (sm_120), which only cu128+ wheels support.
 # - Lifter = HMR 2.0 (4D-Humans) at a pinned commit plus scripts/patches/4d-humans.patch (cache dir from
 #   env HMR2_CACHE_PARENT; no mesh renderer).  The pyrender stand-in lives in scripts/m5_lift.py (committed),
-#   not here.  GVHMR/WHAM were not usable, see results/m5/spike.md.
+#   not here.  GVHMR/WHAM were not usable, see results/M5.md ("Spike and clips").
 $ErrorActionPreference = "Stop"
 $env:UV_HTTP_TIMEOUT = "300"   # the torch wheel is 2.7 GB; the default timeout drops on slow links
 $LIFTER_COMMIT = "efe18deff163b29dff87ddbd575fa29b716a356c"   # shubham-goel/4D-Humans the patch applies to

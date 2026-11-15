@@ -1,7 +1,7 @@
 """3D lift of every screened-ok clip with HMR 2.0 (4D-Humans).  Runs ONLY in .venv-pose (torch).
 usage: .venv-pose/Scripts/python.exe scripts/m5_lift.py data/video/ohtani-shohei/pose2d.csv [clip ...]
 
-Why HMR 2.0 and not GVHMR/WHAM: see results/m5/spike.md.  It is a per-frame model: each frame is
+Why HMR 2.0 and not GVHMR/WHAM: see results/M5.md ("Spike and clips").  It is a per-frame model: each frame is
 cropped around the pitcher and a ViT regresses SMPL pose + shape + a weak-perspective camera.  The
 pitcher is chosen by our own RTMPose tracking (Task 2): the crop box is the bounding box of his 2D
 keypoints, so the lifter cannot jump to the batter or catcher.

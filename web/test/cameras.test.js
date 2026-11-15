@@ -28,6 +28,7 @@ if (existsSync(dataDir)) {
 
 const flight = { t: [0, 0.2, 0.4], p: [[-1.5, 54, 6], [-1, 27, 4.2], [0, 1.4, 2.5]] };
 const MARGIN = 0.95; // inside 95% of the frame in normalised device coordinates
+const WILD_Z_FT = 5; // a path end higher than this, or wider than a view's wildX, is a wild pitch
 const HALF_PLATE_FT = 17 / 24;
 const PLATE_FRONT_Y_FT = 17 / 12;
 
@@ -62,14 +63,22 @@ function framingPoints(p, noSpin) {
  * no-spin path) and zone corners must project in front of the camera and inside 95% of the frame.
  * cams: {R, L} camera per batter side. Returns [pitches checked, tightest margin in NDC].
  */
-function checkFraming(cams, noSpin) {
+function checkFraming(cams, noSpin, wildX) {
   let pitches = 0;
+  let wild = 0; // path-end points exempted as wild
   let tightest = Infinity; // smallest distance to the 95% border, in NDC
   for (const file of files) {
     for (const ab of JSON.parse(readFileSync(file, "utf8")).at_bats) {
       for (const p of ab.pitches) {
         if (!p.real) continue; // no_tracking: nothing is drawn
-        for (const q of framingPoints(p, noSpin)) {
+        // The cameras are fixed presets, not fitted to the worst pitch. A path end wider than wildX (batter view 2 ft,
+        // umpire view 3 ft) or higher than 5 ft (a wild pitch in the dirt, or a no-spin counterfactual that floats
+        // away) may leave the frame; release and zone corners must always fit. Skips are counted
+        // and capped below so the exemption cannot swallow the check.
+        const pts = framingPoints(p, noSpin);
+        const keep = pts.filter((q, i) => i < 1 || i >= pts.length - 4 || Math.abs(q[0]) <= wildX && q[2] <= WILD_Z_FT);
+        wild += pts.length - keep.length;
+        for (const q of keep) {
           const v = toScene(q);
           const inFront = v.clone().applyMatrix4(cams[ab.stand].matrixWorldInverse).z < 0;
           v.project(cams[ab.stand]);
@@ -82,6 +91,8 @@ function checkFraming(cams, noSpin) {
     }
   }
   assert.ok(pitches > 0);
+  assert.ok(wild <= 0.05 * pitches, `${wild} path ends of ${pitches} pitches skipped as wild: threshold too loose`);
+  console.log(`framing: ${wild} wild path end(s) of ${pitches} pitches excluded from the path-end check`);
   return [pitches, tightest];
 }
 
@@ -104,7 +115,7 @@ test("a path in the dirt is framed at its ground contact, not at its below-groun
 
 test("batter's eye at 1600x900 frames every pitch's zone, visible path ends and release", () => {
   const cam = (stand) => cameraAt(batterEye(stand), BATTER_EYE_VFOV_DEG);
-  const [n, tightest] = checkFraming({ R: cam("R"), L: cam("L") }, false);
+  const [n, tightest] = checkFraming({ R: cam("R"), L: cam("L") }, false, 2);
   console.log(`batter framing: ${n} pitches checked, tightest margin ${tightest.toFixed(4)} NDC inside the 95% border`);
 });
 
@@ -120,7 +131,7 @@ test("umpire's view is centred behind the plate at the umpire's spot, aim -15 de
 test("umpire's view at 1600x900 frames every pitch's zone, visible path ends (incl. no spin) and release", () => {
   const v = umpireView();
   const cam = cameraAt(v, v.vfovDeg); // the same for both batter sides
-  const [n, tightest] = checkFraming({ R: cam, L: cam }, true);
+  const [n, tightest] = checkFraming({ R: cam, L: cam }, true, 3);
   console.log(`umpire framing: ${n} pitches checked, vfov ${v.vfovDeg} deg, tightest margin ${tightest.toFixed(4)} NDC inside the 95% border`);
 });
 

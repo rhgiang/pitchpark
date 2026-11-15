@@ -1,6 +1,6 @@
 """M5 build: lifted clips -> one averaged, anchored delivery + accuracy metrics + viewer JSON.
 
-usage: python scripts/m5_build.py data/video/ohtani-shohei [--raw data/raw/660271_2026-....csv]
+usage: python scripts/m5_build.py data/video/ohtani-shohei --raw data/raw/660271_2026-....csv
 
 Pipeline (train clips only ever feed the average; test clips are only measured):
   screen lifts -> per clip: ground on the feet, landmarks, anchor to Statcast feet -> time-warp average of
@@ -20,14 +20,14 @@ from pitchsim.pose.anchor import (anchor, correct_to_mean, lock_feet, mound_z_ft
                                   segment_lengths)
 from pitchsim.pose.delivery import (average_delivery, fix_leg_swaps, ground_root, jitter, landmarks, lift_snap,
                                     phase_smooth, rocker_step)
+from pitchsim.pose.clips import read_labels
 from pitchsim.pose.joints3d import load_lift
 from pitchsim.pose.pose2d import load_pose2d
 from pitchsim.pose.release import foot_strike_frame
 from pitchsim.statcast import clean
+from pitchsim.validation import split_by_game
 
 ROOT = Path(__file__).resolve().parents[1]
-LABELS = ROOT / "src/pitchsim/pose/labels/ohtani_release_frames.csv"
-FS_LABELS = ROOT / "src/pitchsim/pose/labels/ohtani_foot_strike_frames.csv"
 KEYS = ["release_x_ft", "release_z_ft", "extension_ft", "arm_angle_deg"]
 STAT = {"release_x_ft": "release_pos_x", "release_z_ft": "release_pos_z",
         "extension_ft": "release_extension", "arm_angle_deg": "arm_angle"}
@@ -87,7 +87,7 @@ def parse_clip(c: str) -> tuple[int, int, int]:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("clips_dir")
-    ap.add_argument("--raw", default=str(ROOT / "data/raw/660271_2026-03-01_2026-11-30.csv"))
+    ap.add_argument("--raw", required=True, help="the pitcher's Statcast CSV (data/raw/<id>_....csv)")
     ap.add_argument("--out", default=str(ROOT / "web/public/data/deliveries"))
     ap.add_argument("--results", default=str(ROOT / "results/m5"))
     ap.add_argument("--pre-cap", type=float, default=PRE_CAP_S, help="cap on pre_s (s before release)")
@@ -96,7 +96,7 @@ def main():
 
     clips = pd.read_csv(d / "clips.csv")
     pose = pd.read_csv(d / "pose2d.csv").set_index("clip")
-    labels = pd.read_csv(LABELS).set_index("clip")
+    labels = read_labels(slug, "release_frames")
     raw = pd.read_csv(a.raw)
     pid, throws = int(raw["pitcher"].iloc[0]), str(clips["p_throws"].iloc[0])
     h = fetch_heights([pid]).iloc[0]
@@ -143,9 +143,9 @@ def main():
             drop("bad_extent", c)
         else:
             passed.append(c)
-    suspect = "823691_49_6.mp4"
-    print(f"suspect {suspect}: tilt {tilt[suspect]:.1f} deg, extent {extent[suspect]:.2f} m "
-          f"(train median {ext_med:.2f}) -> {'kept' if suspect in passed else 'DROPPED'}")
+    for c in L:
+        if c not in passed:
+            print(f"suspect {c}: tilt {tilt[c]:.1f} deg, extent {extent[c]:.2f} m (train median {ext_med:.2f}) -> DROPPED")
 
     # release frame: hand label where one exists, else the detector's
     rel = {c: int(labels.loc[c, "release_frame_label"]) if c in labels.index
@@ -167,7 +167,7 @@ def main():
     # 3D lift's (delivery.landmarks): the lift compresses the stride's depth, so its lead ankle stops ~0.45 s
     # before release while the real foot plants ~0.16 s before (hand labels); planting there made the body
     # pause on a planted leg.  2D pose and lift share frame indices (m5_lift lifts the pose2d frames).
-    fs_lab = pd.read_csv(FS_LABELS).set_index("clip")["foot_strike_frame_label"]
+    fs_lab = read_labels(slug, "foot_strike_frames").get("foot_strike_frame_label", pd.Series(dtype=float))
     fs, fs_src = {}, {}
     for c in L:
         f = int(fs_lab[c]) if c in fs_lab.index else foot_strike_frame(
@@ -270,7 +270,9 @@ def main():
         raw_jit.append(jitter(j[max(rp[c] - int(pre_s * f), 0): rp[c] + int(POST_S * f) + 1], f))
 
     # ---- correct_to_mean toward the season mean of bases-empty release values (Statcast, 2026) ----
-    cl = clean(raw)
+    # Target = mean over TRAIN games only (same split_by_game seed as the clip split), so the test clips'
+    # pitches never pull the delivery that the 2D test score is computed on (hold-out hygiene).
+    cl = split_by_game(clean(raw), seed=0)[0]
     bases_empty = cl[cl[["on_1b", "on_2b", "on_3b"]].isna().all(axis=1)]
     target = {k: float(bases_empty[STAT[k]].mean()) for k in KEYS}
     cinfo: dict = {}

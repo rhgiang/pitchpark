@@ -1,6 +1,6 @@
 """M5 Task 8: how closely does the replica delivery match real clips, in the broadcast image?
 
-usage: python scripts/m5_compare2d.py [data/video/ohtani-shohei]
+usage: python scripts/m5_compare2d.py data/video/ohtani-shohei --raw data/raw/660271_2026-....csv
 
 For each screened-ok clip, the replica's joints at the clip's times (t = (frame - release_pose_frame) / fps,
 over the delivery window) are projected into the clip with ONE fitted affine camera + a per-frame pan
@@ -59,10 +59,10 @@ def phase_bounds_s(joints: np.ndarray, throws: str, ri: int, corr: dict) -> list
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("clips_dir", nargs="?", default=str(ROOT / "data/video/ohtani-shohei"))
+    ap.add_argument("clips_dir")
     ap.add_argument("--deliveries", default=str(ROOT / "web/public/data/deliveries"))
     ap.add_argument("--results", default=str(ROOT / "results/m5"))
-    ap.add_argument("--raw", default=str(ROOT / "data/raw/660271_2026-03-01_2026-11-30.csv"))
+    ap.add_argument("--raw", required=True, help="the pitcher's Statcast CSV")
     a = ap.parse_args()
     vd, slug, dd, res = Path(a.clips_dir), Path(a.clips_dir).name, Path(a.deliveries), Path(a.results)
 

@@ -50,3 +50,12 @@ def test_fetch_clips_records_failures(tmp_path, monkeypatch):
     out = clips.fetch_clips(df, tmp_path)
     assert out["status"].tolist() == ["no_play_id", "no_mp4", "http_error", "ok"]
     assert clips.fetch_clips(df, tmp_path)["status"].iloc[3] == "cached"
+
+
+def test_label_paths_follow_the_pitcher_slug(tmp_path):
+    p = clips.label_path("some-other-pitcher", "release_frames")
+    assert p.name == "some-other-pitcher_release_frames.csv" and p.parent == clips.LABELS_DIR
+    # a pitcher with no hand labels yet gets an empty table, not a crash
+    assert clips.read_labels("some-other-pitcher", "release_frames").empty
+    # the committed Ohtani labels are found under his clips-directory slug
+    assert not clips.read_labels("ohtani-shohei", "release_frames").empty

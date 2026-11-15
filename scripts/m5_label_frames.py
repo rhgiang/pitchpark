@@ -10,8 +10,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-LABELS = Path(__file__).parents[1] / "src/pitchsim/pose/labels/ohtani_release_frames.csv"
-FS_LABELS = LABELS.with_name("ohtani_foot_strike_frames.csv")
+
+def _paths(clips_dir):
+    from pitchsim.pose.clips import label_path
+    slug = Path(clips_dir).name
+    return label_path(slug, "release_frames"), label_path(slug, "foot_strike_frames")
 
 
 def sheets(d: Path, only: list[str]):
@@ -54,7 +57,7 @@ def score(d: Path):
     """Detector error vs hand labels.  fresh=no rows are IN-SAMPLE: the release rule (first peak
     >= 0.5 x max) was chosen after seeing those labels.  fresh=yes rows were labelled after."""
     det = pd.read_csv(d / "pose2d.csv").set_index("clip")
-    lab = pd.read_csv(LABELS)
+    lab = pd.read_csv(_paths(d)[0])
     lab["err"] = det.loc[lab["clip"], "release_frame"].to_numpy() - lab["release_frame_label"].to_numpy()
     for name, g in (("IN-SAMPLE (rule chosen after seeing these labels)", lab[lab["fresh"] == "no"]),
                     ("FRESH (labelled after the rule was fixed)", lab[lab["fresh"] == "yes"])):
@@ -66,7 +69,7 @@ def score(d: Path):
 
 def release_pose(d: Path, clip: str) -> int:
     """Release pose frame: release hand label - 1 where labelled (as m5_build), else the detector's."""
-    lab = pd.read_csv(LABELS).set_index("clip")
+    lab = pd.read_csv(_paths(d)[0]).set_index("clip")
     if clip in lab.index:
         return int(lab.loc[clip, "release_frame_label"]) - 1
     return int(pd.read_csv(d / "pose2d.csv").set_index("clip").loc[clip, "release_frame"])
@@ -107,7 +110,7 @@ def fs_score(d: Path):
     picked on these labels."""
     from pitchsim.pose.pose2d import load_pose2d
     from pitchsim.pose.release import foot_strike_frame
-    lab = pd.read_csv(FS_LABELS)
+    lab = pd.read_csv(_paths(d)[1])
     rows = []
     for c, lf in zip(lab["clip"], lab["foot_strike_frame_label"]):
         r = release_pose(d, c)

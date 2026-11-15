@@ -7,18 +7,17 @@ from pathlib import Path
 
 import pandas as pd
 
-from pitchsim.pose.clips import clip_name
+from pitchsim.pose.clips import clip_name, read_labels
 from pitchsim.pose.pose2d import load_pose2d, run_pose2d, save_pose2d
 from pitchsim.pose.release import release_frame
 from pitchsim.pose.screen import screen
 
-OVERRIDES = Path(__file__).parents[1] / "src/pitchsim/pose/labels/ohtani_screen_overrides.csv"
 
 csv = Path(sys.argv[1])
 df = pd.read_csv(csv)
 df = df[df["status"].isin(["ok", "cached"])]
 # Hand review beats the automatic screen: clips I looked at and found to be the wrong view.
-over = pd.read_csv(OVERRIDES).set_index("clip")["reason"].to_dict() if OVERRIDES.exists() else {}
+over = read_labels(csv.parent.name, "screen_overrides").get("reason", pd.Series(dtype=str)).to_dict()
 rows = []
 shard, n_shards = (int(sys.argv[2]), int(sys.argv[3])) if len(sys.argv) > 3 else (0, 1)
 for k, (_, r) in enumerate(df.iterrows()):

@@ -120,6 +120,7 @@ async function main() {
     key = clipKey(file.name);
     clip = key ? cmp.clips[key] ?? null : null;
     if (!clip) {
+      if (video.src) URL.revokeObjectURL(video.src); // don't leak the previous pick's blob URL
       video.removeAttribute("src");
       video.load();
       $("status").textContent = `${file.name}: clip not in this pitcher's index`;

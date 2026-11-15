@@ -22,6 +22,22 @@ KEY = ["game_pk", "at_bat_number", "pitch_number"]
 _MP4 = re.compile(r"https://sporty-clips\.mlb\.com/[^\"'\s<>]+?\.mp4")
 
 
+LABELS_DIR = Path(__file__).parent / "labels"
+
+
+def label_path(slug: str, kind: str) -> Path:
+    """Hand-label CSV for one pitcher, e.g. label_path("ohtani-shohei", "release_frames").
+    `slug` is the clips directory's name; kinds: release_frames, foot_strike_frames, screen_overrides.
+    The file may not exist (a new pitcher has no labels yet): callers decide what that means."""
+    return LABELS_DIR / f"{slug}_{kind}.csv"
+
+
+def read_labels(slug: str, kind: str) -> pd.DataFrame:
+    """The labels as a table indexed by clip; empty (no rows) when the pitcher has no such file."""
+    p = label_path(slug, kind)
+    return pd.read_csv(p).set_index("clip") if p.exists() else pd.DataFrame(index=pd.Index([], name="clip"))
+
+
 def bases_empty(df: pd.DataFrame) -> pd.Series:
     """True where no runner is on 1b/2b/3b (Statcast leaves on_Xb NaN when the base is empty).
     Bases-empty means the windup, not the stretch, so one delivery type to model."""

@@ -116,6 +116,49 @@ python scripts/m4_checks.py data/raw/<pitcher>.csv [...]   # writes results/m4/c
 Pass all five CSVs to `export_viewer.py` in one run: it rewrites `web/public/data/index.json`
 each time. The exported JSON is gitignored.
 
+## M5: the moving pitcher
+
+**Status: done for one pitcher (Ohtani); "done when" needs more pitchers.** The viewer has a 3D
+pitcher whose delivery is rebuilt from broadcast video and anchored to Statcast's release. Numbers,
+and what is still wrong (extension cannot be seen from a front-on camera), are in
+[`results/M5.md`](results/M5.md).
+
+**Clips are for personal research only: never commit or redistribute them.** `data/` is gitignored,
+and the viewer's compare page plays a clip from a file picker without serving or uploading it.
+
+SMPL registration (licence): the 3D lifter needs the SMPL body model, which you must register for and
+download yourself at <https://smpl.is.tue.mpg.de> (v1.1.0 `.pkl`; SMPL-X from <https://smpl-x.is.tue.mpg.de>
+if you try other lifters). Put the files in `third_party/body_models/smpl/` (and `smplx/`), which is
+gitignored. The setup script stops with a message if they are missing.
+
+Commands, in order (Ohtani shown; `<slug>` is the clips folder name, e.g. `ohtani-shohei`):
+
+```bash
+pip install -e .[dev,video]                                  # 2D pose tools into the main .venv
+# 1. Clips. The Savant clip server refuses scripted downloads, so save the clips in your browser:
+python scripts/m5_fetch_clips.py data/raw/<pitcher>.csv --out data/video/<slug>   # writes clips.csv with a status per pitch
+#    then save each mp4 as <game_pk>_<at_bat>_<pitch>.mp4 in data/video/<slug>/
+# 2. 2D pose + centre-field screen + pitcher pick
+python scripts/m5_pose2d.py data/video/<slug>/clips.csv
+# 3. Hand labels: contact sheets, then fill src/pitchsim/pose/labels/<slug>_release_frames.csv
+#    (and <slug>_foot_strike_frames.csv, <slug>_screen_overrides.csv)
+python scripts/m5_label_frames.py sheets data/video/<slug>
+# 4. 3D lift in its own environment (torch, CUDA GPU; needs the SMPL files above)
+powershell -File scripts/setup_pose_env.ps1                  # makes .venv-pose
+.venv-pose/Scripts/python.exe scripts/m5_lift.py data/video/<slug>/pose2d.csv
+# 5. Build the delivery + accuracy metrics (writes results/m5/ and web/public/data/deliveries/)
+python scripts/m5_build.py data/video/<slug> --raw data/raw/<pitcher>.csv
+# 6. 2D replica-vs-clip comparison (writes results/m5/compare2d.csv and the fitted cameras)
+python scripts/m5_compare2d.py data/video/<slug> --raw data/raw/<pitcher>.csv
+# 7. Viewer data, then the viewer
+python scripts/export_viewer.py data/raw/<pitcher>.csv ... --out web/public/data
+cd web && npm run dev     # viewer: pick a pitcher on the start screen; compare.html = eye test
+```
+
+On `compare.html`, choose one of your local clips with the file picker; it plays beside the replica
+from the TV camera, synced on the release frame. Hand labels are committed (frame numbers only); a
+pitcher with no label files still builds, using the detector.
+
 ## Files
 
 | File | What it does |

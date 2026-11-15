@@ -44,8 +44,8 @@ def foot_strike_frame(p: Pose2D, throws: str, release: int, tol_torso: float = 0
     real foot is still reaching forward just above the dirt.  In the image the foot keeps moving (down and
     sideways) until it plants, so "the ankle reaches its planted spot and stays there" is visible in 2D.
     Planted spot = median ankle position over the last 3 frames up to release (the lead foot is down at
-    release).  Foot strike = first frame, after the leg-lift peak (highest ankle in the image) and within
-    release - 0.6 s .. release - 0.05 s, from which the ankle stays within `tol_torso` x torso length
+    release).  Foot strike = first frame, within release - 0.6 s .. release - 0.05 s (the window starts after
+    the leg-lift peak, which is ~0.9 s before release; the search takes the highest ankle inside it), from which the ankle stays within `tol_torso` x torso length
     (shoulder-mid to hip-mid, px) of that spot through release.  Both x and y count: the ankle reaches
     ground height in the image while the foot is still sliding toward the plate.  Position is 5-frame
     median filtered (one- or two-frame tracker swaps onto the other foot are common at landing).

@@ -239,6 +239,7 @@ async function pickPitcher(slug) {
     });
   }
   figure = makePitcher(data.pitcher.throws, data.pitcher.height_in ?? 75); // scaled to his height
+  posedAt = null; // new figure is in makePitcher's static pose: the poseFigure memo must not skip it (same t|ab|pitch after a round trip)
   refreshShadows(); // new figure: redraw even if this at-bat's first pitch has no release
   scene.add(figure);
   for (const b of $("pitchers").children) b.classList.toggle("on", b.dataset.slug === slug);
