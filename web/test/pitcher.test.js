@@ -278,11 +278,11 @@ function gaze(fig) {
   return { off: fwd.angleTo(to) * D, yaw: Math.atan2(l.x, l.z) * D, pitch: Math.atan2(l.y, Math.hypot(l.x, l.z)) * D,
     fYaw: Math.atan2(f.x, f.z) * D, fPitch: Math.atan2(f.y, Math.hypot(f.x, f.z)) * D };
 }
-/** Looking at the target, or at the neck's limit (yaw 70, pitch 40) towards it. */
+/** Looking at the target, or at the neck's limit (yaw 85, pitch 40) towards it. */
 function assertLooks(g, msg) {
-  if (Math.abs(g.yaw) <= 70 && Math.abs(g.pitch) <= 40) return assert.ok(g.off < 10, `${msg}: head ${g.off.toFixed(1)} deg off the target`);
+  if (Math.abs(g.yaw) <= 85 && Math.abs(g.pitch) <= 40) return assert.ok(g.off < 10, `${msg}: head ${g.off.toFixed(1)} deg off the target`);
   const cl = (v, l) => Math.max(-l, Math.min(l, v));
-  assert.ok(Math.abs(g.fYaw - cl(g.yaw, 70)) < 3 && Math.abs(g.fPitch - cl(g.pitch, 40)) < 3, `${msg}: not at the limit towards the target`);
+  assert.ok(Math.abs(g.fYaw - cl(g.yaw, 85)) < 3 && Math.abs(g.fPitch - cl(g.pitch, 40)) < 3, `${msg}: not at the limit towards the target`);
 }
 
 test("gaze: through the delivery the head looks at the catcher's target", () => {

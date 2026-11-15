@@ -268,10 +268,12 @@ function setBones(bones, pts, scale = 1) {
 // through release, so the head is turned to it (60% of the turn in the head, 40% in the neck,
 // roughly how the upper and lower cervical spine share it), then let go into the follow-through.
 const GAZE_TARGET = [0, 0, 2.5]; // Statcast ft: the catcher's mitt, middle of the zone
-// Limits relative to the chest: cervical rotation is ~70-80 deg each way and flexion/extension
-// ~50-60 deg (e.g. Swartz et al. 2005, J Athl Train 40); 70 / 40 keeps it inside the comfortable
-// range, since the eyes do the rest.
-const GAZE_YAW_DEG = 70;
+// Limits relative to the chest: active cervical rotation is ~70-90 deg each way in young adults
+// and flexion/extension ~50-60 deg (e.g. Swartz et al. 2005, J Athl Train 40). Yaw 85 is near the
+// top of that range, which is where it is needed: at full leg lift the chest faces away from the
+// plate and pitchers look at the catcher over the glove shoulder (at 70 the head stopped ~35 deg
+// short). Pitch 40 stays inside the comfortable range; the eyes do the rest.
+const GAZE_YAW_DEG = 85;
 const GAZE_PITCH_DEG = 40;
 const GAZE_OUT_S = 0.3;
 const NECK_SHARE = 0.4;
