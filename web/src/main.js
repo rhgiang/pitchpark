@@ -17,6 +17,8 @@ import { renderHud, buildStrip } from "./hud.js";
 import { makePitcher, poseAtRelease, poseAtTime, handPosition } from "./pitcher.js";
 import { buildPark } from "./park/index.js";
 import { initLook, setTimeOfDay, refreshShadows, inkProof, timeOfDay, TIMES } from "./look.js";
+import { showMenu } from "./menu.js";
+import { menuPick } from "./menu-ui.js";
 import { frameSlot, shouldDraw, pixelRatio } from "./pacing.js";
 
 // No MSAA: the composer renders to its own targets, and SMAA (look.js) anti-aliases instead.
@@ -126,7 +128,37 @@ function updateIntro(dt) {
 }
 for (const ev of ["pointerdown", "wheel"]) window.addEventListener(ev, () => { if (intro && !intro.frozen) endIntro(); });
 
+/*
+ * Start screen (menu-ui.js): the page shows one still frame of the park (the intro's early,
+ * high view), blurred by CSS, and 3D drawing stops until a pitcher is chosen. menuDrawn: that
+ * still frame is on screen (cleared by a resize, which redraws it).
+ */
+let menuOpen = false, menuDrawn = false;
+const MENU_VIEW_S = 3; // seconds into introSweep: the island from above and behind home
+function openMenu() {
+  if (intro) endIntro();
+  if (appliedView === "free") freePose = { position: camera.position.clone(), target: controls.target.clone() };
+  appliedView = null; // the still frame moved the camera: re-apply the view's FOV and controls later
+  menuOpen = true;
+  menuDrawn = false;
+  document.body.classList.add("menu");
+  $("menu").hidden = false;
+}
+function closeMenu() {
+  menuOpen = false;
+  dirty = true;
+  document.body.classList.remove("menu");
+  $("menu").hidden = true;
+}
+/** Menu -> chosen pitcher loaded -> menu closed. */
+async function chooseFromMenu(index, preselect) {
+  openMenu();
+  await pickPitcher(await menuPick(index, preselect));
+  closeMenu();
+}
+
 function resize() {
+  menuDrawn = false;
   dirty = true;
   renderer.setPixelRatio(pixelRatio(window.devicePixelRatio)); // the window may have moved screens
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -228,7 +260,7 @@ const cycleTimeOfDay = () => {
 window.addEventListener("keydown", (e) => {
   // Leave browser shortcuts (Ctrl+R, ...) alone, and keys aimed at a focused control: a select
   // uses arrows itself, and Space on a focused button would also click it (a double replay).
-  if (!state.data || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (menuOpen || !state.data || e.ctrlKey || e.metaKey || e.altKey) return;
   if (intro && !intro.frozen) { e.preventDefault(); return endIntro(); } // any key skips the intro
   if (e.code === "KeyI") return startIntro();
   if (["SELECT", "BUTTON", "SUMMARY"].includes(e.target.tagName)) return;
@@ -257,6 +289,8 @@ for (const m of MODES) $(`mode-${m}`).onclick = () => dispatch({ type: "setMode"
 for (const v of VIEWS) $(`view-${v}`).onclick = () => dispatch({ type: "setView", view: v });
 for (const v of SPEEDS) $(`speed-${v}`).onclick = () => dispatch({ type: "setSpeed", speed: v });
 $("tod").onclick = cycleTimeOfDay;
+let pitcherIndex = [];
+$("change").onclick = async () => { await chooseFromMenu(pitcherIndex, state.slug); startIntro(); };
 
 // Initial state from the URL, e.g. ?pitcher=sale-chris&ab=0&pitch=2&t=0.3&mode=ghost&nospin=1&view=umpire
 // (frozen at t, for screenshots); ab=random&seed=N picks a seeded random at-bat.
@@ -274,7 +308,9 @@ async function start() {
     b.onclick = () => pickPitcher(p.slug);
     return b;
   }));
-  await pickPitcher(q.get("pitcher") ?? index[0].slug);
+  pitcherIndex = index;
+  if (showMenu(location.search)) await chooseFromMenu(index, index[0].slug);
+  else await pickPitcher(q.get("pitcher"));
   if (q.has("ab")) {
     const ab = q.get("ab");
     dispatch(ab === "random"
@@ -388,6 +424,17 @@ renderer.setAnimationLoop((now) => {
   const slot = frameSlot(now, nextSlot); // 60 fps cap, whatever the display's rate
   nextSlot = slot.next;
   if (!slot.due) return countFrame(now, false);
+  if (menuOpen) { // one still frame behind the blur, then nothing until Play ball
+    if (menuDrawn) return countFrame(now, false);
+    const pose = introSweep(MENU_VIEW_S);
+    camera.fov = pose.vfovDeg;
+    camera.updateProjectionMatrix();
+    camera.position.copy(toScene(pose.position));
+    camera.lookAt(toScene(pose.target));
+    look.render();
+    menuDrawn = true;
+    return countFrame(now, true);
+  }
   // Real time: 1 s of animation per 1 s of flight (times speed), from the exported timestamps.
   // dt is capped so a backgrounded tab does not jump the ball to the plate on return.
   const dt = last === null ? 0 : Math.min((now - last) / 1000, 0.1);

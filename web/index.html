@@ -35,6 +35,7 @@
       <span class="sep"></span>
       <button id="tod" class="tab" title="Time of day (T)">Day</button>
     </nav>
+    <button id="change" class="glass btn" title="Back to the pitcher menu">Change pitcher</button>
     <div id="fps" class="glass" hidden></div>
 
     <div id="picker" class="glass" hidden>
@@ -99,6 +100,17 @@
       </p>
       <p class="legend"><i class="swatch trail"></i>trail <i class="swatch ghost"></i>M1 + M3 ghost <i class="dash"></i>no spin</p>
     </details>
+
+    <!-- Start screen: a blurred still of the park behind (main.js stops drawing 3D while it is open). -->
+    <div id="menu" hidden>
+      <div class="menu-inner">
+        <h1>Pitch <span>Park</span></h1>
+        <p class="tag">Pick a pitcher</p>
+        <div id="cards" role="radiogroup" aria-label="Pitcher"></div>
+        <button id="play-ball" class="btn big" disabled>Play ball <kbd>Enter</kbd></button>
+        <p class="hint"><kbd>←</kbd> <kbd>→</kbd> choose</p>
+      </div>
+    </div>
 
     <script type="module" src="/src/main.js"></script>
   </body>
