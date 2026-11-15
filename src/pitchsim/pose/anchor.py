@@ -20,10 +20,16 @@ _HIP = {"L": 1, "R": 2}
 _KNEE = {"L": 4, "R": 5}
 # Parent of each SMPL joint (JOINTS[].parent in web/src/skeleton.js).
 SMPL_PARENT = (-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19, 20, 21)
-# Joints that move with the pelvis (pelvis, hips, spine, neck, head, both arms), and the part of those
-# that bends forward with the trunk (everything above the pelvis except the hips).
+# Joints that move with the pelvis: pelvis, hips, spine, neck, head, both arms.
 _UPPER = [0, 1, 2, 3, 6, 9, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+# The part of those that bends forward with the trunk (everything above the pelvis except the hips).
 _TRUNK = [3, 6, 9, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+# Cap on ADDED trunk flexion.  The averaged lift already leans ~30 deg forward at release (pelvis -> neck);
+# pitchers' forward trunk tilt at ball release is roughly 30-50 deg (biomechanics reports, e.g. ASMI /
+# Driveline), so +20 deg keeps the lean plausible.  The cap also keeps the solve well-posed: an upright
+# trunk lowers the shoulder only ~(1 - cos) per degree, and flexing drags the arm angle down for the arm
+# rotation to undo, so an uncapped flexion ran to 45-65 deg on synthetic cases.
+MAX_ADDED_FLEXION_DEG = 20.0
 # Mound cone, as in web/src/field.js (OBR Appendix 2: 18 ft circle centred 59 ft from the plate).
 _MOUND_CENTRE_Y_FT = 59.0
 _MOUND_RADIUS_FT = 9.0
@@ -38,6 +44,13 @@ _HEAD_FACTOR = 1.07
 def _smoothstep(t: np.ndarray) -> np.ndarray:
     t = np.clip(t, 0.0, 1.0)
     return t * t * (3 - 2 * t)
+
+
+def _smootherstep(t: np.ndarray) -> np.ndarray:
+    """Perlin's quintic ease 6t^5 - 15t^4 + 10t^3: like smoothstep, but its acceleration is also zero at
+    both ends, so an eased correction starts and stops without a jolt."""
+    t = np.clip(t, 0.0, 1.0)
+    return t ** 3 * (t * (6 * t - 15) + 10)
 
 
 def _check(throws: str) -> None:
@@ -156,56 +169,123 @@ def _envelope(req: np.ndarray, half_width: int = 6) -> np.ndarray:
     return np.maximum(d, req)
 
 
+def _soft_limit(x: np.ndarray, start: np.ndarray, limit: np.ndarray) -> np.ndarray:
+    """x below `start` unchanged; above it, eased toward `limit` with tanh (value and slope continuous at
+    `start`, never reaching `limit`).  Why: a hard clamp makes a joint stop dead (a knee snapping straight,
+    a foot starting to slide at full speed); this one approaches the limit gradually."""
+    span = np.maximum(limit - start, 1e-9)
+    return np.where(x > start, start + span * np.tanh((x - start) / span), x)
+
+
+def _hermite_ease(t: np.ndarray, t0: int, t1: int, t2: int, f1: float) -> np.ndarray:
+    """0 before t0, f1 at t1, 1 from t2 on: cubic Hermite pieces with zero slope at t0 and t2 and the
+    harmonic mean of the two secant slopes at t1 (Fritsch & Butland 1984), which keeps it monotone and C1
+    -- a smoothstep generalised to pass through a chosen middle value."""
+    s1, s2 = f1 / max(t1 - t0, 1), (1.0 - f1) / max(t2 - t1, 1)
+    m1 = 2 * s1 * s2 / (s1 + s2) if s1 > 0 and s2 > 0 else 0.0
+    out = np.zeros(len(t))
+    for a, b, ya, yb, ma, mb in ((t0, t1, 0.0, f1, 0.0, m1), (t1, t2, f1, 1.0, m1, 0.0)):
+        hgt = max(b - a, 1)
+        u = np.clip((t - a) / hgt, 0.0, 1.0)
+        val = ((2 * u ** 3 - 3 * u ** 2 + 1) * ya + (u ** 3 - 2 * u ** 2 + u) * hgt * ma
+               + (-2 * u ** 3 + 3 * u ** 2) * yb + (u ** 3 - u ** 2) * hgt * mb)
+        out = np.where((t >= a) & (t <= b), val, out)
+    return np.where(t > t2, 1.0, out)
+
+
 def correct_to_mean(j_ft: np.ndarray, release_index: int, foot_strike_index: int, throws: str,
                     target: dict, leg_lift_index: int | None = None, knee_reach: float = 0.97,
                     info: dict | None = None) -> np.ndarray:
     """Bone-length-preserving correction so release_values match `target` (to 0.05 ft / 1 deg).
 
-    Why not stretch or shift: the monocular lift squashes depth from the centre-field camera, so stride
-    and forward lean come out far too short (extension ~2.4 ft vs ~6.5).  Stretching y would stretch every
-    bone, and shifting z would sink the feet into the mound.  Instead the delivery is rebuilt the way a
-    longer stride would look, moving joints only rigidly or by IK at each frame's own bone lengths:
+    Why not stretch or shift: the monocular lift squashes depth from the centre-field camera, so the stride
+    comes out far too short (extension ~2.4 ft vs ~6.5).  Stretching y would stretch every bone, and
+    shifting z would sink the feet into the mound.  Instead the delivery is rebuilt the way a longer stride
+    would look, moving joints only rigidly or by IK at each frame's own bone lengths:
 
     1. Stride: the lead foot lands further toward the plate (-y), and sideways, by the upper-body shift
        below; its swing eases there over leg lift -> foot strike and it stays planted from foot strike
        on, toe on the mound surface (which also removes the lift's floating lead foot).  Moving the
        landing sideways too keeps the lead leg under the hips (otherwise it would be out of reach).
     2. Upper body (pelvis, hips, trunk, arms, head) moves forward for the extension gap and sideways for
-       the release-x gap, eased over leg lift -> release, held after.  The pivot foot, once off the
-       rubber (after foot strike), catches up with that shift by release; a toe never goes under the mound.
-    3. Pelvis drop: wherever a planted foot (pivot until foot strike, lead after) would be out of reach of
-       a leg bent at least to `knee_reach` of its length (or the input's own bend, if straighter), the
-       upper body is lowered just enough, through a smooth envelope.  Both legs are then re-solved with
-       two-bone IK at that frame's thigh/shin lengths, the knee bending in the input knee's own plane.
-    4. Trunk flexion about the pelvis (about +x, eased foot strike -> release, held after) takes up the
-       remaining release-height gap: the forward lean the camera also squashed.
+       the release-x gap, eased over leg lift -> foot strike -> release (through the foot-strike pelvis
+       position that needs the least drop, see body_ease) and held after.
+    2b. Release height: trunk flexion about the pelvis (about +x, eased foot strike -> release, held
+       after) up to MAX_ADDED_FLEXION_DEG; any remaining gap lowers the upper body by knee flexion, eased
+       over leg lift -> foot strike so that after foot strike the planted lead leg only has the pelvis
+       travel over it, not a sinking pelvis as well (that folded the knee fast).
+    3. Pelvis drop: wherever a planted foot (pivot until foot strike, lead after) -- or the lead foot late
+       in its swing, weighted by its swing easing -- would be out of reach of a leg bent to `knee_reach`
+       of its length (or the input's own bend, if straighter), the upper body is lowered a bit more,
+       through a smooth envelope.  Both legs are then re-solved with two-bone IK at that frame's thigh /
+       shin lengths, the knee bending in the input knee's own plane.  A swinging leg that still cannot
+       reach is eased toward (never onto) 0.99 of its length, so the knee never snaps straight.
+    4. Back foot: after foot strike it catches up with the body shift by release; where the hips run away
+       from it, it drags after them (toe height kept), the drag easing in over 0.1 s.
     5. Arm angle: the throwing arm turns about the shoulder in the catcher's-view (x-z) plane (the plane
        release_values measures it in), eased over foot strike -> release, held after (no snap back).
-    The five amounts are found by fixed-point iteration on the release values.
+    The amounts (arm rotation, x/y shift, flexion, lowering) come from fixed-point iteration on the
+    release values; info["converged"] says whether it got within 0.005 ft / 0.05 deg.
     leg_lift_index: start of the stride easing (default fs - 2 (ri - fs), a typical leg-lift lead).
-    info: optional out-dict with the applied rotation, flexion, shift, stride, drop and iterations.
+    info: optional out-dict with the applied rotation, flexion, shift, lowering, drop and iterations.
     """
     _check(throws)
     j0 = np.array(j_ft, float)
     n, ri, fs = len(j0), release_index, foot_strike_index
     ll = max(0, fs - 2 * (ri - fs)) if leg_lift_index is None else leg_lift_index
     t = np.arange(n)
-    w_arm = _smoothstep((t - fs) / max(ri - fs, 1))
-    w_body = _smoothstep((t - ll) / max(ri - ll, 1))
-    w_lead = _smoothstep((t - ll) / max(fs - ll, 1))
+    w_arm = _smootherstep((t - fs) / max(ri - fs, 1))
+    w_lead = _smootherstep((t - ll) / max(fs - ll, 1))
+    # Back-foot drag easing: 6 frames = 0.1 s at 60 fps, about the time a real back foot takes to break
+    # from the rubber and start sliding.
+    w_drag = _smootherstep((t - fs) / 6.0)
     lead = "L" if throws == "R" else "R"
     sh, hand = _SHOULDER[throws], _HAND[throws]
-    # (hip, knee, ankle, toe, frames the toe is planted): pivot until foot strike, lead from foot strike
-    legs = [(_HIP[s], _KNEE[s], _ANKLE[s], _TOE[s], m) for s, m in ((throws, t <= fs), (lead, t >= fs))]
+    # (hip, knee, ankle, toe, frames the toe is planted, weight of its reach requirement)
+    legs = [(_HIP[throws], _KNEE[throws], _ANKLE[throws], _TOE[throws], t <= fs, (t <= fs).astype(float)),
+            (_HIP[lead], _KNEE[lead], _ANKLE[lead], _TOE[lead], t >= fs, np.where(t >= fs, 1.0, w_lead))]
     seg = lambda a, b: np.linalg.norm(j0[:, a] - j0[:, b], axis=1)  # noqa: E731
+    # Reach each leg may use (ft): the input's own hip-ankle distance where nothing is changed yet (so the
+    # untouched stance stays as it was, even a straight-legged one), blending over leg lift -> foot strike
+    # to knee_reach of the leg -- one number used for the drop, the soft limit and the drag alike, so the
+    # leg never meets a different limit from one frame to the next.
+    leg_ft = {h: seg(h, k) + seg(k, a) for h, k, a, *_ in legs}
+    reach_ft = {h: knee_reach * leg_ft[h] + (1 - w_lead) * np.maximum(seg(h, a) - knee_reach * leg_ft[h], 0.0)
+                for h, k, a, *_ in legs}
+
+    def need(hip_p, ank_p, leg_reach):
+        """Pelvis drop (ft) that brings an ankle target into reach of a hip; past horizontal reach no drop
+        is enough, so it grows steeply instead (a ranking penalty for choosing the foot-strike pelvis)."""
+        h = np.linalg.norm((hip_p - ank_p)[..., :2], axis=-1)
+        dz = hip_p[..., 2] - ank_p[..., 2]
+        return np.where(h <= leg_reach, dz - np.sqrt(np.maximum(leg_reach ** 2 - h ** 2, 0.0)),
+                        dz + 10.0 * (h - leg_reach))
+
+    def body_ease(shift, land):
+        """Upper-body easing 0 at leg lift -> f at foot strike -> 1 at release (held after), C1 and
+        monotone.  f puts the pelvis at foot strike where the deeper of the two planted legs' required
+        drops is smallest: a stride the lift never made has to be spanned by both legs, so neither the
+        pivot (body running ahead) nor the lead leg (body lagging) is left out of reach."""
+        f = np.linspace(0.0, 1.0, 51)[:, None]
+        worst = np.zeros(len(f))
+        for hip, knee, ank, toe, foot in ((_HIP[throws], _KNEE[throws], _ANKLE[throws], _TOE[throws], j0[0, _TOE[throws]]),
+                                          (_HIP[lead], _KNEE[lead], _ANKLE[lead], _TOE[lead], land)):
+            foot = foot.copy()
+            foot[2] = mound_z_ft(foot[0], foot[1])
+            r = reach_ft[hip][fs]
+            worst = np.maximum(worst, need(j0[fs, hip] + f * shift * [1, 1, 0] + [0, 0, shift[2]], foot + j0[fs, ank] - j0[fs, toe], r))
+        return _hermite_ease(t, ll, fs, ri, float(f[int(np.argmin(worst)), 0]))
 
     def build(alpha, theta, shift):
         j = j0.copy()
-        # 4. trunk flexion about +x through the pelvis (right-handed: +theta tips the head toward -y)
+        # 2b. trunk flexion about +x through the pelvis (right-handed: +theta tips the head toward -y)
         c, s = np.cos(theta * w_arm)[:, None], np.sin(theta * w_arm)[:, None]
         r = j[:, _TRUNK] - j[:, None, 0]
         j[:, _TRUNK, 1] = j[:, None, 0, 1] + c * r[..., 1] - s * r[..., 2]
         j[:, _TRUNK, 2] = j[:, None, 0, 2] + s * r[..., 1] + c * r[..., 2]
+        land = j0[fs, _TOE[lead]] + [shift[0], shift[1], 0.0]
+        land[2] = mound_z_ft(land[0], land[1])
+        w_body = body_ease(shift, land)
         # 5. arm angle: in-plane rotation of (sgn*dx, dz) about the shoulder, mirrored for L/R
         sgn = 1.0 if j[ri, hand, 0] - j[ri, sh, 0] >= 0 else -1.0
         c, s = np.cos(alpha * w_arm), np.sin(alpha * w_arm)
@@ -214,74 +294,83 @@ def correct_to_mean(j_ft: np.ndarray, release_index: int, foot_strike_index: int
             u, w = sgn * r[:, 0], r[:, 2]
             j[:, k, 0] = j[:, sh, 0] + sgn * (c * u - s * w)
             j[:, k, 2] = j[:, sh, 2] + s * u + c * w
-        # 2. upper body forward / sideways
-        j[:, _UPPER] += w_body[:, None, None] * shift
+        # 2. upper body forward / sideways / down
+        # (the lowering is done by foot strike: after it the planted lead leg only has the pelvis travel
+        # over it, not also a sinking pelvis, which made the knee fold fast)
+        j[:, _UPPER, :2] += w_body[:, None, None] * shift[:2]
+        j[:, _UPPER, 2] += (w_lead * shift[2])[:, None]
         # 1. toe targets (the foot, ankle -> toe, moves rigidly with its toe)
         toes = []
-        for hip, knee, ank, toe, planted in legs:
+        for hip, knee, ank, toe, planted, _ in legs:
             p = j0[:, toe].copy()
             if toe == _TOE[lead]:
-                land = j0[fs, toe] + [shift[0], shift[1], 0.0]
-                land[2] = mound_z_ft(land[0], land[1])
                 p += w_lead[:, None] * (land - j0[fs, toe])
             else:  # pivot: from 0 on the rubber at foot strike to the body's full shift by release, so
-                # the lift's own back-leg pose relative to the hips comes back (it would hang straight
-                # at full reach if it lagged the body)
+                # the lift's own back-leg pose relative to the hips comes back
                 p[:, :2] += (w_body * w_arm)[:, None] * shift[:2]
             p[:, 2] = np.maximum(p[:, 2], mound_z_ft(p[:, 0], p[:, 1]))  # a swinging toe never digs in
             hold = p[int(np.argmax(planted))].copy()
             hold[2] = mound_z_ft(hold[0], hold[1])
             p[planted] = hold
             toes.append(p)
-        # 3. pelvis drop: solve (hip_z - drop - ankle_z)^2 + horizontal^2 = reach^2 for each planted foot
+        # 3. pelvis drop: solve (hip_z - drop - ankle_z)^2 + horizontal^2 = reach^2 per foot
         req = np.zeros(n)
-        for (hip, knee, ank, toe, planted), p in zip(legs, toes):
+        for (hip, knee, ank, toe, planted, wt), p in zip(legs, toes):
             a_t = p + j0[:, ank] - j0[:, toe]
-            reach = np.maximum(knee_reach * (seg(hip, knee) + seg(knee, ank)), seg(hip, ank))
-            h = np.linalg.norm((j[:, hip] - a_t)[:, :2], axis=1)
-            need = j[:, hip, 2] - a_t[:, 2] - np.sqrt(np.maximum(reach ** 2 - h ** 2, 0.0))
-            req = np.maximum(req, np.where(planted, need, 0.0))
-        drop = _envelope(req)
+            req = np.maximum(req, wt * need(j[:, hip], a_t, reach_ft[hip]))
+        drop = _envelope(np.maximum(req, 0.0))
         j[:, _UPPER, 2] -= drop[:, None]
-        for (hip, knee, ank, toe, planted), p in zip(legs, toes):
+        for (hip, knee, ank, toe, planted, _), p in zip(legs, toes):
             a_t = p + j0[:, ank] - j0[:, toe]
+            leg, reach = leg_ft[hip], reach_ft[hip]
+            d = a_t - j[:, hip]
             if toe == _TOE[throws]:
-                # Drag: once off the rubber, a back foot the hips have run away from slides after them
-                # (toe height kept) just far enough to stay within knee_reach, as a real back foot drags,
-                # instead of the leg locking straight with the foot hanging off its target.
-                d = a_t - j[:, hip]
-                r = knee_reach * (seg(hip, knee) + seg(knee, ank))
+                # 4. drag: a back foot the hips run away from slides after them (toe height kept), softly
+                # limited to the horizontal distance the leg's reach allows
                 h = np.linalg.norm(d[:, :2], axis=1)
-                h_max = np.sqrt(np.maximum(r ** 2 - d[:, 2] ** 2, 0.0))
-                pull = (t > fs) & (h > h_max)
-                d[pull, :2] *= (h_max[pull] / h[pull])[:, None]
-                a_t = j[:, hip] + d
-            pole = j0[:, knee] - j0[:, hip] + [0.0, -1e-3, 0.0]  # input knee's own plane (+ tiny forward bias)
-            j[:, knee], j[:, ank] = _two_bone(j[:, hip], a_t, seg(hip, knee), seg(knee, ank), pole)
+                h_max = np.sqrt(np.maximum(reach ** 2 - d[:, 2] ** 2, 0.0))
+                h_soft = _soft_limit(h, np.maximum(h_max - 0.08 * leg, 0.0), h_max)
+                h_eff = h - w_drag * (t > fs) * (h - h_soft)
+                d[:, :2] *= (h_eff / np.maximum(h, 1e-9))[:, None]
+            # swinging legs: ease the reach toward 0.99 leg instead of a hard stop at full length
+            want = np.linalg.norm(d, axis=1)
+            soft = _soft_limit(want, reach, np.maximum(0.99 * leg, reach + 1e-6))
+            d *= np.where(planted, 1.0, soft / np.maximum(want, 1e-9))[:, None]
+            # Knee bend direction: the input knee's offset from the INPUT hip->ankle line, plus a 0.1 ft
+            # forward (-y) bias.  Taking (knee - hip) raw would flip the plane when the input leg is nearly
+            # straight and the corrected leg points elsewhere; the bias keeps it stable then.
+            u0 = j0[:, ank] - j0[:, hip]
+            u0 /= np.linalg.norm(u0, axis=1, keepdims=True)
+            k0 = j0[:, knee] - j0[:, hip]
+            pole = k0 - u0 * np.sum(k0 * u0, axis=1, keepdims=True) + [0.0, -0.1, 0.0]
+            j[:, knee], j[:, ank] = _two_bone(j[:, hip], j[:, hip] + d, seg(hip, knee), seg(knee, ank), pole)
             j[:, toe] = j[:, ank] + j0[:, toe] - j0[:, ank]
-        return j, drop
+        return j, drop, w_body
 
     alpha = theta = 0.0
     shift = np.zeros(3)
+    cap = np.radians(MAX_ADDED_FLEXION_DEG)
     want_y = RUBBER_Y_FT - target["extension_ft"]
     for it in range(100):
-        j, drop = build(alpha, theta, shift)
+        j, drop, w_body = build(alpha, theta, shift)
         rv = release_values(j, ri, throws)
+        gaps = np.array([target["release_x_ft"] - rv["release_x_ft"], want_y - j[ri, hand, 1],
+                         target["release_z_ft"] - rv["release_z_ft"]])
         g_a = target["arm_angle_deg"] - rv["arm_angle_deg"]
-        g_x = target["release_x_ft"] - rv["release_x_ft"]
-        g_y = want_y - j[ri, hand, 1]
-        g_z = target["release_z_ft"] - rv["release_z_ft"]
-        if max(abs(g_x), abs(g_y), abs(g_z)) < 0.005 and abs(g_a) < 0.05:
+        if np.abs(gaps).max() < 0.005 and abs(g_a) < 0.05:
             break
         alpha += np.radians(g_a)
-        shift[:2] += [g_x, g_y]
-        # Newton step: rotating about +x, d(hand z)/d(theta) is the hand's current y offset from the pelvis
+        shift[:2] += gaps[:2]
+        # Height: Newton step on the flexion first (about +x, d(hand z)/d(theta) is the hand's current y
+        # offset from the pelvis), clipped to [0, cap]; whatever the clip leaves goes to the lowering.
         dzdt = j[ri, hand, 1] - j[ri, 0, 1]
-        if abs(dzdt) > 0.1:
-            theta += float(np.clip(g_z / dzdt, -0.2, 0.2))
+        new = float(np.clip(theta + gaps[2] / dzdt, 0.0, cap)) if abs(dzdt) > 0.1 else theta
+        shift[2] += gaps[2] - (new - theta) * dzdt
+        theta = new
     if info is not None:
         info.update(arm_rotation_deg=float(np.degrees(alpha)), trunk_flexion_deg=float(np.degrees(theta)),
-                    upper_body_shift_ft=[float(v) for v in shift], max_pelvis_drop_ft=float(drop.max()),
+                    upper_body_shift_ft=[float(v) for v in shift],
+                    body_fraction_at_foot_strike=float(w_body[fs]), max_pelvis_drop_ft=float(drop.max()),
                     pelvis_drop_at_release_ft=float(drop[ri]), iterations=it + 1,
-                    converged=bool(max(abs(g_x), abs(g_y), abs(g_z)) < 0.005 and abs(g_a) < 0.05))
+                    converged=bool(np.abs(gaps).max() < 0.005 and abs(g_a) < 0.05))
     return j
