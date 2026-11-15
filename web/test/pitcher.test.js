@@ -257,3 +257,60 @@ test("no bob: frame-to-frame jitter in the video's height does not reach the pel
   }
   assert.ok(worst < 0.01, `pelvis bobs ${worst.toFixed(3)} ft`);
 });
+
+// --- Gaze. SYNTHETIC: the fixture with the head joint swung 30 deg forward-down about the neck
+// (a video neck segment leaning forward), so the rigged head would look at the ground.
+const TARGET = toScene([0, 0, 2.5]);
+const leaning = { ...DELIVERY, joints_ft: DELIVERY.joints_ft.map((fr) => fr.map((p, j) => {
+  if (j !== J.head) return p;
+  const n = fr[J.neck], v = toScene(p).sub(toScene(n)).applyAxisAngle(new Vector3(1, 0, 0), (30 * Math.PI) / 180);
+  const s = toScene(n).add(v);
+  return [s.x, -s.z, s.y];
+})) };
+/** Head forward vs the target: angle off it, and the target's yaw / pitch in the chest frame (deg). */
+function gaze(fig) {
+  fig.updateMatrixWorld(true);
+  const b = fig.userData.bones, D = 180 / Math.PI;
+  const fwd = new Vector3(0, 0, 1).applyQuaternion(b[J.head].getWorldQuaternion(new Quaternion()));
+  const to = TARGET.clone().sub(b[J.head].getWorldPosition(new Vector3()));
+  const chest = b[J.spine3].getWorldQuaternion(new Quaternion()).invert();
+  const l = to.clone().applyQuaternion(chest), f = fwd.clone().applyQuaternion(chest);
+  return { off: fwd.angleTo(to) * D, yaw: Math.atan2(l.x, l.z) * D, pitch: Math.atan2(l.y, Math.hypot(l.x, l.z)) * D,
+    fYaw: Math.atan2(f.x, f.z) * D, fPitch: Math.atan2(f.y, Math.hypot(f.x, f.z)) * D };
+}
+/** Looking at the target, or at the neck's limit (yaw 70, pitch 40) towards it. */
+function assertLooks(g, msg) {
+  if (Math.abs(g.yaw) <= 70 && Math.abs(g.pitch) <= 40) return assert.ok(g.off < 10, `${msg}: head ${g.off.toFixed(1)} deg off the target`);
+  const cl = (v, l) => Math.max(-l, Math.min(l, v));
+  assert.ok(Math.abs(g.fYaw - cl(g.yaw, 70)) < 3 && Math.abs(g.fPitch - cl(g.pitch, 40)) < 3, `${msg}: not at the limit towards the target`);
+}
+
+test("gaze: through the delivery the head looks at the catcher's target", () => {
+  const fig = makePitcher("R");
+  for (const t of [-1, 0]) {
+    poseAtTime(fig, leaning, t, add(ownHand0, [0.12, -0.1, -0.1]), 45);
+    assertLooks(gaze(fig), `t=${t}`);
+  }
+});
+
+test("gaze: the head eases out into the follow-through without a snap", () => {
+  // Bound 2 deg per 1/240 s (480 deg/s): the ease-out turns the head back by ~30 deg over 0.3 s,
+  // ~150 deg/s at its fastest, plus the body's own motion.
+  const fig = makePitcher("R");
+  let prev = null, worst = 0;
+  for (let i = -96; i <= 144; i++) {
+    poseAtTime(fig, leaning, i / 240, add(ownHand0, [0.12, -0.1, -0.1]), 45);
+    const q = fig.userData.bones[J.head].getWorldQuaternion(new Quaternion());
+    if (prev) worst = Math.max(worst, (q.angleTo(prev) * 180) / Math.PI);
+    prev = q;
+  }
+  assert.ok(worst < 2, `head turned ${worst.toFixed(2)} deg in 1/240 s`);
+});
+
+test("gaze: without a delivery the static release pose looks at the target too", () => {
+  for (const [throws, x] of [["R", -2.2], ["L", 2.2]]) {
+    const fig = makePitcher(throws);
+    poseAtRelease(fig, [x, 54.5, 5.6], 35);
+    assertLooks(gaze(fig), `${throws}HP static`);
+  }
+});

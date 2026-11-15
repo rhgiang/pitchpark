@@ -263,6 +263,48 @@ function setBones(bones, pts, scale = 1) {
   bones[0].position.copy(pts[0]).divideScalar(scale);
 }
 
+// Gaze. The video gives the head's position, not where he looks, so the rigged head inherits the
+// neck segment's forward-down lean. Pitchers keep their eyes on the catcher's target from the set
+// through release, so the head is turned to it (60% of the turn in the head, 40% in the neck,
+// roughly how the upper and lower cervical spine share it), then let go into the follow-through.
+const GAZE_TARGET = [0, 0, 2.5]; // Statcast ft: the catcher's mitt, middle of the zone
+// Limits relative to the chest: cervical rotation is ~70-80 deg each way and flexion/extension
+// ~50-60 deg (e.g. Swartz et al. 2005, J Athl Train 40); 70 / 40 keeps it inside the comfortable
+// range, since the eyes do the rest.
+const GAZE_YAW_DEG = 70;
+const GAZE_PITCH_DEG = 40;
+const GAZE_OUT_S = 0.3;
+const NECK_SHARE = 0.4;
+/** Gaze weight at t s from release: 1 up to release, easing to 0 over 0.3 s (smootherstep). */
+export function gazeWeight(t) {
+  const x = Math.min(Math.max(t / GAZE_OUT_S, 0), 1);
+  return 1 - x * x * x * (x * (6 * x - 15) + 10);
+}
+/**
+ * Turn the neck and head towards GAZE_TARGET with weight w (after the bones are set). The goal is
+ * the chest's frame turned by yaw then pitch (no roll relative to the chest), each clamped.
+ */
+function applyGaze(figure, w) {
+  if (w <= 0) return;
+  const b = figure.userData.bones;
+  figure.updateMatrixWorld(true);
+  const chest = b[J.spine3].getWorldQuaternion(new THREE.Quaternion());
+  const neck = b[J.neck].getWorldQuaternion(new THREE.Quaternion());
+  const head = b[J.head].getWorldQuaternion(new THREE.Quaternion());
+  const d = toScene(GAZE_TARGET).sub(b[J.head].getWorldPosition(new THREE.Vector3()))
+    .applyQuaternion(chest.clone().invert());
+  const clamp = (v, lim) => Math.min(Math.max(v, -lim * DEG), lim * DEG);
+  const yaw = clamp(Math.atan2(d.x, d.z), GAZE_YAW_DEG);
+  const pitch = clamp(Math.atan2(d.y, Math.hypot(d.x, d.z)), GAZE_PITCH_DEG);
+  const goal = chest.clone().multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(-pitch, yaw, 0, "YXZ")));
+  const want = head.clone().slerp(goal, w);
+  const turn = want.clone().multiply(head.clone().invert());
+  const neckNew = new THREE.Quaternion().slerp(turn, NECK_SHARE).multiply(neck);
+  b[J.neck].quaternion.copy(chest.clone().invert().multiply(neckNew));
+  b[J.head].quaternion.copy(neckNew.clone().invert().multiply(want));
+  figure.updateMatrixWorld(true);
+}
+
 /**
  * Pose the figure at ball release: on the mound, the throwing hand on `release` (Statcast ft) and
  * the arm at `armAngleDeg` (Statcast arm_angle). Remembers the arm angle in userData.armAngleDeg.
@@ -271,6 +313,7 @@ export function poseAtRelease(pitcher, release, armAngleDeg) {
   const { bones, throws, scale } = pitcher.userData;
   setBones(bones, solvePose(throws, release, armAngleDeg, scale).targets, scale);
   pitcher.userData.armAngleDeg = armAngleDeg;
+  applyGaze(pitcher, 1);
   pitcher.updateMatrixWorld(true);
 }
 
@@ -435,6 +478,7 @@ export function poseAtTime(figure, delivery, t, release, armAngleDeg) {
   }
   setBones(bones, p, k);
   figure.userData.armAngleDeg = armAngleDeg;
+  applyGaze(figure, gazeWeight(t));
   figure.updateMatrixWorld(true);
 }
 
