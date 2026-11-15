@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { PerspectiveCamera } from "three";
 import {
-  batterEye, BATTER_EYE_VFOV_DEG, umpireView, sideView, rideAlong, SIDE_VFOV_DEG, RIDE_VFOV_DEG, introSweep, INTRO_S, tvView,
+  batterEye, BATTER_EYE_VFOV_DEG, umpireView, sideView, rideAlong, SIDE_VFOV_DEG, RIDE_VFOV_DEG, introSweep, INTRO_S, tvView, nearFor,
 } from "../src/cameras.js";
 import {
   fenceDistFt, FENCE_HEIGHT_FT, BATTERS_EYE_GAP_FT, BATTERS_EYE_THICK_FT, BATTERS_EYE_HEIGHT_FT, BATTERS_EYE_HALF_DEG,
@@ -331,4 +331,9 @@ test("windup ride is continuous into release and the flight, and equals today's 
 
 test("ride without a windup is the same for every t < 0 as at t = 0", () => {
   assert.deepEqual(rideAlong(wpath, -1, wpath.p[0], "R"), rideAlong(wpath, 0, wpath.p[0], "R"));
+});
+
+test("only the TV pose pushes the near plane out; sweep, umpire and no pose use the default", () => {
+  assert.equal(nearFor(tvView()), 100);
+  for (const p of [introSweep(0), introSweep(4), umpireView(), null]) assert.equal(nearFor(p), 0.05);
 });

@@ -188,6 +188,9 @@ const TV_AIM = [0, 20, 2.5];
 // near gives ~0.15 ft, so the figure's overlapping parts z-fight. 100 ft gives ~7e-5 ft. Nothing
 // visible is within 100 ft of this camera (it sits behind the fence, 400+ ft from the field).
 export const TV_NEAR_FT = 100;
+export const DEFAULT_NEAR_FT = 0.05; // close views (the sweep flies past the stands) need it small
+/** Near plane (ft) for a pose: its own `near`, else the default. */
+export const nearFor = (pose) => pose?.near ?? DEFAULT_NEAR_FT;
 
 /**
  * Centre-field TV broadcast camera, the same for both pitcher hands.

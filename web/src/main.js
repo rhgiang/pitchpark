@@ -5,7 +5,7 @@ import { buildField, buildZone, RUBBER_FRONT_Y_FT } from "./field.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
   batterEye, umpireView, tvView, sideView, rideAlong, BATTER_EYE_VFOV_DEG, UMPIRE_VFOV_DEG, SIDE_VFOV_DEG,
-  RIDE_VFOV_DEG, FREE_VFOV_DEG, TV_VFOV_DEG, FREE_START, FREE_MIN_DIST_FT, FREE_MAX_DIST_FT, introSweep, INTRO_S,
+  RIDE_VFOV_DEG, FREE_VFOV_DEG, TV_VFOV_DEG, FREE_START, FREE_MIN_DIST_FT, FREE_MAX_DIST_FT, introSweep, INTRO_S, nearFor,
 } from "./cameras.js";
 import { loadIndex, loadPitcher, loadDelivery } from "./data.js";
 import {
@@ -76,6 +76,13 @@ function pelvisAt(d, t) {
   return m;
 }
 
+/** The near plane for a pose (cameras.nearFor), applied for every pose, sweeps included. */
+function setNear(pose) {
+  const near = nearFor(pose);
+  if (camera.near !== near) camera.near = near;
+  camera.updateProjectionMatrix();
+}
+
 /** Point the camera for the current view. Runs every frame: cheap, and ride follows t. */
 function updateCamera() {
   const ab = currentAtBat(state);
@@ -85,7 +92,7 @@ function updateCamera() {
     if (appliedView === "free") freePose = { position: camera.position.clone(), target: controls.target.clone() };
     appliedView = state.view;
     camera.fov = VFOV[state.view];
-    camera.near = 0.05; // back to the default (a pose may push it out below); Free and the intro rely on it
+    camera.near = nearFor(null); // Free has no pose; every other pose sets its own below
     camera.updateProjectionMatrix();
     controls.enabled = state.view === "free";
     if (state.view === "free") { // first visit: FREE_START; later: where the user left it
@@ -103,8 +110,7 @@ function updateCamera() {
   else if (path) pose = rideAlong(path, state.t, currentPitch(state).release, state.data.pitcher.throws,
     state.delivery ? { pelvis: pelvisAt(state.delivery, state.t) } : null);
   if (!pose) return;
-  const near = pose.near ?? 0.05; // a pose may push the near plane out for depth precision (tvView)
-  if (camera.near !== near) { camera.near = near; camera.updateProjectionMatrix(); }
+  setNear(pose);
   camera.position.copy(toScene(pose.position));
   camera.lookAt(toScene(pose.target));
 }
@@ -136,7 +142,7 @@ function updateIntro(dt) {
   if (intro.t >= INTRO_S && !intro.frozen) return endIntro();
   const pose = introSweep(intro.t);
   camera.fov = pose.vfovDeg;
-  camera.updateProjectionMatrix();
+  setNear(pose);
   camera.position.copy(toScene(pose.position));
   camera.lookAt(toScene(pose.target));
   const focus = Math.hypot(...pose.position.map((v, i) => v - pose.target[i]));
@@ -444,7 +450,7 @@ renderer.setAnimationLoop((now) => {
     if (menuDrawn) return countFrame(now, false);
     const pose = introSweep(MENU_VIEW_S);
     camera.fov = pose.vfovDeg;
-    camera.updateProjectionMatrix();
+    setNear(pose);
     camera.position.copy(toScene(pose.position));
     camera.lookAt(toScene(pose.target));
     look.render();
