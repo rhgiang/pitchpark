@@ -4,7 +4,7 @@ import { duration } from "./trajectory.js";
 
 export const MODES = ["real", "sim", "ghost"]; // "Statcast fit", "M1 + M3", both
 export const SPEEDS = [1, 0.25, 0.1];
-export const VIEWS = ["umpire", "batter", "side", "ride", "free"]; // keys 1-5
+export const VIEWS = ["umpire", "batter", "side", "ride", "free", "tv"]; // keys 1-6
 
 // Ball rotation on screen. True spin is ~40 rev/s, which a 60 Hz screen cannot show at 1x (it
 // would alias), so at 1x we show 1/20 of it; in slow motion the true rate is shown (angle =

@@ -3,8 +3,11 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { PerspectiveCamera } from "three";
 import {
-  batterEye, BATTER_EYE_VFOV_DEG, umpireView, sideView, rideAlong, SIDE_VFOV_DEG, RIDE_VFOV_DEG, introSweep, INTRO_S,
+  batterEye, BATTER_EYE_VFOV_DEG, umpireView, sideView, rideAlong, SIDE_VFOV_DEG, RIDE_VFOV_DEG, introSweep, INTRO_S, tvView,
 } from "../src/cameras.js";
+import {
+  fenceDistFt, FENCE_HEIGHT_FT, BATTERS_EYE_GAP_FT, BATTERS_EYE_THICK_FT, BATTERS_EYE_HEIGHT_FT, BATTERS_EYE_HALF_DEG,
+} from "../src/park/layout.js";
 import { stateAt, visibleEnd } from "../src/trajectory.js";
 import { BALL_RADIUS_FT } from "../src/ball.js";
 import { toScene } from "../src/coords.js";
@@ -203,5 +206,54 @@ test("intro sweep clears the stands: over them (55-175 ft from home) it stays ab
     // Roof and upper deck top out at 93 ft (100 to 160 ft out); lower bowl and backstop net, 32 ft.
     if (r > 100 && r < 175) assert.ok(z > 100, `t = ${t}: ${z.toFixed(1)} ft up at ${r.toFixed(0)} ft`);
     else if (r > 55 && r <= 100) assert.ok(z > 40, `t = ${t}: ${z.toFixed(1)} ft up at ${r.toFixed(0)} ft`);
+  }
+});
+
+// ---- TV broadcast view (centre-field camera)
+
+const TV_RUBBER_Y_FT = 60.5;
+const MOUND_TOP_FT = 10 / 12;
+
+test("TV view frames the pitcher on the rubber, his release, the zone and the plate at 1600x900", () => {
+  const v = tvView();
+  const cam = cameraAt(v, v.vfovDeg);
+  const pts = [
+    [0, 0, 0], [-HALF_PLATE_FT, 0, 0], [HALF_PLATE_FT, 0, 0], // home plate
+    [0, TV_RUBBER_Y_FT, MOUND_TOP_FT], [0, TV_RUBBER_Y_FT, MOUND_TOP_FT + 6.5], // standing figure on the rubber
+    [-2, TV_RUBBER_Y_FT, MOUND_TOP_FT + 6.5], [2, TV_RUBBER_Y_FT, MOUND_TOP_FT], // arms out to the sides
+    [-2.5, 55, 5], [2.5, 55, 6.5], [0, 54, 6], // release points
+  ];
+  for (const z of [1.2, 3.8]) for (const x of [-HALF_PLATE_FT, HALF_PLATE_FT]) pts.push([x, PLATE_FRONT_Y_FT, z]);
+  for (const q of pts) {
+    const w = toScene(q);
+    const inFront = w.clone().applyMatrix4(cam.matrixWorldInverse).z < 0;
+    w.project(cam);
+    assert.ok(inFront && Math.abs(w.x) < MARGIN && Math.abs(w.y) < MARGIN, `[${q}] out of frame (${w.x}, ${w.y})`);
+  }
+  assert.ok(v.vfovDeg < 8, "a telephoto lens: a few degrees");
+});
+
+test("TV camera is behind the pitcher (y well past the rubber), above the field and off the centre line", () => {
+  const v = tvView();
+  assert.ok(v.position[1] > TV_RUBBER_Y_FT + 300);
+  assert.ok(v.position[2] > 20);
+  assert.ok(v.position[0] !== 0);
+});
+
+test("TV line of sight to home plate and to the release clears the fence, the batter's eye wall and the stands", () => {
+  const cam = tvView().position;
+  for (const end of [[0, 0, 2.5], [0, 0, 0], [-1.5, 54, 6], [1.5, 54, 6]]) {
+    for (let i = 0; i <= 2000; i++) {
+      const f = i / 2000;
+      const [x, y, z] = cam.map((c, k) => c + f * (end[k] - c));
+      const angle = (Math.atan2(x, y) * 180) / Math.PI;
+      const r = Math.hypot(x, y);
+      // Bleachers and stands start outside the batter's eye wedge: the line never leaves it.
+      assert.ok(Math.abs(angle) < BATTERS_EYE_HALF_DEG, `leaves the centre-field wedge at ${angle} deg`);
+      const fence = fenceDistFt(angle);
+      const eyeIn = fence + BATTERS_EYE_GAP_FT;
+      if (r >= fence - 0.5 && r <= fence + 0.5) assert.ok(z > FENCE_HEIGHT_FT, `inside the fence: ${z} ft`);
+      if (r >= eyeIn && r <= eyeIn + BATTERS_EYE_THICK_FT) assert.ok(z > BATTERS_EYE_HEIGHT_FT, `inside the batter's eye wall: ${z} ft`);
+    }
   }
 });

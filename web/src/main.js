@@ -4,8 +4,8 @@ import { toScene } from "./coords.js";
 import { buildField, buildZone, RUBBER_FRONT_Y_FT } from "./field.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
-  batterEye, umpireView, sideView, rideAlong, BATTER_EYE_VFOV_DEG, UMPIRE_VFOV_DEG, SIDE_VFOV_DEG,
-  RIDE_VFOV_DEG, FREE_VFOV_DEG, FREE_START, FREE_MIN_DIST_FT, FREE_MAX_DIST_FT, introSweep, INTRO_S,
+  batterEye, umpireView, tvView, sideView, rideAlong, BATTER_EYE_VFOV_DEG, UMPIRE_VFOV_DEG, SIDE_VFOV_DEG,
+  RIDE_VFOV_DEG, FREE_VFOV_DEG, TV_VFOV_DEG, FREE_START, FREE_MIN_DIST_FT, FREE_MAX_DIST_FT, introSweep, INTRO_S,
 } from "./cameras.js";
 import { loadIndex, loadPitcher, loadDelivery } from "./data.js";
 import {
@@ -54,7 +54,7 @@ let freePose = { position: toScene(FREE_START.position), target: toScene(FREE_ST
 let appliedView = null;
 const VFOV = {
   umpire: UMPIRE_VFOV_DEG, batter: BATTER_EYE_VFOV_DEG, side: SIDE_VFOV_DEG, free: FREE_VFOV_DEG,
-  ride: RIDE_VFOV_DEG,
+  ride: RIDE_VFOV_DEG, tv: TV_VFOV_DEG,
 };
 
 /** Point the camera for the current view. Runs every frame: cheap, and ride follows t. */
@@ -76,6 +76,7 @@ function updateCamera() {
   if (state.view === "free") { controls.update(); return; }
   let pose = null;
   if (state.view === "umpire") pose = umpireView();
+  else if (state.view === "tv") pose = tvView();
   else if (state.view === "batter") pose = batterEye(ab.stand);
   // With a delivery the windup happens on the rubber, behind release: keep the pitcher in shot.
   else if (path && state.view === "side") pose = sideView(path, camera.aspect, state.delivery ? RUBBER_FRONT_Y_FT + 1.5 : null);
@@ -203,7 +204,7 @@ const KEYS = {
   Space: { type: "replay" }, ArrowRight: { type: "nextPitch" }, ArrowLeft: { type: "prevPitch" },
   KeyR: { type: "setMode", mode: "real" }, KeyS: { type: "setMode", mode: "sim" },
   KeyG: { type: "setMode", mode: "ghost" },
-  // 1-5: Umpire, Batter, Side, Ride, Free (the order of VIEWS and of the tabs).
+  // 1-6: Umpire, Batter, Side, Ride, Free, TV (the order of VIEWS and of the tabs).
   ...Object.fromEntries(VIEWS.map((view, i) => [`Digit${i + 1}`, { type: "setView", view }])),
   KeyN: { type: "toggleNoSpin" },
   KeyZ: { type: "setSpeed", speed: 1 }, KeyX: { type: "setSpeed", speed: 0.25 },

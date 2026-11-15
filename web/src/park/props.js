@@ -4,7 +4,7 @@ import { PALETTE, makeToonMaterial, lampMaterial, makeGlowSprite, noOutline, ter
 import { sweep, frameAt, radialFrame, box, place, textTexture, shadeOf } from "./build.js";
 import {
   POLE_R, POLE_L, ISLAND, polar, fenceDistFt, normals, rng, BLEACHER_GAP_FT,
-  BATTERS_EYE_HALF_DEG, FIELD_CENTRE_FT as FIELD_CENTRE,
+  BATTERS_EYE_HALF_DEG, BATTERS_EYE_GAP_FT, BATTERS_EYE_HEIGHT_FT, BATTERS_EYE_THICK_FT, FIELD_CENTRE_FT as FIELD_CENTRE,
 } from "./layout.js";
 
 // Everything that isn't seating or ground: poles, towers, scoreboard, batter's eye, bullpens,
@@ -178,11 +178,12 @@ function distanceMarkers() {
 /** Centre-field batter's eye: a dark wall behind the fence so hitters can see the ball. */
 function battersEye() {
   const path = [];
-  for (let a = -BATTERS_EYE_HALF_DEG - 1; a <= BATTERS_EYE_HALF_DEG + 1; a += 1) path.push(polar(a, fenceDistFt(a) + 26));
+  for (let a = -BATTERS_EYE_HALF_DEG - 1; a <= BATTERS_EYE_HALF_DEG + 1; a += 1) path.push(polar(a, fenceDistFt(a) + BATTERS_EYE_GAP_FT));
+  const H = BATTERS_EYE_HEIGHT_FT, T = BATTERS_EYE_THICK_FT;
   const m = new THREE.Mesh(sweep(path, [
-    [[0, 0], [0, 36], PALETTE.batterEye, 0.7, 1],
-    [[0, 36], [3, 36], PALETTE.coral],
-    [[3, 36], [3, 0], PALETTE.batterEye],
+    [[0, 0], [0, H], PALETTE.batterEye, 0.7, 1],
+    [[0, H], [T, H], PALETTE.coral],
+    [[T, H], [T, 0], PALETTE.batterEye],
   ]), makeToonMaterial(0xffffff, { vertexColors: true, side: THREE.DoubleSide }));
   m.castShadow = m.receiveShadow = true;
   return m;

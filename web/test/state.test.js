@@ -120,7 +120,7 @@ test("spin is shown slowed at 1x and at the true rate in slow motion", () => {
 
 test("default view is the umpire's", () => {
   assert.equal(initialState().view, "umpire");
-  for (const v of ["umpire", "batter", "side", "ride", "free"]) {
+  for (const v of ["umpire", "batter", "side", "ride", "free", "tv"]) {
     assert.equal(reduce(loaded(), { type: "setView", view: v }).view, v);
   }
 });

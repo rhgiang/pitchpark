@@ -1,4 +1,5 @@
 import { stateAt, duration } from "./trajectory.js";
+import { fenceDistFt, FENCE_HEIGHT_FT } from "./park/layout.js";
 
 // Camera placements in Statcast feet (x catcher's right, y plate -> pitcher, z up).
 
@@ -130,6 +131,31 @@ export function rideAlong(path, t_s, release, throws) {
       ball[2] - RIDE_BEHIND_FT * dir[2] + RIDE_ABOVE_FT],
     target: RIDE_AIM,
   };
+}
+
+// TV broadcast view: the centre-field camera. All framing choices, tuned against screenshots.
+// - Position: on a platform just behind the outfield fence (real park cameras sit at the top of the
+//   centre-field wall / batter's eye, ~400-420 ft out). The eye wall stands further back, behind it.
+// - Height: 24 ft, 16 ft above the 8 ft fence so the sight line clears it (23 ft up when it crosses
+//   the fence). It sets the look: ~3 deg down, so the pitcher's head lines up with the batter's and
+//   the catcher and plate sit just above his shoulders, as on TV. (At 44 ft it looked from above.)
+// - Side offset: 12 ft to the first-base side, the slight off-centre of real broadcast cameras: at the
+//   mound the pitcher is ~1.8 ft off the camera-to-plate line, so the batter shows past his body.
+// - Aim: 2 ft up at the plate, mid-way between the pitcher's feet and the batter's head.
+// - Vertical FOV: a few degrees is the long-lens TV flattening (~600 mm); the narrowest that frames
+//   the pitcher's feet to the batter's head with margin (the pitcher's side-to-side reach is 6x narrower).
+export const TV_VFOV_DEG = 2.8;
+const TV_X_FT = 12;
+const TV_Y_FT = fenceDistFt(0) + 10;
+const TV_Z_FT = FENCE_HEIGHT_FT + 16;
+const TV_AIM = [0, 0, 2];
+
+/**
+ * Centre-field TV broadcast camera, the same for both pitcher hands.
+ * @returns {{position: number[], target: number[], vfovDeg: number}} Statcast feet.
+ */
+export function tvView() {
+  return { position: [TV_X_FT, TV_Y_FT, TV_Z_FT], target: TV_AIM, vfovDeg: TV_VFOV_DEG };
 }
 
 // Free orbit (OrbitControls, in main.js): first-base side behind the plate, high, looking at mid-flight.
