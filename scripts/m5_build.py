@@ -18,7 +18,8 @@ from pitchsim.data import fetch_heights
 from pitchsim.export import write_json
 from pitchsim.pose.anchor import (anchor, correct_to_mean, lock_feet, mound_z_ft, release_values,
                                   segment_lengths)
-from pitchsim.pose.delivery import average_delivery, ground_root, jitter, landmarks, rocker_step
+from pitchsim.pose.delivery import (average_delivery, fix_leg_swaps, ground_root, jitter, landmarks, lift_snap,
+                                    rocker_step)
 from pitchsim.pose.joints3d import load_lift
 from pitchsim.pose.pose2d import load_pose2d
 from pitchsim.pose.release import foot_strike_frame
@@ -182,28 +183,49 @@ def main():
     # unusable (pelvis depth jumps by metres), so each clip is first grounded on its feet
     # (delivery.ground_root; foot strike is found on the pivot-grounded version), then anchored into
     # Statcast ft with its own gravity-up, the StatsAPI height and the pivot toe on the rubber.
+    # Lift repairs first (delivery.fix_leg_swaps / lift_snap): left/right leg swaps are undone, and a lift
+    # that sits frozen and then snaps is only used after its snap.  Both were in the 5 train clips with no
+    # rocker step, and the snaps sat at the leg lift: averaged in, they were the leg-lift hitch.
+    J, snap, n_swapped = {}, {}, {}
+    for c in L:
+        J[c], n_swapped[c] = fix_leg_swaps(L[c].joints_m, rp[c])
+        snap[c] = lift_snap(J[c], rp[c], L[c].fps)
     A, marks, rock = {}, {}, {}
     for c in L:
         # leg lift from the 3D lift (Ryan likes the leg lift); foot strike from 2D / labels
-        ll_c = landmarks(ground_root(L[c].joints_m, throws), rp[c], throws, up=L[c].up)["leg_lift"]
-        A[c] = anchor(ground_root(L[c].joints_m, throws, fs[c]), L[c].up, height_ft, throws, rp[c], fps=L[c].fps)
+        ll_c = landmarks(ground_root(J[c], throws), rp[c], throws, up=L[c].up)["leg_lift"]
+        A[c] = anchor(ground_root(J[c], throws, fs[c]), L[c].up, height_ft, throws, rp[c], fps=L[c].fps)
         marks[c] = {"leg_lift": ll_c, "foot_strike": fs[c], "release": rp[c], "fps": L[c].fps}
-        rock[c] = rocker_step(A[c], throws, ll_c, L[c].fps)
+        # a step or leg-lift peak found within 0.1 s after a snap is the snap itself, not the motion
+        after_snap = lambda f: snap[c] is not None and f < snap[c] + int(round(0.1 * L[c].fps))  # noqa: E731
+        rock[c] = None if after_snap(ll_c - int(round(0.8 * L[c].fps))) else rocker_step(A[c], throws, ll_c, L[c].fps)
+        if after_snap(ll_c):
+            marks[c]["leg_lift"] = None
+    # leg lift lost in a snap: stand-in at the median offset before release of the clips that have one
+    ll_off_s = float(np.median([(rp[c] - marks[c]["leg_lift"]) / L[c].fps for c in train
+                                if marks[c]["leg_lift"] is not None]))
+    for c in L:
+        if marks[c]["leg_lift"] is None:
+            marks[c]["leg_lift"] = rp[c] - int(round(ll_off_s * L[c].fps))
     # Rocker-step knot: lines the step up across clips.  A clip whose lift shows no step (the lift or the
     # tracker missed it) gets a stand-in knot at the median step -> leg-lift gap, so its warp stays ~slope 1,
-    # and sits out the average until 0.5 s before the template leg lift (fading in over 0.3 s): averaging
-    # it in would shrink the step.
+    # and sits out the average until 0.9 s before the template leg lift, easing in (smootherstep) over the
+    # next 0.4 s, well clear of the leg lift: averaging it in would shrink the step, and a sudden change of
+    # the clip mix is itself a jump.
     gap_s = float(np.median([(marks[c]["leg_lift"] - rock[c]) / L[c].fps for c in train if rock[c] is not None]))
     for c in L:
         marks[c]["rocker"] = rock[c] if rock[c] is not None else marks[c]["leg_lift"] - int(round(gap_s * L[c].fps))
     tmpl_ll_s = float(np.median([(marks[c]["leg_lift"] - rp[c]) / L[c].fps for c in train]))
-    fade = lambda tau: np.clip((tau - (tmpl_ll_s - 0.5)) / 0.3, 0.0, 1.0)  # noqa: E731
+    def fade(tau):
+        u = np.clip((tau - (tmpl_ll_s - 0.9)) / 0.4, 0.0, 1.0)
+        return u ** 3 * (u * (6 * u - 15) + 10)
     avail = np.array([rp[c] / L[c].fps for c in train])
     pre_s = float(np.floor(min(a.pre_cap, np.quantile(avail, 1 - PRE_COVER_FRAC, method="lower")) * 100) / 100)
     excl: list = []
     avg_raw, ri = average_delivery([A[c] for c in train], [marks[c] for c in train], pre_s,
                                    fps_out=60.0, post_s=POST_S, excluded=excl,
-                                   weights=[None if rock[c] is not None else fade for c in train])
+                                   weights=[None if rock[c] is not None or snap[c] is not None else fade for c in train],
+                                   valid_from=[snap[c] for c in train])
     short = list(dict.fromkeys(train[i] for i, _ in excl))
     for i, why in excl:
         drop(why, train[i])
@@ -277,6 +299,8 @@ def main():
               "clips_step_s_before_release_median": -rk_s,
               "clips_with_step": [c for c in train_used if rock[c] is not None],
               "clips_without_step": [c for c in train_used if rock[c] is None]}
+    repairs = {c: {"legs_swapped_frames": n_swapped[c], "snap_s_before_release": None if snap[c] is None
+                   else round((rp[c] - snap[c]) / L[c].fps, 3)} for c in L if n_swapped[c] or snap[c] is not None}
 
     # ---- release-frame detector error vs hand labels (in-sample unless fresh) ------------------
     lab = labels.loc[[c for c in labels.index if c in pose.index]].copy()
@@ -306,7 +330,7 @@ def main():
                 "max_segment_change_foot_lock_ft": seg_lock_ft, "planted_feet": feet,
                 "leg_lift_index": ll, "foot_strike_index": fsi, "rocker_index": rki, "release_index": ri,
                 "foot_strike_to_release_s": (ri - fsi) / 60.0, "rocker": rocker,
-                "foot_strike_source": fs_src}, res / "correction.json")
+                "foot_strike_source": fs_src, "lift_repairs": repairs}, res / "correction.json")
 
     pd.set_option("display.width", 220)
     print(f"\nheight {height_in} in; pre_s {pre_s}; release_index {ri}; rocker_index {rki}; leg_lift_index {ll}; foot_strike_index {fsi} "
@@ -333,6 +357,7 @@ def main():
     for nm, v in feet.items():
         print(f"  planted {nm} toe: drift {v['drift_ft'] * 12:.4f} in, height error {v['height_err_ft'] * 12:.4f} in")
     ext = {c.replace(".mp4", ""): round(own_anchor(c)[1]["extension_ft"], 2) for c in clean_clips}
+    print("  lift repairs (leg swaps undone; snap = clip used only after it):", repairs)
     print(f"  rocker step: final {rocker['final_step_ft']:.2f} ft, knot {rocker['final_step_s_before_release']:.2f} s "
           f"before release; clips' median {rocker['clips_step_ft_median']:.2f} ft; "
           f"{len(rocker['clips_with_step'])} train clips with a step, without: {rocker['clips_without_step']}")
