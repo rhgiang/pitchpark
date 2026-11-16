@@ -278,3 +278,22 @@ def test_correct_to_mean_removes_a_backward_pelvis_bump_in_the_stride():
         assert np.abs(np.diff(_knee_deg(out, hip, knee, ank))).max() < 8.0, knee
     got = release_values(out, RI, "R")
     assert abs(got["extension_ft"] - target["extension_ft"]) < 0.05
+
+
+@pytest.mark.parametrize("kind", GAPS)
+def test_correct_to_mean_keeps_arms_and_pelvis_off_the_mound(kind):
+    """SYNTHETIC: with a long constructed extension (long_stride: +3 ft) no arm or glove joint, nor the
+    ball (throwing hand), goes within 0.25 ft of the mound surface anywhere in the delivery, and the pelvis
+    stays above 55% of its standing height over the mound, while the release targets are still met.
+    Why: Misiorowski's built 7.5 ft extension read as "the arm going into the dirt" (a viewer pelvis drop,
+    since fixed in web/src/pitcher.js); this guards the Python side of the same lunge.  0.25 ft (3 in) is
+    about a fist's thickness: a hand that close looks like it brushes the dirt."""
+    j, out, target = _corrected(kind)
+    arms = list(range(16, 24))
+    clear = out[:, arms, 2] - mound_z_ft(out[:, arms, 0], out[:, arms, 1])
+    assert clear.min() > 0.25, f"arm joint {clear.min():.2f} ft above the mound"
+    pel = out[:, 0, 2] - mound_z_ft(out[:, 0, 0], out[:, 0, 1])
+    standing = j[0, 0, 2] - mound_z_ft(j[0, 0, 0], j[0, 0, 1])
+    assert pel.min() > 0.55 * standing, f"pelvis {pel.min():.2f} of standing {standing:.2f} ft"
+    got = release_values(out, RI, "R")
+    assert max(abs(got[k] - target[k]) for k in ("release_x_ft", "release_z_ft", "extension_ft")) < 0.05
