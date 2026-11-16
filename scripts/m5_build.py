@@ -20,6 +20,7 @@ from pitchsim.pose.anchor import (anchor, correct_to_mean, lock_feet, mound_z_ft
                                   segment_lengths)
 from pitchsim.pose.delivery import (average_delivery, fix_leg_swaps, ground_root, has_rocker_step, jitter,
                                     landmarks, lift_snap, phase_smooth, rocker_step)
+from pitchsim.pose.arm_refine import refine_arm, track_from_pose
 from pitchsim.pose.clips import read_labels
 from pitchsim.pose.joints3d import load_lift
 from pitchsim.pose.pose2d import load_pose2d
@@ -90,6 +91,8 @@ def main():
     ap.add_argument("--raw", required=True, help="the pitcher's Statcast CSV (data/raw/<id>_....csv)")
     ap.add_argument("--out", default=str(ROOT / "web/public/data/deliveries"))
     ap.add_argument("--results", default=None, help="default results/m5/<slug>")
+    ap.add_argument("--no-arm-refine", action="store_true",
+                    help="skip the 2D-guided throwing-arm refinement (pitchsim.pose.arm_refine)")
     ap.add_argument("--pre-cap", type=float, default=PRE_CAP_S, help="cap on pre_s (s before release)")
     a = ap.parse_args()
     d, slug = Path(a.clips_dir), Path(a.clips_dir).name
@@ -292,6 +295,19 @@ def main():
     # What the correction did to the body: bone lengths (vs its input; and the foot lock vs the raw
     # average), and the planted feet (pivot toe until foot strike, lead toe after) in the final delivery.
     seg_corr_ft = float(np.abs(segment_lengths(final) - segment_lengths(avg_ft)).max())
+    # 2D-guided arm path (pitchsim.pose.arm_refine), AFTER the correction: the correction rotates the arm in
+    # the image plane by ~20 deg, which would undo a refinement done before it.  The release frame is pinned,
+    # so the release values above stay on target (re-checked below).  TRAIN clips' 2D only.
+    refine_info: dict = {"applied": False}
+    if not a.no_arm_refine:
+        tracks = [track_from_pose(load_pose2d(d / "pose2d" / c.replace(".mp4", ".npz")), rp[c], fs[c])
+                  for c in train_used]
+        refine_info = {"applied": True}
+        final = refine_arm(final, ri, fsi, throws, tracks, fps=60.0, info=refine_info)
+        rv_fin = release_values(final, ri, throws)
+        miss = {k: rv_fin[k] - target[k] for k in KEYS}
+        if max(abs(miss[k]) for k in KEYS[:3]) > 0.05 or abs(miss["arm_angle_deg"]) > 1.0:
+            raise SystemExit(f"arm refinement moved the release off target: misses {miss}")
     seg_lock_ft = float(np.abs(segment_lengths(avg_ft) - segment_lengths(avg_raw)).max())
     seg_cv = segment_lengths(final).std(0) / segment_lengths(final).mean(0)
     piv, lead = HAND_TOE[throws]
@@ -343,7 +359,7 @@ def main():
                 "max_segment_change_foot_lock_ft": seg_lock_ft, "planted_feet": feet,
                 "leg_lift_index": ll, "foot_strike_index": fsi, "rocker_index": rki, "release_index": ri,
                 "foot_strike_to_release_s": (ri - fsi) / 60.0, "rocker": rocker,
-                "foot_strike_source": fs_src, "lift_repairs": repairs}, res / "correction.json")
+                "foot_strike_source": fs_src, "lift_repairs": repairs, "arm_refine": refine_info}, res / "correction.json")
 
     pd.set_option("display.width", 220)
     print(f"\nheight {height_in} in; pre_s {pre_s}; release_index {ri}; rocker_index {rki}; leg_lift_index {ll}; foot_strike_index {fsi} "
@@ -361,6 +377,9 @@ def main():
     print("\ncorrect_to_mean   before -> after (target)")
     for k in KEYS:
         print(f"  {k}: {rv_avg[k]:.3f} -> {rv_fin[k]:.3f} ({target[k]:.3f})  gap {target[k] - rv_avg[k]:+.3f}")
+    if refine_info["applied"]:
+        print("  arm refinement:", {k: np.round(v, 3).tolist() if isinstance(v, (list, float)) else v
+                                   for k, v in refine_info.items()})
     print("  applied:", {k: np.round(v, 3).tolist() if isinstance(v, (list, float)) else v for k, v in cinfo.items()})
     print(f"  stride (pivot toe -> planted lead toe, horizontal) {stride_ft:.2f} ft: CONSTRUCTED to match "
           f"Statcast's mean extension; this camera cannot measure it")
