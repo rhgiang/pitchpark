@@ -140,3 +140,66 @@ M1 and M3 keep pooling seasons. Their fits carry across years, and more data hel
 - The Misiorowski relabel is a judgement from season means, not from Statcast. If Savant's classifier
   changes again, `RELABEL` needs another look.
 - Cease's 2024 changeup and sinker are too rare to test cross-season.
+
+---
+
+# Second refresh: Cam Schlittler and Yoshinobu Yamamoto (2025 + 2026)
+
+Same routine as above, one run per pitcher with both seasons: `validate.py` and `train_seam.py` pooled
+(held-out games, seed 0), `train_generative.py` on the latest season only, then `m4_checks.py` and
+`export_viewer.py` over all eight pitchers. Cross-season runs were not done for these two.
+
+| Pitcher | Season | Games | Pitches |
+|---|---|---|---|
+| Schlittler | 2025 / 2026 | 14 / 33 | 1,253 / 3,044 |
+| Yamamoto | 2025 / 2026 | 30 / 28 | 2,792 / 2,740 |
+
+## M1 and M3 (pooled, median held-out plate miss in inches; M3 pass = drop >= 0.6 in with interval above 0)
+
+| Pitcher | Type | n test | M1 | M1 + push | M3 |
+|---|---|---|---|---|---|
+| Schlittler | FF | 608 | 2.55 | 1.72 | pass |
+| Schlittler | FC | 332 | 4.42 | 1.95 | pass |
+| Schlittler | SI | 166 | 7.56 | 2.06 | pass |
+| Schlittler | CU | 119 | 4.10 | 2.78 | pass |
+| Schlittler | SL | 12 | 4.33 | 4.58 | ungraded (12 test pitches) |
+| Yamamoto | FF | 460 | 2.92 | 1.81 | pass |
+| Yamamoto | FS | 411 | 7.00 | 3.33 | pass |
+| Yamamoto | SI | 173 | 6.15 | 2.15 | pass |
+| Yamamoto | FC | 205 | 4.05 | 2.22 | pass |
+| Yamamoto | CU | 208 | 1.89 | 1.92 | fail (M1 already good) |
+| Yamamoto | SL | 89 | 2.79 | 2.61 | fail (M1 already good) |
+
+Both pitchers' sinkers (and Yamamoto's splitter) show the usual large seam push that M1 alone can't
+explain (7.6, 6.2 and 7.0 in), which M3 mostly removes.
+
+## M2 (latest season, AUC of real vs generated; floor = real vs real; pass = within the floor's interval)
+
+| Pitcher | Type | AUC (best model) | Floor | Pass |
+|---|---|---|---|---|
+| Schlittler | FF | 0.67 (Gaussian) | 0.71 | yes |
+| Schlittler | FC | 0.70 | 0.70 | yes |
+| Schlittler | SI | 0.66 | 0.64 | yes |
+| Schlittler | CU | 0.59 | 0.60 | yes |
+| Yamamoto | FF | 0.63 | 0.59 | no |
+| Yamamoto | FC | 0.62 | 0.57 | no |
+| Yamamoto | FS | 0.64 | 0.64 | yes |
+| Yamamoto | SI | 0.56 | 0.55 | yes |
+| Yamamoto | CU | 0.61 | 0.61 | yes |
+| Yamamoto | SL | 0.59 | 0.51 | no (123 train pitches) |
+
+Schlittler 4 of 4 graded types pass (SL ungraded, under 30 training pitches). Yamamoto 3 of 6. His fails are
+small gaps above the floor (0.03 to 0.08), and the mixture never beat the single Gaussian for either pitcher.
+
+## M4 and viewer
+
+- Perceived velocity vs `effective_speed`, held out, all eight pitchers (13 CSVs): median |diff| **0.244 mph**
+  (0.235 before). Best reference extension 6.31 ft vs 6.34 in use, so still no retune.
+- Viewer now lists eight pitchers; new: Schlittler (310 at-bats, 17 pitches `no_model` from SL/ST too rare to fit)
+  and Yamamoto (401 at-bats).
+
+## Still wrong
+
+- Schlittler's 2025 is only 14 games, and his slider is 43 pitches pooled, so it stays ungraded.
+- Heights for the viewer come from StatsAPI via `people.csv`; M2 for Yamamoto fails on 3 of 6 types and has
+  not been looked into beyond the AUC table.
