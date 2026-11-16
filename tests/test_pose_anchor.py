@@ -255,3 +255,26 @@ def test_anchor_lefty_puts_the_left_toe_on_the_rubber():
     j, up = _rotated(_figure())
     out = anchor(j, up, 6.25, "L", release_index=15)
     assert np.allclose(out[0, 10], [0, RUBBER_Y, MOUND_Z], atol=0.01)
+
+
+def test_correct_to_mean_removes_a_backward_pelvis_bump_in_the_stride():
+    """SYNTHETIC: the averaged lift's pelvis drifts ~0.9 ft BACK (away from the plate) in the last ~10 frames
+    before a late foot strike (the pinned pivot toe drags the depth-compressed body back; seen in the real
+    Misiorowski and Sale averages), then rushes forward.  Corrected, the pelvis must travel toward the plate
+    without turning back between leg lift and release, and the back knee must not snap straight (it went
+    ~110 -> 164 deg in 2 frames on the real builds)."""
+    fs = RI - 9
+    j = _delivery(fs=fs)
+    t = np.arange(len(j))
+    from pitchsim.pose.anchor import _UPPER
+    j[:, _UPPER, 1] += (0.9 * np.exp(-0.5 * ((t - (fs - 4)) / 3.0) ** 2))[:, None]   # the bump
+    rv = release_values(j, RI, "R")
+    dx, dz, de, da = GAPS["moderate"]
+    target = dict(rv, release_x_ft=rv["release_x_ft"] + dx, release_z_ft=rv["release_z_ft"] + dz,
+                  extension_ft=rv["extension_ft"] + de, arm_angle_deg=rv["arm_angle_deg"] + da)
+    out = correct_to_mean(j, RI, fs, "R", target, leg_lift_index=LL)
+    assert np.diff(out[LL:RI + 1, 0, 1]).max() < 0.01          # never back toward the rubber
+    for hip, knee, ank in ((1, 4, 7), (2, 5, 8)):
+        assert np.abs(np.diff(_knee_deg(out, hip, knee, ank))).max() < 8.0, knee
+    got = release_values(out, RI, "R")
+    assert abs(got["extension_ft"] - target["extension_ft"]) < 0.05

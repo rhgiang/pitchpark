@@ -195,6 +195,31 @@ def _hermite_ease(t: np.ndarray, t0: int, t1: int, t2: int, f1: float) -> np.nda
     return np.where(t > t2, 1.0, out)
 
 
+def _forward_only(py: np.ndarray, ll: int, ri: int) -> np.ndarray:
+    """Change to add to the pelvis's y (ft) so that between frames `ll` and `ri` it never moves back.
+
+    correct_to_mean calls it from leg lift to the last frame.  Why: from leg lift on the hips only travel
+    toward the plate (the body's centre of mass speeds up toward home through the stride, e.g. Fleisig et
+    al. 1999, and carries over the planted lead leg in the follow-through).  The averaged lift can instead drift BACK
+    ~1 ft in the frames before a late foot strike (the pinned pivot toe drags the depth-compressed body
+    back; ground_root's bridge only spans 0.1 s) and then rush forward, which snapped the back knee straight
+    in 2 frames (Misiorowski, Sale); after release it stalled and restarted (Sale).  The y over [ll, ri] is replaced by its running minimum, smoothed with
+    a Gaussian (sigma 3 frames = 0.05 s; smoothing a non-increasing curve keeps it non-increasing) so the
+    flat spot neither starts nor stops with a kink.  Padding is extended linearly at each end's own slope (a
+    Gaussian leaves a line unchanged), so the result meets the input at leg lift and release; the change is
+    held, not dropped, outside [ll, ri].
+    """
+    out = np.zeros(len(py))
+    c, pad = np.minimum.accumulate(py[ll:ri + 1]), 9
+    if len(c) < 2:
+        return out
+    k = np.arange(1, pad + 1)
+    q = np.concatenate([c[0] - (c[1] - c[0]) * k[::-1], c, c[-1] + (c[-1] - c[-2]) * k])
+    out[ll:ri + 1] = gaussian_filter1d(q, 3.0)[pad:-pad] - py[ll:ri + 1]
+    out[:ll], out[ri + 1:] = out[ll], out[ri]
+    return out
+
+
 def correct_to_mean(j_ft: np.ndarray, release_index: int, foot_strike_index: int, throws: str,
                     target: dict, leg_lift_index: int | None = None, knee_reach: float = 0.97,
                     info: dict | None = None, fps: float = 60.0, arm_ease_s: float = 0.45,
@@ -226,6 +251,7 @@ def correct_to_mean(j_ft: np.ndarray, release_index: int, foot_strike_index: int
     4. Back foot: from foot strike it eases toward the body shift over `pivot_ease_s` (so it is still
        catching up through release, as a real back foot drags off the rubber); where the hips run away
        from it, it drags after them (toe height kept), the drag easing in over 0.1 s.
+    4b. Forward only: from leg lift on, the pelvis never moves back toward the rubber (_forward_only).
     5. Arm angle: the throwing arm turns about the shoulder in the catcher's-view (x-z) plane (the plane
        release_values measures it in), eased over the `arm_ease_s` before release (or from foot strike, if
        that is earlier), held after (no snap back).
@@ -313,6 +339,7 @@ def correct_to_mean(j_ft: np.ndarray, release_index: int, foot_strike_index: int
         # (the lowering is done by foot strike: after it the planted lead leg only has the pelvis travel
         # over it, not also a sinking pelvis, which made the knee fold fast)
         j[:, _UPPER, :2] += w_body[:, None, None] * shift[:2]
+        j[:, _UPPER, 1] += _forward_only(j[:, 0, 1], ll, n - 1)[:, None]
         j[:, _UPPER, 2] += (w_lead * shift[2])[:, None]
         # 1. toe targets (the foot, ankle -> toe, moves rigidly with its toe)
         toes = []
