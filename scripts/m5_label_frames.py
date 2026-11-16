@@ -23,12 +23,13 @@ def sheets(d: Path, only: list[str]):
     append `:CX:CY` to crop around a fixed pixel instead of the tracked hips (when tracking failed)."""
     import cv2
     from pitchsim.pose.pose2d import load_pose2d
-    det = pd.read_csv(d / "pose2d.csv").set_index("clip")
     (d / "labels").mkdir(exist_ok=True)
     for arg in only:
         clip, _, rest = arg.partition("@")
         centre, step, *fixed = (rest.split(":") + ["", ""])[:2] + rest.split(":")[2:]
-        centre, step = (int(centre) if centre else int(det.loc[clip, "release_frame"])), int(step or 1)
+        # pose2d.csv only when no frame is given (clip@N works while m5_pose2d is still running)
+        centre = int(centre) if centre else int(pd.read_csv(d / "pose2d.csv").set_index("clip").loc[clip, "release_frame"])
+        step = int(step or 1)
         pose = load_pose2d(d / "pose2d" / clip.replace(".mp4", ".npz"))
         cap = cv2.VideoCapture(str(d / clip))
         tiles = []

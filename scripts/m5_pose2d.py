@@ -18,6 +18,10 @@ df = pd.read_csv(csv)
 df = df[df["status"].isin(["ok", "cached"])]
 # Hand review beats the automatic screen: clips I looked at and found to be the wrong view.
 over = read_labels(csv.parent.name, "screen_overrides").get("reason", pd.Series(dtype=str)).to_dict()
+# The pitcher's arm slot for the screen's wrist-rise bar: median Statcast arm_angle of his TRAIN clips'
+# pitches (test pitches never set a threshold).
+arm = df.loc[df["split"] == "train", "arm_angle"].median() if "arm_angle" in df else None
+arm = None if arm is None or pd.isna(arm) else float(arm)
 rows = []
 shard, n_shards = (int(sys.argv[2]), int(sys.argv[3])) if len(sys.argv) > 3 else (0, 1)
 for k, (_, r) in enumerate(df.iterrows()):
@@ -30,7 +34,7 @@ for k, (_, r) in enumerate(df.iterrows()):
     else:
         p = run_pose2d(r["clip_path"])
         save_pose2d(p, npz)
-    ok, reason = screen(p, r["p_throws"])
+    ok, reason = screen(p, r["p_throws"], arm_angle_deg=arm)
     if name in over:
         ok, reason = False, over[name]
     rows.append(dict(clip=name, ok=ok, reason=reason, release_frame=release_frame(p, r["p_throws"]),

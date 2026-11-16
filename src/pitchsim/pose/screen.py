@@ -9,7 +9,8 @@ from pitchsim.pose.release import wrist_idx
 MIN_SECONDS = 1.0      # a windup+release is ~1.5 s; shorter is a cropped fragment
 MIN_PERSON_FRAC = 0.7  # fraction of frames with a confidently detected body
 CONF = 0.3
-MIN_WRIST_RISE = 0.45  # torso lengths the throwing wrist must rise above the shoulder
+MIN_WRIST_RISE = 0.45  # torso lengths the throwing wrist must rise above the shoulder (at REF_ARM_DEG)
+REF_ARM_DEG = 33.4     # Ohtani's mean Statcast arm angle, the slot the 0.45 was tuned on
 
 
 def _boxes(p: Pose2D):
@@ -25,8 +26,9 @@ def _boxes(p: Pose2D):
     return b, have
 
 
-def screen(p: Pose2D, throws: str) -> tuple[bool, str]:
-    """(ok, reason); reason is '' when ok."""
+def screen(p: Pose2D, throws: str, arm_angle_deg: float | None = None) -> tuple[bool, str]:
+    """(ok, reason); reason is '' when ok.  arm_angle_deg: the pitcher's typical Statcast arm angle (deg);
+    lowers the wrist-rise bar for low arm slots (below).  None keeps the Ohtani-tuned bar."""
     w, h = p.size
     if len(p.xy) < MIN_SECONDS * p.fps:   # why: too short to contain a full delivery
         return False, "short"
@@ -48,7 +50,13 @@ def screen(p: Pose2D, throws: str) -> tuple[bool, str]:
     seen = (p.conf[:, [wr, sh, hip]] > CONF).all(1)
     torso = np.abs(p.xy[:, sh, 1] - p.xy[:, hip, 1])
     seen &= torso > 10
-    if not seen.any() or ((p.xy[:, sh, 1] - p.xy[:, wr, 1])[seen] / torso[seen]).max() < MIN_WRIST_RISE:
+    # Low arm slots: the wrist's rise above the shoulder is ~ arm length x sin(arm angle), so a sidearm-ish
+    # pitcher (Sale, ~11 deg) peaks at ~0.38 on real clips of him pitching.  Scale the bar by
+    # sin(angle) / sin(33.4 deg), never above 0.45 (a higher slot keeps the tuned bar).
+    bar = MIN_WRIST_RISE
+    if arm_angle_deg is not None:
+        bar *= min(1.0, max(np.sin(np.radians(arm_angle_deg)), 0.0) / np.sin(np.radians(REF_ARM_DEG)))
+    if not seen.any() or ((p.xy[:, sh, 1] - p.xy[:, wr, 1])[seen] / torso[seen]).max() < bar:
         return False, "no_pitcher"
     arm = [wrist_idx(throws) - 4, wrist_idx(throws) - 2, wrist_idx(throws)]  # shoulder, elbow, wrist
     if np.median(p.conf[:, arm]) < 0.4:   # why: release-frame detection and later lifting rely on the arm
