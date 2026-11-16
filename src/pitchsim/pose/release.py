@@ -10,6 +10,11 @@ def wrist_idx(throws: str) -> int:
     return 10 if throws == "R" else 9
 
 
+def lead_ankle_idx(throws: str) -> int:
+    """COCO-17 ankle of the lead (glove-side) leg: 15 left for a RHP, 16 right for a LHP."""
+    return 15 if throws == "R" else 16
+
+
 def release_frame(p: Pose2D, throws: str) -> int:
     """Frame of the first major peak of throwing-wrist speed.
 
@@ -53,7 +58,7 @@ def foot_strike_frame(p: Pose2D, throws: str, release: int, tol_torso: float = 0
     "foot flat" label, i.e. near heel contact).  Biomechanics: foot contact -> release is ~0.15-0.2 s in
     pro pitchers (Fleisig et al. 1999), which bounds the window.
     """
-    k = 15 if throws == "R" else 16          # COCO 15 left ankle, 16 right ankle
+    k = lead_ankle_idx(throws)
     a = np.stack([medfilt(p.xy[:, k, d], 5) for d in (0, 1)], 1)
     w = slice(max(release - 30, 0), release)
     torso = np.median(np.linalg.norm(p.xy[w, 5:7].mean(1) - p.xy[w, 11:13].mean(1), axis=1))

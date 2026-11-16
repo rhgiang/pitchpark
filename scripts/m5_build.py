@@ -18,8 +18,8 @@ from pitchsim.data import fetch_heights
 from pitchsim.export import write_json
 from pitchsim.pose.anchor import (anchor, correct_to_mean, lock_feet, mound_z_ft, release_values,
                                   segment_lengths)
-from pitchsim.pose.delivery import (average_delivery, fix_leg_swaps, ground_root, jitter, landmarks, lift_snap,
-                                    phase_smooth, rocker_step)
+from pitchsim.pose.delivery import (average_delivery, fix_leg_swaps, ground_root, has_rocker_step, jitter,
+                                    landmarks, lift_snap, phase_smooth, rocker_step)
 from pitchsim.pose.clips import read_labels
 from pitchsim.pose.joints3d import load_lift
 from pitchsim.pose.pose2d import load_pose2d
@@ -89,7 +89,7 @@ def main():
     ap.add_argument("clips_dir")
     ap.add_argument("--raw", required=True, help="the pitcher's Statcast CSV (data/raw/<id>_....csv)")
     ap.add_argument("--out", default=str(ROOT / "web/public/data/deliveries"))
-    ap.add_argument("--results", default=str(ROOT / "results/m5"))
+    ap.add_argument("--results", default=None, help="default results/m5/<slug>")
     ap.add_argument("--pre-cap", type=float, default=PRE_CAP_S, help="cap on pre_s (s before release)")
     a = ap.parse_args()
     d, slug = Path(a.clips_dir), Path(a.clips_dir).name
@@ -212,9 +212,15 @@ def main():
     # and sits out the average until 0.9 s before the template leg lift, easing in (smootherstep) over the
     # next 0.4 s, well clear of the leg lift: averaging it in would shrink the step, and a sudden change of
     # the clip mix is itself a jump.
-    gap_s = float(np.median([(marks[c]["leg_lift"] - rock[c]) / L[c].fps for c in train if rock[c] is not None]))
-    for c in L:
-        marks[c]["rocker"] = rock[c] if rock[c] is not None else marks[c]["leg_lift"] - int(round(gap_s * L[c].fps))
+    # A pitcher with no rocker step (most of his train clips show none): no knot and no fade; a stray
+    # clip's "step" is lift drift, not his motion (delivery.has_rocker_step).
+    stepper = has_rocker_step([rock[c] for c in train])
+    if not stepper:
+        rock = {c: None for c in L}
+    else:
+        gap_s = float(np.median([(marks[c]["leg_lift"] - rock[c]) / L[c].fps for c in train if rock[c] is not None]))
+        for c in L:
+            marks[c]["rocker"] = rock[c] if rock[c] is not None else marks[c]["leg_lift"] - int(round(gap_s * L[c].fps))
     tmpl_ll_s = float(np.median([(marks[c]["leg_lift"] - rp[c]) / L[c].fps for c in train]))
     def fade(tau):
         u = np.clip((tau - (tmpl_ll_s - 0.9)) / 0.4, 0.0, 1.0)
@@ -224,7 +230,8 @@ def main():
     excl: list = []
     avg_raw, ri = average_delivery([A[c] for c in train], [marks[c] for c in train], pre_s,
                                    fps_out=60.0, post_s=POST_S, excluded=excl,
-                                   weights=[None if rock[c] is not None or snap[c] is not None else fade for c in train],
+                                   weights=[None if not stepper or rock[c] is not None or snap[c] is not None else fade
+                                            for c in train],
                                    valid_from=[snap[c] for c in train])
     short = list(dict.fromkeys(train[i] for i, _ in excl))
     for i, why in excl:
@@ -234,8 +241,8 @@ def main():
     # leg lift / foot strike / rocker step of the template: median offsets before release (s), in output
     # frames (the same medians average_delivery warps to)
     ll_s, fs_s, rk_s = (np.median([(marks[c][k] - marks[c]["release"]) / L[c].fps for c in train_used])
-                        for k in ("leg_lift", "foot_strike", "rocker"))
-    ll, fsi, rki = (int(round(ri + v * 60.0)) for v in (ll_s, fs_s, rk_s))
+                        if k in marks[train_used[0]] else None for k in ("leg_lift", "foot_strike", "rocker"))
+    ll, fsi, rki = (None if v is None else int(round(ri + v * 60.0)) for v in (ll_s, fs_s, rk_s))
     # Extra smoothing before the leg-lift peak only (delivery.phase_smooth): the windup is slow, so the
     # averaged lifts' leftover noise read as a wobble there; the stride and throw keep today's smoothing.
     avg_raw = phase_smooth(avg_raw, 60.0, slow_until=ll)
@@ -298,10 +305,11 @@ def main():
     # plateau), final delivery vs the anchored clips that show a step (before averaging)
     def step_ft(j, l, f):
         return float(np.linalg.norm(j[l - int(round(0.7 * f)), lead, :2] - j[0, lead, :2]))
-    rocker = {"final_step_ft": step_ft(final, ll, 60.0), "final_step_s_before_release": (ri - rki) / 60.0,
+    rocker = {"has_step": stepper, "final_step_ft": step_ft(final, ll, 60.0),
+              "final_step_s_before_release": None if rki is None else (ri - rki) / 60.0,
               "clips_step_ft_median": float(np.median([step_ft(A[c], marks[c]["leg_lift"], L[c].fps)
-                                                       for c in train_used if rock[c] is not None])),
-              "clips_step_s_before_release_median": -rk_s,
+                                                       for c in train_used if rock[c] is not None])) if stepper else None,
+              "clips_step_s_before_release_median": None if rk_s is None else -rk_s,
               "clips_with_step": [c for c in train_used if rock[c] is not None],
               "clips_without_step": [c for c in train_used if rock[c] is None]}
     repairs = {c: {"legs_swapped_frames": n_swapped[c], "snap_s_before_release": None if snap[c] is None
@@ -327,7 +335,7 @@ def main():
                    "arm_angle_deg": round(rv["arm_angle_deg"], 2), "split": str(split[c]),
                    "screen": screen_of.get(c, "ok")}
     write_json(info, out / f"{slug}.clips.json")
-    res = Path(a.results)
+    res = Path(a.results) if a.results else ROOT / "results/m5" / slug  # per pitcher: builds don't overwrite
     res.mkdir(parents=True, exist_ok=True)
     metrics.to_csv(res / "metrics.csv", index=False)
     write_json({"target": target, "before": rv_avg, "after": rv_fin, "applied": cinfo,
@@ -363,9 +371,13 @@ def main():
         print(f"  planted {nm} toe: drift {v['drift_ft'] * 12:.4f} in, height error {v['height_err_ft'] * 12:.4f} in")
     ext = {c.replace(".mp4", ""): round(own_anchor(c)[1]["extension_ft"], 2) for c in clean_clips}
     print("  lift repairs (leg swaps undone; snap = clip used only after it):", repairs)
-    print(f"  rocker step: final {rocker['final_step_ft']:.2f} ft, knot {rocker['final_step_s_before_release']:.2f} s "
-          f"before release; clips' median {rocker['clips_step_ft_median']:.2f} ft; "
-          f"{len(rocker['clips_with_step'])} train clips with a step, without: {rocker['clips_without_step']}")
+    if stepper:
+        print(f"  rocker step: final {rocker['final_step_ft']:.2f} ft, knot {rocker['final_step_s_before_release']:.2f} s "
+              f"before release; clips' median {rocker['clips_step_ft_median']:.2f} ft; "
+              f"{len(rocker['clips_with_step'])} train clips with a step, without: {rocker['clips_without_step']}")
+    else:
+        print(f"  rocker step: none (most train clips show no step); lead toe moved {rocker['final_step_ft']:.2f} ft "
+              f"by leg lift - 0.7 s in the final")
     print("\nper-clip extension BEFORE correction (ft, label-1):", ext)
     for nm, g in (("IN-SAMPLE", lab[lab["fresh"] == "no"]), ("FRESH", lab[lab["fresh"] == "yes"])):
         print(f"\nrelease detector vs labels {nm}: n={len(g)} median|err|={g['err'].abs().median()} "

@@ -117,6 +117,18 @@ def rocker_step(j: np.ndarray, throws: str, leg_lift: int, fps: float, up: np.nd
     return int(np.argmax(along >= 0.5 * size))
 
 
+def has_rocker_step(steps: list, min_frac: float = 0.5) -> bool:
+    """Does the pitcher take a rocker step?  `steps`: per train clip, `rocker_step`'s frame or None.
+
+    Yes when at least `min_frac` of the clips show one.  Why a vote: the step is a habit of the pitcher
+    (Ohtani: 9 of 14 train clips; the rest were lifts that missed it), while a pitcher with no step can
+    still have a stray clip whose lift drifts the lead toe 0.6 ft.  With no step, the build drops the
+    rocker knot and the windup fade (both exist only to line steps up and keep step-less clips from
+    shrinking them).
+    """
+    return len(steps) > 0 and sum(s is not None for s in steps) >= min_frac * len(steps)
+
+
 def jitter(j: np.ndarray, fps: float) -> float:
     """RMS over joints and frames of the third time-difference (jerk), in units/s^3.
     Noise is amplified hard by differencing, so this is a sensitive jitter meter."""

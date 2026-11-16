@@ -282,3 +282,13 @@ def test_phase_smooth_calms_the_slow_windup_but_keeps_fast_motion():
     after = np.sqrt(np.mean((out[:80] - clean[:80]) ** 2))
     assert after < 0.5 * before
     assert np.abs(out[100:] - noisy[100:]).max() < 1e-3
+
+
+def test_has_rocker_step_needs_most_clips_to_show_one():
+    # A pitcher with no rocker step (Misiorowski) may still have a stray clip whose lift "steps"; one
+    # clip must not create a step knot for everybody (and fade every step-less clip out of the windup).
+    from pitchsim.pose.delivery import has_rocker_step
+    assert has_rocker_step([20, 22, None, 19])
+    assert not has_rocker_step([None, 30, None, None, None])
+    assert not has_rocker_step([None] * 5)
+    assert not has_rocker_step([])

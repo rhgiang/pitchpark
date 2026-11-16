@@ -84,3 +84,9 @@ def test_foot_strike_frame_none_when_foot_never_settles():
     p, r = stride()
     p.xy[:, 15, 0] += 10 * np.arange(120)  # still sliding 10 px/frame at release: no plant to find
     assert foot_strike_frame(p, "R", r) is None
+
+
+def test_lead_ankle_is_the_glove_side_ankle():
+    # A LHP strides with his RIGHT foot (COCO 16); scripts that draw/score foot strike use this helper.
+    from pitchsim.pose.release import lead_ankle_idx
+    assert lead_ankle_idx("R") == 15 and lead_ankle_idx("L") == 16
