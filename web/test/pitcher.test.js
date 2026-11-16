@@ -285,14 +285,15 @@ test("a dragging back foot out of the rig's reach does not sink the body into th
   assert.ok(minPelvis > 2.5, `pelvis down to ${minPelvis.toFixed(2)} ft above the mound`);
   assert.ok(minArm > 0.25, `an arm joint down to ${minArm.toFixed(2)} ft above the mound`);
   // ...and the dragged toe slides along the mound (pulled in horizontally) instead of being lifted
-  // toward the hip (2.2 ft up before): it is held level at about the ankle's height (0.29 ft).
+  // toward the hip (2.2 ft up before), the whole foot moved with its ankle so the toe stays down:
+  // 0.06 ft is the rig's toe clearance, + 0.09 ft slack for the soft reach's easing.
   let maxToe = 0;
   for (let i = 24; i <= 120; i++) {
     poseAtTime(fig, dragged, i / 240, null, 45);
     const p = fig.userData.bones[J.right_foot].getWorldPosition(new Vector3());
     maxToe = Math.max(maxToe, p.y - groundHeightFt(p.x, -p.z));
   }
-  assert.ok(maxToe < 0.35, `dragged toe ${maxToe.toFixed(2)} ft above the mound`);
+  assert.ok(maxToe < 0.15, `dragged toe ${maxToe.toFixed(2)} ft above the mound`);
 });
 
 test("a release at full reach does not flip the upper arm's roll as the elbow bends again", () => {

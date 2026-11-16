@@ -512,7 +512,9 @@ export function poseAtTime(figure, delivery, t, release, armAngleDeg) {
     p[ankle] = leg.end;
     // Toe on its target (exactly, when the leg reached), lifted if it would dig into the mound.
     const len = FOOT_FT * k;
-    const dir = target.toe.clone().sub(p[ankle]).setLength(len);
+    // The toe moves with its ankle when the leg could not reach (a dragging foot pulled in): the foot
+    // keeps its shape and its toe stays on the mound instead of tilting up toward a target left behind.
+    const dir = target.toe.clone().add(reachTo).sub(target.ankle).sub(p[ankle]).setLength(len);
     const dy = groundY(p[ankle]) + 0.06 * k - p[ankle].y; // lowest allowed toe drop (negative)
     if (dir.y < dy) {
       const flat = Math.hypot(dir.x, dir.z) || 1;
