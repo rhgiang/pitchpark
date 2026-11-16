@@ -118,8 +118,9 @@ each time. The exported JSON is gitignored.
 
 ## M5: the moving pitcher
 
-**Status: done for one pitcher (Ohtani); "done when" needs more pitchers.** The viewer has a 3D
-pitcher whose delivery is rebuilt from broadcast video and anchored to Statcast's release. Numbers,
+**Status: three pitchers (Ohtani, Misiorowski, Sale: both hands).** Release x/z and arm slot are stated on
+held-out games for all three; extension is not recoverable from this camera and is constructed. The viewer
+has a 3D pitcher whose delivery is rebuilt from broadcast video and anchored to Statcast's release. Numbers,
 and what is still wrong (extension cannot be seen from a front-on camera), are in
 [`results/M5.md`](results/M5.md).
 
