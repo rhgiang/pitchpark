@@ -220,10 +220,22 @@ const HINGE_OF = Object.fromEntries(HINGES.flatMap(([a, b, c, flex]) => {
  * roll for both bones. The plane is undefined when the limb is straight: there the bone fades
  * back to the smallest swing (weight by how bent it is, sin of the bend from 0.1 to 0.4).
  */
-function hingeRotation(pts, i, swing) {
+function hingeRotation(pts, i, swing, hint = null) {
   const [a, b, c, nRest] = HINGE_OF[i];
-  const n = pts[b].clone().sub(pts[a]).normalize().cross(pts[c].clone().sub(pts[b]).normalize());
-  const w = smoothstep((n.length() - 0.1) / 0.3);
+  const plane = (q) => q[b].clone().sub(q[a]).normalize().cross(q[c].clone().sub(q[b]).normalize());
+  let n = plane(pts);
+  let w = smoothstep((n.length() - 0.1) / 0.3);
+  // A straight arm has no hinge plane. When `hint` (the delivery's own joints) has a bent elbow,
+  // its plane stands in, rather than the smallest swing: the release IK straightens Misiorowski's
+  // arm at t = 0 (release at full reach) and, as it bent again, the roll jumped from the swing's to
+  // the hinge's, 58 deg in 1/240 s.
+  if (hint && w < 1) {
+    const nh = plane(hint), wh = smoothstep((nh.length() - 0.1) / 0.3);
+    if (wh > 0) {
+      n = n.normalize().multiplyScalar(w).addScaledVector(nh.normalize(), 1 - w);
+      w += (1 - w) * wh;
+    }
+  }
   if (w === 0) return swing;
   const kid = i === a ? b : c;
   const basis = (d, nn) => new THREE.Matrix4().makeBasis(d, nn, d.clone().cross(nn));
@@ -245,7 +257,7 @@ function hingeRotation(pts, i, swing) {
  * are not length-consistent (an averaged video delivery) bend the rig without stretching it.
  * `scale` is the figure's (Group) scale: bone offsets are in rest units, `pts` in world feet.
  */
-function setBones(bones, pts, scale = 1) {
+function setBones(bones, pts, scale = 1, hint = null) {
   const world = [];
   JOINTS.forEach((j, i) => {
     const parent = j.parent < 0 ? new THREE.Quaternion() : world[j.parent];
@@ -255,7 +267,7 @@ function setBones(bones, pts, scale = 1) {
     else if (k.length === 1) {
       const from = REST[k[0]].clone().sub(REST[i]).normalize().applyQuaternion(parent);
       q = new THREE.Quaternion().setFromUnitVectors(from, dirTo(pts, i, k[0])).multiply(parent);
-      if (HINGE_OF[i]) q = hingeRotation(pts, i, q);
+      if (HINGE_OF[i]) q = hingeRotation(pts, i, q, hint);
     } else q = frame(pts, i).multiply(frame(REST, i).invert());
     world[i] = q;
     bones[i].quaternion.copy(parent.clone().invert().multiply(q));
@@ -375,6 +387,24 @@ function footTarget(src, sd, k) {
 }
 
 /**
+ * How planted a foot is at each delivery frame (1 planted, 0 moving): 1 below 1.0 ft/s of
+ * horizontal toe speed, 0 above 2.5 ft/s, smoothstep between -- the band lock_feet uses on the
+ * averaged deliveries (src/pitchsim/pose/anchor.py; a planted toe there is ~0, a swinging or
+ * dragging one >> 3 ft/s). Speed: central difference, then a 3-frame mean, as in lock_feet.
+ */
+function plantWeights(delivery, toe) {
+  const fr = delivery.joints_ft, n = fr.length, fps = delivery.fps;
+  const v = fr.map((_, i) => {
+    const a = fr[Math.max(0, i - 1)][toe], b = fr[Math.min(n - 1, i + 1)][toe];
+    return (Math.hypot(b[0] - a[0], b[1] - a[1]) * fps) / (Math.min(n - 1, i + 1) - Math.max(0, i - 1));
+  });
+  return v.map((_, i) => {
+    const s = v.slice(Math.max(0, i - 1), i + 2);
+    return 1 - smoothstep((s.reduce((x, y) => x + y) / s.length - 1.0) / 1.5);
+  });
+}
+
+/**
  * How far (ft) to lower the pelvis at each delivery frame so the rig's legs reach the delivery's
  * ankles. The video skeleton's legs (and its pelvis-to-hip drop) are ~0.3 ft longer than the
  * stylised rig's, so with the pelvis where the video has it the planted pivot foot would float
@@ -386,30 +416,44 @@ function pelvisDrops(figure, delivery) {
   if (ud.dropsFor === delivery) return ud.drops;
   const k = ud.scale;
   const R = 0.9995 * LEG_FT * k; // straight leg (twoBone straightens at 0.9999)
-  const raw = delivery.joints_ft.map((fr) => {
+  const planted = { left: plantWeights(delivery, J.left_foot), right: plantWeights(delivery, J.right_foot) };
+  const raw = delivery.joints_ft.map((fr, i) => {
     const src = fr.map(toScene);
     setBones(ud.bones, src, k);
     const p = jointPositions(figure);
     return Math.max(0, ...["left", "right"].map((sd) => {
       const d = p[J[`${sd}_hip`]].clone().sub(footTarget(src, sd, k).ankle);
       const h = Math.hypot(d.x, d.z);
-      return h < R ? d.y - Math.sqrt(R * R - h * h) : d.y; // drop that brings the ankle into reach
+      // Drop that brings the ankle into reach, only for a planted foot. Why: a moving foot (the
+      // back foot dragging off the rubber, a swinging lead foot) can sit further from the hip than
+      // the rig's shorter leg reaches -- horizontally, where no drop is enough -- and lowering the
+      // pelvis to its ankle put Misiorowski's hands and ball ~1.2 ft into the dirt. The leg just
+      // straightens toward a foot that is moving; the weight fades in as the foot slows to a plant.
+      return planted[sd][i] * (h < R ? d.y - Math.sqrt(R * R - h * h) : d.y);
     }));
   });
   // Smooth the pelvis HEIGHT, not just the drop: the video's own pelvis height jitters near
   // release (blur: +-0.15 ft frame to frame), and "lower by just enough" passed that through
   // as a bounce. top[i] is the highest the pelvis may be (the video's height, or lower if the
-  // legs would not reach). Min over +-W, then two box means over +-W/2 (a triangle kernel, so
-  // the height's velocity is continuous): each smoothed value averages minima whose windows all
-  // contain the frame, so it is never above top[i] and the legs always reach. W = 0.18 s:
-  // wide enough to remove the release jitter, short enough that the pelvis does not start its
-  // stride descent visibly early (a min filter leads the motion by up to W).
+  // legs would not reach). The height is top smoothed by two box means over +-W/2 (a triangle
+  // kernel, so its velocity is continuous), then lowered wherever that ends up above top by an
+  // envelope of the excess: max over +-W, then the same two means -- each value averages maxima
+  // whose windows all contain the frame, so it is >= the excess there and the legs always reach.
+  // Why not a min filter of top over +-W (as before): that leads the motion by up to W, so a
+  // pelvis rising fast over the lead leg after release (Misiorowski: 1.4 ft in 0.15 s) was held
+  // at its lowest height ~0.18 s too long, ~1.1 ft too low, with the arm in the dirt. Smoothing
+  // the height itself follows the motion; only the (small) jitter excess is held down.
+  // W = 0.18 s: wide enough to remove the release jitter.
   const vid = delivery.joints_ft.map((fr) => fr[J.pelvis][2]);
   const top = raw.map((r, i) => vid[i] - r);
   const W = Math.round(0.18 * delivery.fps), h = Math.floor(W / 2); // 2h <= W keeps the guarantee
   const around = (a, i, r) => a.slice(Math.max(0, i - r), i + r + 1);
   const mean = (a) => a.map((_, i) => around(a, i, h).reduce((s, v) => s + v) / around(a, i, h).length);
-  ud.drops = mean(mean(top.map((_, i) => Math.min(...around(top, i, W))))).map((y, i) => vid[i] - y);
+  const smooth = mean(mean(top));
+  const excess = smooth.map((y, i) => Math.max(0, y - top[i]));
+  const lower = mean(mean(excess.map((_, i) => Math.max(...around(excess, i, W)))));
+  ud.drops = smooth.map((y, i) => vid[i] - (y - lower[i]));
+  ud.planted = planted;
   ud.dropsFor = delivery;
   return ud.drops;
 }
@@ -433,7 +477,8 @@ function pelvisDrops(figure, delivery) {
  */
 export function poseAtTime(figure, delivery, t, release, armAngleDeg) {
   const { bones, throws, scale: k } = figure.userData;
-  const drop = atTime(delivery, pelvisDrops(figure, delivery), t, (v, w) => v.reduce((s, x, k) => s + x * w[k], 0));
+  const scalar = (v, w) => v.reduce((s, x, k) => s + x * w[k], 0);
+  const drop = atTime(delivery, pelvisDrops(figure, delivery), t, scalar);
   const src = deliveryFrame(delivery, t);
   setBones(bones, src, k);
   const p = jointPositions(figure).map((v) => v.setY(v.y - drop));
@@ -444,7 +489,25 @@ export function poseAtTime(figure, delivery, t, release, armAngleDeg) {
     // Pole: the delivery's knee off its hip-ankle midpoint. When the leg is nearly straight this
     // is short and noisy, but then the knee sits on the line whatever its direction.
     const pole = src[knee].clone().sub(src[hip].clone().add(src[ankle]).multiplyScalar(0.5));
-    const leg = twoBone(p[hip], target.ankle, k * segFt(`${sd}_hip`, `${sd}_knee`), k * segFt(`${sd}_knee`, `${sd}_ankle`), pole);
+    const [thigh, shin] = [k * segFt(`${sd}_hip`, `${sd}_knee`), k * segFt(`${sd}_knee`, `${sd}_ankle`)];
+    // A foot that is not planted gets no pelvis drop (pelvisDrops), so its leg may not reach it;
+    // its reach eases toward 0.99 of the leg past 0.97 (tanh, as _soft_limit in anchor.py) instead
+    // of straightening at full length. Why: near full extension the knee angle changes without
+    // bound per unit of reach, so a back foot starting to drag snapped the knee 135 -> 178 deg in
+    // 1/60 s. Blended by the plant weight, so a planted foot still lands exactly on its toe.
+    const off = target.ankle.clone().sub(p[hip]), want = off.length();
+    const s0 = 0.97 * (thigh + shin), span = 0.02 * (thigh + shin);
+    const soft = want > s0 ? s0 + span * Math.tanh((want - s0) / span) : want;
+    const pw = atTime(delivery, figure.userData.planted[sd], t, scalar);
+    const eff = pw * want + (1 - pw) * soft;
+    // Pull the foot in horizontally, at its own height, rather than toward the hip: a back foot
+    // dragging on its toe stays on the mound instead of lifting ~1 ft off it. If the hip is so high
+    // that even a leg straight down is short, it hangs straight down (continuous at eff = |dy|).
+    const flat = Math.hypot(off.x, off.z);
+    const reachTo = eff >= Math.abs(off.y)
+      ? V(off.x * Math.sqrt(eff * eff - off.y * off.y) / Math.max(flat, 1e-9), off.y, off.z * Math.sqrt(eff * eff - off.y * off.y) / Math.max(flat, 1e-9)).add(p[hip])
+      : p[hip].clone().add(V(0, -eff, 0));
+    const leg = twoBone(p[hip], reachTo, thigh, shin, pole);
     p[knee] = leg.mid;
     p[ankle] = leg.end;
     // Toe on its target (exactly, when the leg reached), lifted if it would dig into the mound.
@@ -478,7 +541,7 @@ export function poseAtTime(figure, delivery, t, release, armAngleDeg) {
       p[c] = p[i].clone().addScaledVector(from[n].clone().applyQuaternion(new THREE.Quaternion().slerp(q, w)), len);
     });
   }
-  setBones(bones, p, k);
+  setBones(bones, p, k, src);
   figure.userData.armAngleDeg = armAngleDeg;
   applyGaze(figure, gazeWeight(t));
   figure.updateMatrixWorld(true);
