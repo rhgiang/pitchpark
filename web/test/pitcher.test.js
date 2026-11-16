@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { Vector3, Quaternion, Line3 as THREE_Line } from "three";
 import { readFileSync } from "node:fs";
 import { JOINTS, J } from "../src/skeleton.js";
-import { makePitcher, poseAtRelease, poseAtTime, handPosition } from "../src/pitcher.js";
+import { makePitcher, poseAtRelease, poseAtTime, handPosition, blendDirection } from "../src/pitcher.js";
 import { toScene } from "../src/coords.js";
 import { groundHeightFt } from "../src/field.js";
 
@@ -372,4 +372,21 @@ test("gaze: without a delivery the static release pose looks at the target too",
     poseAtRelease(fig, [x, 54.5, 5.6], 35);
     assertLooks(gaze(fig), `${throws}HP static`);
   }
+});
+
+test("blendDirection: a goal nearly opposite the start does not flip the turn between neighbouring inputs", () => {
+  // SYNTHETIC: Sale's upper arm and the IK arm are ~170 deg apart in the whip; moving the start a hair either
+  // side of exactly opposite must not move the blended direction by more than the hair does (the slerp's
+  // axis flipped, moving it ~2 * w * 170 deg).
+  const goal = new Vector3(1, 0, 0);
+  const a = new Vector3(-1, 0, 0.02).normalize();
+  const b = new Vector3(-1, 0, -0.02).normalize();
+  for (const w of [0.05, 0.1, 0.2]) {
+    const jump = blendDirection(a, goal, w).angleTo(blendDirection(b, goal, w)) * 180 / Math.PI;
+    assert.ok(jump < 5, `w=${w}: ${jump.toFixed(1)} deg`);
+  }
+  // away from opposite it is the usual blend: w = 0 / 1 give the ends, and a small turn is on the arc
+  const x = new Vector3(1, 0, 0), y = new Vector3(0, 1, 0);
+  assert.ok(blendDirection(x, y, 0).distanceTo(x) < 1e-9 && blendDirection(x, y, 1).distanceTo(y) < 1e-9);
+  assert.ok(Math.abs(blendDirection(x, y, 0.5).angleTo(x) * 180 / Math.PI - 45) < 1e-6);
 });

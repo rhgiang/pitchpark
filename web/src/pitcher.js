@@ -458,6 +458,24 @@ function pelvisDrops(figure, delivery) {
   return ud.drops;
 }
 
+
+/**
+ * The unit direction a fraction w of the way from unit `from` to unit `goal`.
+ * Normalised lerp, not a great-circle slerp: Sale's upper arm points at the centre-field camera in the
+ * whip (t ~ -0.12 s) while the IK arm reaching for the release points the other way (~170 deg apart), and
+ * there the shortest arc's axis flips sign from one 1/240 s step to the next (a 25-45 deg jump of the
+ * bone).  The lerp is smooth wherever the two are not exactly opposite at w = 1/2, and equals the slerp to
+ * first order for the small turns of every other pitcher / phase.
+ */
+export function blendDirection(from, goal, w) {
+  const dir = from.clone().lerp(goal, w);
+  if (dir.lengthSq() < 1e-6) { // exactly opposite at w = 1/2: only then is a turn axis needed
+    const q = new THREE.Quaternion().setFromUnitVectors(from, goal);
+    return from.clone().applyQuaternion(new THREE.Quaternion().slerp(q, w)).normalize();
+  }
+  return dir.normalize();
+}
+
 /**
  * Pose the figure from a recovered delivery (M5 JSON) at t s from release (t = 0).
  *
@@ -539,8 +557,8 @@ export function poseAtTime(figure, delivery, t, release, armAngleDeg) {
     const from = chain.map(([i, c]) => p[c].clone().sub(p[i]).normalize()); // the delivery's arm
     chain.forEach(([i, c, len], n) => {
       const goal = to[n + 1].clone().sub(to[n]).normalize();
-      const q = new THREE.Quaternion().setFromUnitVectors(from[n], goal);
-      p[c] = p[i].clone().addScaledVector(from[n].clone().applyQuaternion(new THREE.Quaternion().slerp(q, w)), len);
+      const dir = blendDirection(from[n], goal, w);
+      p[c] = p[i].clone().addScaledVector(dir, len);
     });
   }
   setBones(bones, p, k, src);
