@@ -125,6 +125,8 @@ and what is still wrong (extension cannot be seen from a front-on camera), are i
 [`results/M5.md`](results/M5.md).
 Dylan Cease (fourth) is built and in the viewer, but from only 5 train clips and 1 held-out clip (6 of 38
 usable). His 2D score is above both noise floors, so treat his numbers as a spot check.
+Michael King (fifth) is built and in the viewer from only 2 train clips and 1 held-out clip (3 of 40 usable:
+the screen passed 22 clips and 18 were the wrong view). Spot check only; his 2D score matches the 2D noise floor.
 
 **Clips are for personal research only: never commit or redistribute them.** `data/` is gitignored,
 and the viewer's compare page plays a clip from a file picker without serving or uploading it.
