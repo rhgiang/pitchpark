@@ -220,3 +220,38 @@ def test_lock_feet_holds_the_toe_when_the_heel_moves():
     p[:, 7, 0] += 0.2 * np.sin(np.linspace(0, np.pi, n))
     out = lock_feet(p, 60.0)
     assert np.ptp(out[:, 10, :2], axis=0).max() < 0.002
+
+
+# SMPL left/right joint pairs (hip, knee, ankle, toe, collar, shoulder, elbow, wrist, hand)
+_PAIRS = [(1, 2), (4, 5), (7, 8), (10, 11), (13, 14), (16, 17), (18, 19), (20, 21), (22, 23)]
+
+
+def _mirror(j):
+    """Left-right mirror in Statcast ft: x -> -x and every left joint swapped with its right one, so a
+    right-hander's delivery becomes the same delivery thrown left-handed (a real body, not inside-out)."""
+    m = np.array(j, float)
+    m[..., 0] *= -1
+    for a, b in _PAIRS:
+        m[:, [a, b]] = m[:, [b, a]]
+    return m
+
+
+@pytest.mark.parametrize("kind", GAPS)
+def test_correct_to_mean_lefty_is_the_mirror_of_the_righty(kind):
+    """SYNTHETIC: a LHP (Sale, the first on real data) mirrored from the RHP case must come out as the
+    mirror of the RHP result: same release values with x negated, same body.  Catches any step that
+    assumes the throwing arm or the pivot foot is on the right."""
+    j, out_r, target_r = _corrected(kind)
+    target_l = dict(target_r, release_x_ft=-target_r["release_x_ft"])
+    out_l = correct_to_mean(_mirror(j), RI, FS, "L", target_l, leg_lift_index=LL)
+    got = release_values(out_l, RI, "L")
+    assert abs(got["release_x_ft"] - target_l["release_x_ft"]) < 0.05
+    assert abs(got["arm_angle_deg"] - target_l["arm_angle_deg"]) < 1.0
+    assert np.allclose(out_l, _mirror(out_r), atol=1e-6)
+
+
+def test_anchor_lefty_puts_the_left_toe_on_the_rubber():
+    """SYNTHETIC: a LHP's pivot foot is his LEFT foot (SMPL toe 10)."""
+    j, up = _rotated(_figure())
+    out = anchor(j, up, 6.25, "L", release_index=15)
+    assert np.allclose(out[0, 10], [0, RUBBER_Y, MOUND_Z], atol=0.01)
