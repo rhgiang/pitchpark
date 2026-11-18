@@ -21,20 +21,20 @@ class LogisticSeq:
     CountBaseline.
     """
 
-    def __init__(self, types: list[str], C: float = 1.0):
-        self.types, self.C = list(types), C
+    def __init__(self, types: list[str], C: float = 1.0, features: list[str] = FEATURES):
+        self.types, self.C, self.features = list(types), C, list(features)
 
     def fit(self, train: pd.DataFrame) -> "LogisticSeq":
         self.model = make_pipeline(OneHotEncoder(handle_unknown="ignore"),
                                    LogisticRegression(C=self.C, max_iter=2000))
-        self.model.fit(train[FEATURES], train["pitch_type"])
+        self.model.fit(train[self.features], train["pitch_type"])
         return self
 
     def predict(self, df: pd.DataFrame) -> np.ndarray:
         """(len(df), n_types) probabilities over self.types; rows sum to 1."""
         out = np.zeros((len(df), len(self.types)))
         col = [self.types.index(c) for c in self.model.classes_]
-        out[:, col] = self.model.predict_proba(df[FEATURES])
+        out[:, col] = self.model.predict_proba(df[self.features])
         # ponytail: a type absent from this fold's training games gets a 1e-4 floor; a real
         # prior (like CountBaseline's +1) if rare pitch types ever matter.
         out = np.maximum(out, 1e-4)

@@ -27,6 +27,11 @@ PITCHERS = {"Ohtani": 660271, "Misiorowski": 694819, "Sale": 519242}
 # model name -> (class, hyperparameter grid)
 MODELS = {"count": (lambda t, h: CountBaseline(t, a=h), [0.3, 1, 3, 10, 30, 100]),
           "logistic": (lambda t, h: LogisticSeq(t, C=h), [0.01, 0.03, 0.1, 0.3, 1, 3])}
+# Ablations: the logistic model with one feature removed. The loss it gains back over "logistic"
+# is what that feature was worth. Printed, not plotted.
+for drop in ["count", "stand", "prev_type"]:
+    keep = [f for f in ["count", "stand", "prev_type"] if f != drop]
+    MODELS[f"logistic_no_{drop}"] = (lambda t, h, k=keep: LogisticSeq(t, C=h, features=k), [0.03, 0.1, 0.3, 1, 3])
 K = 5
 OUT = Path(__file__).resolve().parents[1] / "results"
 SEED = 0
@@ -84,11 +89,17 @@ def main() -> None:
         "folds_beat_count": f"{(g.logloss_logistic < g.logloss_count).sum()}/{len(g)}",
         "C_chosen": ",".join(f"{x:g}" for x in g.logistic_hparam)}))
     print(summary.round(4).to_string())
-    big = pd.concat(rel_rows).query("n >= 100")
+    abl = [m for m in MODELS if m.startswith("logistic_no_")]
+    worth = res.groupby("pitcher", sort=False).apply(lambda g: pd.Series(
+        {m.removeprefix("logistic_no_"): wavg(g, f"logloss_{m}") - wavg(g, "logloss_logistic") for m in abl}))
+    print("\nlog loss added by removing each feature from the logistic model (its worth):")
+    print(worth.round(4).to_string())
+    big = pd.concat(rel_rows).query("n >= 100 and model in ['count', 'logistic']")
     print("\nlargest calibration gap in bins with n >= 100:")
     print((big.observed - big.mean_pred).abs().groupby([big.pitcher, big.model]).max().round(3).to_string())
-    fig, axes = plt.subplots(1, len(MODELS), figsize=(4.5 * len(MODELS), 4.5), sharey=True)
-    for ax, m in zip(axes, MODELS):
+    shown = ["count", "logistic"]
+    fig, axes = plt.subplots(1, len(shown), figsize=(4.5 * len(shown), 4.5), sharey=True)
+    for ax, m in zip(axes, shown):
         ax.plot([0, 1], [0, 1], "k:", lw=1)
         for name in PITCHERS:
             r = curves[(name, m)].query("n >= 30")   # tiny bins are noise
