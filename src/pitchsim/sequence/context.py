@@ -16,4 +16,13 @@ def add_context(df: pd.DataFrame) -> pd.DataFrame:
     first = d["pitch_number"] == d.groupby(["game_pk", "at_bat_number"])["pitch_number"].transform("min")
     d["prev_type"] = prev.fillna("unknown").where(~first, START)
     d["count"] = d["balls"].astype(int).astype(str) + "-" + d["strikes"].astype(int).astype(str)
+    # The rest are categorical bins so the one-hot logistic can bend freely without a functional
+    # form. Bin edges are judgement calls, not tuned.
+    # Fatigue: the pitcher's pitch number in this game (he is the only pitcher in these CSVs).
+    n = d.groupby("game_pk").cumcount()
+    d["pitch_of_game"] = pd.cut(n, [-1, 24, 49, 74, 99, 10_000], labels=["0-24", "25-49", "50-74", "75-99", "100+"]).astype(str)
+    d["tto"] = d["n_thruorder_pitcher"].clip(upper=3).astype("Int64").astype(str)   # 3 = third time or later
+    d["outs"] = d["outs_when_up"].astype(int).astype(str)
+    d["runners"] = (d[["on_1b", "on_2b", "on_3b"]].notna().astype(int).astype(str)).agg("".join, axis=1)  # "101" = 1st & 3rd
+    d["score_diff"] = (d["fld_score"] - d["bat_score"]).clip(-3, 3).astype(int).astype(str)          # + = pitcher's team ahead
     return d

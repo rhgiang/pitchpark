@@ -20,13 +20,19 @@ import pandas as pd
 from pitchsim.data import RAW_DIR, load_seasons
 from pitchsim.sequence.baseline import CountBaseline, log_loss, reliability
 from pitchsim.sequence.context import add_context
-from pitchsim.sequence.logistic import LogisticSeq
+from pitchsim.sequence.logistic import FEATURES, LogisticSeq
 from pitchsim.validation import split_by_game
 
 PITCHERS = {"Ohtani": 660271, "Misiorowski": 694819, "Sale": 519242}
 # model name -> (class, hyperparameter grid)
 MODELS = {"count": (lambda t, h: CountBaseline(t, a=h), [0.3, 1, 3, 10, 30, 100]),
           "logistic": (lambda t, h: LogisticSeq(t, C=h), [0.01, 0.03, 0.1, 0.3, 1, 3])}
+# Additions: the logistic model with one more context feature. Its loss drop is what that feature adds.
+EXTRA = ["pitch_of_game", "tto", "outs", "runners", "score_diff"]
+for add in EXTRA:
+    MODELS[f"logistic_plus_{add}"] = (lambda t, h, a=add: LogisticSeq(t, C=h, features=FEATURES + [a]), [0.1, 0.3, 1, 3])
+MODELS["logistic_fatigue"] = (lambda t, h: LogisticSeq(t, C=h, features=FEATURES + ["pitch_of_game", "tto"]), [0.1, 0.3, 1, 3])
+MODELS["logistic_all"] = (lambda t, h: LogisticSeq(t, C=h, features=FEATURES + EXTRA), [0.03, 0.1, 0.3, 1, 3])
 # Ablations: the logistic model with one feature removed. The loss it gains back over "logistic"
 # is what that feature was worth. Printed, not plotted.
 for drop in ["count", "stand", "prev_type"]:
@@ -94,6 +100,14 @@ def main() -> None:
         {m.removeprefix("logistic_no_"): wavg(g, f"logloss_{m}") - wavg(g, "logloss_logistic") for m in abl}))
     print("\nlog loss added by removing each feature from the logistic model (its worth):")
     print(worth.round(4).to_string())
+    plus = [m for m in MODELS if m.startswith("logistic_plus_")] + ["logistic_fatigue", "logistic_all"]
+    adds = res.groupby("pitcher", sort=False).apply(lambda g: pd.Series(
+        {m.removeprefix("logistic_plus_"): wavg(g, "logloss_logistic") - wavg(g, f"logloss_{m}") for m in plus}))
+    print("\nlog loss saved by adding each feature to the logistic model (+ = helps):")
+    print(adds.round(4).to_string())
+    wins = res.groupby("pitcher", sort=False).apply(lambda g: pd.Series(
+        {m.removeprefix("logistic_plus_"): f"{(g[f'logloss_{m}'] < g.logloss_logistic).sum()}/{len(g)}" for m in plus}))
+    print("folds where it beats logistic:"); print(wins.to_string())
     big = pd.concat(rel_rows).query("n >= 100 and model in ['count', 'logistic']")
     print("\nlargest calibration gap in bins with n >= 100:")
     print((big.observed - big.mean_pred).abs().groupby([big.pitcher, big.model]).max().round(3).to_string())
