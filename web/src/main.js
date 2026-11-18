@@ -14,7 +14,8 @@ import {
 import { makeTube, updateTube } from "./trail.js";
 import { makeBall, makeGhost, updateBall, spinBall } from "./ball.js";
 import { renderHud, buildStrip } from "./hud.js";
-import { makePitcher, boneLengths, poseAtRelease, poseAtTime, handPosition } from "./pitcher.js";
+import { boneLengths } from "./pitcher.js";
+import { pitcherApi } from "./signed_off/index.js"; // Ohtani keeps his signed-off pose code
 import { buildPark } from "./park/index.js";
 import { initLook, setTimeOfDay, refreshShadows, inkProof, timeOfDay, TIMES } from "./look.js";
 import { showMenu } from "./menu.js";
@@ -216,7 +217,7 @@ function dispatch(action) {
     // the figure keeps the previous pose (and a missing arm angle keeps the previous one).
     // With a delivery the figure is posed every frame instead (render loop).
     if (!state.delivery && pitch.release?.every(Number.isFinite)) {
-      poseAtRelease(figure, pitch.release, pitch.arm_angle_deg ?? figure.userData.armAngleDeg);
+      api.poseAtRelease(figure, pitch.release, pitch.arm_angle_deg ?? figure.userData.armAngleDeg);
       refreshShadows(); // the pitcher moved: redraw his shadow
     }
   }
@@ -228,6 +229,7 @@ function dispatch(action) {
 
 const randomSeed = () => Math.floor(Math.random() * 2 ** 31);
 
+let api = pitcherApi(null); // pose functions for the current pitcher
 async function pickPitcher(slug) {
   const [data, delivery] = await Promise.all([loadPitcher(slug), loadDelivery(slug)]);
   if (figure) {
@@ -238,7 +240,8 @@ async function pickPitcher(slug) {
       o.skeleton?.dispose(); // bone texture
     });
   }
-  figure = makePitcher(data.pitcher.throws, data.pitcher.height_in ?? 75, delivery && boneLengths(delivery)); // his height and bone lengths
+  api = pitcherApi(slug);
+  figure = api.makePitcher(data.pitcher.throws, data.pitcher.height_in ?? 75, delivery && boneLengths(delivery)); // his height and bone lengths
   posedAt = null; // new figure is in makePitcher's static pose: the poseFigure memo must not skip it (same t|ab|pitch after a round trip)
   refreshShadows(); // new figure: redraw even if this at-bat's first pitch has no release
   scene.add(figure);
@@ -434,7 +437,7 @@ function poseFigure(p) {
   if (!state.delivery || !figure || key === posedAt) return;
   posedAt = key;
   const release = p.release?.every(Number.isFinite) ? p.release : null;
-  poseAtTime(figure, state.delivery, state.t, release, p.arm_angle_deg ?? figure.userData.armAngleDeg);
+  api.poseAtTime(figure, state.delivery, state.t, release, p.arm_angle_deg ?? figure.userData.armAngleDeg);
   refreshShadows();
 }
 
@@ -474,7 +477,7 @@ renderer.setAnimationLoop((now) => {
     updateBall(ball, flying ? (state.mode === "sim" ? p.sim : p.real) : null, ft);
     if (!flying && figure) {
       ball.visible = true;
-      ball.position.copy(handPosition(figure));
+      ball.position.copy(api.handPosition(figure));
     }
     spinBall(ball, p.spin_rpm == null ? null : p.spin_axis_deg, 2 * Math.PI * (p.spin_rpm / 60) * ft * spinFactor(state.speed));
     updateBall(ghost, flying && state.mode === "ghost" ? p.sim : null, ft);

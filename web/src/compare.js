@@ -16,7 +16,8 @@ import { toScene } from "./coords.js";
 import { buildField } from "./field.js";
 import { tvView } from "./cameras.js";
 import { loadDelivery } from "./data.js";
-import { makePitcher, boneLengths, poseAtTime } from "./pitcher.js";
+import { boneLengths } from "./pitcher.js";
+import { pitcherApi } from "./signed_off/index.js"; // Ohtani keeps his signed-off pose code
 
 // ---- pure helpers (tested in test/compare.test.js) ---------------------------------------------------
 
@@ -100,7 +101,8 @@ async function main() {
   const camera = new THREE.PerspectiveCamera(tv.vfovDeg, 1, tv.near, 6000);
   camera.position.copy(toScene(tv.position));
   camera.lookAt(toScene(tv.target));
-  const figure = makePitcher(delivery.throws, delivery.height_in ?? 75, boneLengths(delivery));
+  const api = pitcherApi(slug);
+  const figure = api.makePitcher(delivery.throws, delivery.height_in ?? 75, boneLengths(delivery));
   scene.add(figure);
   const resize = () => {
     const w = pane.clientWidth, h = pane.clientHeight;
@@ -181,7 +183,7 @@ async function main() {
     if (state === shown) return;
     shown = state;
     const t = (frame - clip.release_pose_frame) / clip.fps; // = replicaTime at that frame's start
-    poseAtTime(figure, delivery, t, clip.release_ft, clip.arm_angle_deg ?? 35);
+    api.poseAtTime(figure, delivery, t, clip.release_ft, clip.arm_angle_deg ?? 35);
     renderer.render(scene, camera);
     drawOverlay(frame, t);
     const phase = phaseAt(cmp.phases, t);
