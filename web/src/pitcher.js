@@ -465,6 +465,12 @@ function pelvisDrops(figure, delivery) {
   const lower = mean(mean(excess.map((_, i) => Math.max(...around(excess, i, W)))));
   ud.drops = smooth.map((y, i) => vid[i] - (y - lower[i]));
   ud.planted = planted;
+  // 1 - planted, box-averaged over +-6 frames (the plant weight flips in ~2 frames, and the foot lift
+  // it drives (poseAtTime) must not snap the knee): used only to lift a foot in the air, never to plant one.
+  ud.moving = Object.fromEntries(Object.entries(planted).map(([sd, w]) => [sd, w.map((_, i) => {
+    const a = w.slice(Math.max(0, i - 6), i + 7);
+    return 1 - a.reduce((x, y) => x + y) / a.length;
+  })]));
   ud.dropsFor = delivery;
   return ud.drops;
 }
@@ -524,10 +530,17 @@ export function poseAtTime(figure, delivery, t, release, armAngleDeg) {
     // of straightening at full length. Why: near full extension the knee angle changes without
     // bound per unit of reach, so a back foot starting to drag snapped the knee 135 -> 178 deg in
     // 1/60 s. Blended by the plant weight, so a planted foot still lands exactly on its toe.
+    const pw = atTime(delivery, figure.userData.planted[sd], t, scalar);
+    // A foot in the air keeps the delivery's hip-to-foot offset: the rig's hips sit above the delivery's
+    // (its pelvis-to-hip gap is shorter) so the same ankle height made the stepping leg ~0.1 ft too long,
+    // the knee ran straight, then snapped bent as the foot left the ground (Ohtani's rocker step). Only
+    // upward, so a dragging toe is never pushed into the mound; a planted foot stays on its toe.
+    const up = p[hip].y - src[hip].y; // smooth positive part (no kink where the hips cross the delivery's)
+    const lift = atTime(delivery, figure.userData.moving[sd], t, scalar) * 0.5 * (up + Math.hypot(up, 0.08));
+    target.ankle.y += lift; target.toe.y += lift;
     const off = target.ankle.clone().sub(p[hip]), want = off.length();
     const s0 = 0.97 * (thigh + shin), span = 0.02 * (thigh + shin);
     const soft = want > s0 ? s0 + span * Math.tanh((want - s0) / span) : want;
-    const pw = atTime(delivery, figure.userData.planted[sd], t, scalar);
     const eff = pw * want + (1 - pw) * soft;
     // Pull the foot in horizontally, at its own height, rather than toward the hip: a back foot
     // dragging on its toe stays on the mound instead of lifting ~1 ft off it. If the hip is so high

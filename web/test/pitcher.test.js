@@ -322,6 +322,45 @@ test("a swinging lead leg does not lock straight with a jerk when the rig's legs
   assert.ok(jerk < 3, `knee angle second difference ${jerk.toFixed(2)} deg per 1/240 s squared`);
 });
 
+test("a sideways step with the rig's legs matching the delivery's keeps the stepping knee at the delivery's angle", () => {
+  // SYNTHETIC: the fixture with everything above the hips raised 0.15 ft (the rig's pelvis-to-hip gap is
+  // shorter than the lifted skeleton's, as in real deliveries), the left foot 0.4 ft up (knee bent) and then set
+  // down 1.0 ft to the side (a rocker step). The rig's hips sit 0.15 ft above the delivery's, so the stepping
+  // foot at the delivery's height ran the leg too straight (Ohtani's rocker step: knee 12 deg too straight,
+  // then a 9 deg snap as the foot left the ground); a foot in the air now keeps the delivery's hip-to-foot offset.
+  const ri = DELIVERY.release_index, fps = DELIVERY.fps;
+  const legs = [J.left_hip, J.right_hip, J.left_knee, J.right_knee, J.left_ankle, J.right_ankle, J.left_foot, J.right_foot];
+  const ease = (i) => { const u = Math.min(Math.max((i - ri + 0.6 * fps) / (0.3 * fps), 0), 1); return u * u * (3 - 2 * u); };
+  // Foot 1.0 ft sideways at the top of the step (leg stays within its length); the knee
+  // sits at the same thigh and shin lengths, bent forward (Statcast +y is toward the pitcher's back).
+  const step = { ...DELIVERY, joints_ft: DELIVERY.joints_ft.map((fr, i) => {
+    // right leg bent (foot 0.3 ft up) so the planted leg does not itself need a pelvis drop to reach
+    const out = fr.map((p, j) => [p[0], p[1], p[2] + (legs.includes(j) ? ([J.right_ankle, J.right_foot].includes(j) ? 0.3 : j === J.right_knee ? 0.15 : 0) : 0.15)]);
+    const [h, k, a] = [J.left_hip, J.left_knee, J.left_ankle].map((j) => new Vector3(...out[j]));
+    const [thigh, shin] = [h.distanceTo(k), k.distanceTo(a)];
+    const a2 = a.clone().add(new Vector3(1.0 * ease(i), 0, 0.4));
+    const c = a2.clone().sub(h), d = c.length();
+    const x = (d * d + thigh * thigh - shin * shin) / (2 * d), r = Math.sqrt(Math.max(thigh * thigh - x * x, 0));
+    const fwd = new Vector3(0, 1, 0).addScaledVector(c, -c.y / (d * d)).normalize(); // perpendicular to the chord
+    const k2 = h.clone().addScaledVector(c, x / d).addScaledVector(fwd, r);
+    out[J.left_ankle] = a2.toArray(); out[J.left_knee] = k2.toArray();
+    out[J.left_foot] = [fr[J.left_foot][0] + 1.0 * ease(i), fr[J.left_foot][1], fr[J.left_foot][2] + 0.4];
+    return out;
+  }) };
+  const fig = makePitcher("R");
+  const pos = (n) => fig.userData.bones[J[n]].getWorldPosition(new Vector3());
+  let kneeErr = 0;
+  for (let i = -125; i <= -90; i += 5) { // while the foot is in the air (a planted foot stays on its toe)
+    const t = i / 240, f = step.joints_ft[Math.round(ri + t * fps)];
+    poseAtTime(fig, step, t, null, 45);
+    fig.updateMatrixWorld(true);
+    const [h, k, a] = ["left_hip", "left_knee", "left_ankle"].map(pos);
+    const [dh, dk, da] = ["left_hip", "left_knee", "left_ankle"].map((n) => toScene(f[J[n]]));
+    kneeErr = Math.max(kneeErr, Math.abs(h.clone().sub(k).angleTo(a.clone().sub(k)) - dh.clone().sub(dk).angleTo(da.clone().sub(dk))) * 180 / Math.PI);
+  }
+  assert.ok(kneeErr < 4, `stepping knee ${kneeErr.toFixed(1)} deg off the delivery's`);
+});
+
 test("a release at full reach does not flip the upper arm's roll as the elbow bends again", () => {
   // SYNTHETIC: the fixture with the release put 0.4 ft beyond the hand along the arm, so the IK arm
   // is straight at t = 0 (Misiorowski's release was just out of the rig arm's reach). A straight
