@@ -296,6 +296,32 @@ test("a dragging back foot out of the rig's reach does not sink the body into th
   assert.ok(maxToe < 0.15, `dragged toe ${maxToe.toFixed(2)} ft above the mound`);
 });
 
+test("a swinging lead leg does not lock straight with a jerk when the rig's legs are shorter", () => {
+  // SYNTHETIC: the fixture with every joint above the ankles raised 0.3 ft (the video's legs run longer than
+  // the rig's, as in real deliveries) and the left foot swinging 2.5 ft forward over 0.5 s, planting at
+  // t = -0.2 s. With no pelvis drop for a foot that is moving, the pelvis stayed 0.3 ft too high, the leg ran
+  // out of reach and the knee snapped shut (Ohtani's lead leg, t ~ -0.55 s: second difference of the knee
+  // angle 2x the reference viewer's; here 5.5 deg before the fix, 1.8 after, on the swing only, t <= -0.21 s). The drop for a moving foot is capped at what a planted foot needs.
+  const ri = DELIVERY.release_index, fps = DELIVERY.fps;
+  const feet = [J.left_ankle, J.right_ankle, J.left_foot, J.right_foot];
+  const ease = (i) => { const u = Math.min(Math.max((i - ri + 0.5 * fps) / (0.3 * fps), 0), 1); return u * u * (3 - 2 * u); };
+  const long = { ...DELIVERY, joints_ft: DELIVERY.joints_ft.map((fr, i) => fr.map((p, j) => {
+    const up = feet.includes(j) ? 0 : j === J.left_knee || j === J.right_knee ? 0.15 : 0.3;
+    const fwd = [J.left_ankle, J.left_foot].includes(j) ? 2.5 * ease(i) : j === J.left_knee ? 1.25 * ease(i) : 0;
+    return [p[0], p[1] + fwd, p[2] + up];
+  })) };
+  const fig = makePitcher("R");
+  const knee = [];
+  for (let i = -150; i <= -50; i++) {
+    poseAtTime(fig, long, i / 240, null, 45);
+    fig.updateMatrixWorld(true);
+    const [h, k, a] = ["left_hip", "left_knee", "left_ankle"].map((n) => fig.userData.bones[J[n]].getWorldPosition(new Vector3()));
+    knee.push(h.sub(k).angleTo(a.sub(k)) * 180 / Math.PI);
+  }
+  const jerk = Math.max(...knee.slice(2).map((v, i) => Math.abs(v - 2 * knee[i + 1] + knee[i])));
+  assert.ok(jerk < 3, `knee angle second difference ${jerk.toFixed(2)} deg per 1/240 s squared`);
+});
+
 test("a release at full reach does not flip the upper arm's roll as the elbow bends again", () => {
   // SYNTHETIC: the fixture with the release put 0.4 ft beyond the hand along the arm, so the IK arm
   // is straight at t = 0 (Misiorowski's release was just out of the rig arm's reach). A straight

@@ -28,6 +28,7 @@ const FRONT_LEG_REACH = 0.93; // front hip-to-ankle / leg length: lead knee flex
 const FRONT_FOOT_LEAD_FT = [0.6, 2.4]; // braced lead leg: front ankle this far ahead of its hip
 const BACK_LEG_REACH = 0.97; // trailing leg nearly straight
 const BACK_ANKLE_UP_FT = 0.45; // trailing foot drags on its toe, heel up
+const REACH_FADE = [0.85, 1.0]; // horizontal ankle distance / leg length over which a moving foot's drop fades out
 const PIVOT_FOOT_Y_FT = RUBBER_FRONT_Y_FT + 0.25; // the drag never goes behind the rubber
 
 /**
@@ -417,21 +418,28 @@ function pelvisDrops(figure, delivery) {
   const k = ud.scale;
   const R = 0.9995 * LEG_FT * k; // straight leg (twoBone straightens at 0.9999)
   const planted = { left: plantWeights(delivery, J.left_foot), right: plantWeights(delivery, J.right_foot) };
-  const raw = delivery.joints_ft.map((fr, i) => {
+  const need = delivery.joints_ft.map((fr, i) => {
     const src = fr.map(toScene);
     setBones(ud.bones, src, k);
     const p = jointPositions(figure);
-    return Math.max(0, ...["left", "right"].map((sd) => {
+    return ["left", "right"].map((sd) => {
       const d = p[J[`${sd}_hip`]].clone().sub(footTarget(src, sd, k).ankle);
       const h = Math.hypot(d.x, d.z);
-      // Drop that brings the ankle into reach, only for a planted foot. Why: a moving foot (the
-      // back foot dragging off the rubber, a swinging lead foot) can sit further from the hip than
-      // the rig's shorter leg reaches -- horizontally, where no drop is enough -- and lowering the
-      // pelvis to its ankle put Misiorowski's hands and ball ~1.2 ft into the dirt. The leg just
-      // straightens toward a foot that is moving; the weight fades in as the foot slows to a plant.
-      return planted[sd][i] * (h < R ? d.y - Math.sqrt(R * R - h * h) : d.y);
-    }));
+      // [drop that brings the ankle into reach, how far inside the leg's horizontal reach the foot is]
+      return [h < R ? d.y - Math.sqrt(R * R - h * h) : d.y, 1 - smoothstep((h / R - REACH_FADE[0]) / (REACH_FADE[1] - REACH_FADE[0]))];
+    });
   });
+  // Why a cap for a moving foot: its need explodes as it nears the leg's horizontal reach (a back toe
+  // dragging 3 ft behind the pelvis: the hip's full height), and lowering the pelvis for that put
+  // Misiorowski's hands and ball ~1.2 ft into the dirt. But no drop at all left the lead leg ~0.4 ft too
+  // high through the stride, so it ran out of reach early and locked straight with a visible knee jerk
+  // (Ohtani, t ~ -0.55 s). The cap is the largest drop a PLANTED foot ever needs in this delivery: the
+  // data's own rig-vs-delivery leg shortfall, so a rig with the pitcher's own proportions caps at ~0.
+  const cap = Math.max(0, ...need.map((n, i) => Math.max(...n.map(([v], f) => planted[f ? "right" : "left"][i] * v))));
+  const raw = need.map((n, i) => Math.max(0, ...n.map(([v, inReach], f) => {
+    const w = planted[f ? "right" : "left"][i];
+    return w * v + (1 - w) * inReach * Math.min(v, cap); // a foot near full reach asks for nothing
+  })));
   // Smooth the pelvis HEIGHT, not just the drop: the video's own pelvis height jitters near
   // release (blur: +-0.15 ft frame to frame), and "lower by just enough" passed that through
   // as a bounce. top[i] is the highest the pelvis may be (the video's height, or lower if the
