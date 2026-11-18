@@ -21,7 +21,7 @@ from pitchsim.data import RAW_DIR, load_seasons
 from pitchsim.sequence.baseline import CountBaseline, log_loss, reliability
 from pitchsim.sequence.context import add_context
 from pitchsim.sequence.logistic import FEATURES, BoostedSeq, LogisticSeq
-from pitchsim.validation import split_by_game
+from pitchsim.validation import game_folds, split_by_game
 
 PITCHERS = {"Ohtani": 660271, "Misiorowski": 694819, "Sale": 519242}
 # model name -> (class, hyperparameter grid)
@@ -44,12 +44,6 @@ for drop in ["count", "stand", "prev_type"]:
 K = 5
 OUT = Path(__file__).resolve().parents[1] / "results"
 SEED = 0
-
-
-def game_folds(df: pd.DataFrame, k: int, seed: int) -> list[np.ndarray]:
-    """K disjoint sets of game_pks covering every game once."""
-    games = np.random.default_rng(seed).permutation(df["game_pk"].unique())
-    return np.array_split(games, k)
 
 
 def tune(make, grid, train: pd.DataFrame, types: list[str]) -> float:

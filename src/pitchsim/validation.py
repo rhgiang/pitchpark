@@ -41,6 +41,16 @@ def split_by_game(df: pd.DataFrame, train_frac: float = 0.7,
     return df[in_train], df[~in_train]
 
 
+def game_folds(df: pd.DataFrame, k: int, seed: int = 0) -> list[np.ndarray]:
+    """K disjoint sets of game_pks covering every game once (grouped K-fold by game).
+
+    Assignment depends on the order games first appear in df, so callers that want the same
+    folds must pass identically ordered frames.
+    """
+    games = np.random.default_rng(seed).permutation(df["game_pk"].unique())
+    return np.array_split(games, k)
+
+
 def run_sim(df: pd.DataFrame, cd: float, eff: float,
             start: Literal["y50", "release"], extra_acc: np.ndarray | None = None
             ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
