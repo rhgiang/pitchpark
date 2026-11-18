@@ -32,3 +32,16 @@ def test_logistic_learns_previous_pitch_and_samples():
     assert np.allclose(p.sum(axis=1), 1) and (p > 0).all()   # CH never seen, still nonzero
     assert p[0, 2] > 0.9 and p[1, 1] > 0.9
     assert set(m.sample(df.head(5), rng)) <= {"CH", "FF", "SL"}
+
+
+def test_boosted_learns_an_interaction():
+    """SL only when 0-2 AND vs R: an interaction an additive logistic can't represent exactly."""
+    from pitchsim.sequence.logistic import BoostedSeq
+    rng = np.random.default_rng(0)
+    n = 2000
+    df = pd.DataFrame({"count": rng.choice(["0-0", "0-2"], n), "stand": rng.choice(["L", "R"], n),
+                       "prev_type": "start"})
+    df["pitch_type"] = np.where((df["count"] == "0-2") & (df["stand"] == "R"), "SL", "FF")
+    m = BoostedSeq(["FF", "SL"], C=100).fit(df)
+    p = m.predict(pd.DataFrame({"count": ["0-2", "0-2", "0-0"], "stand": ["R", "L", "R"], "prev_type": "start"}))
+    assert p[0, 1] > 0.9 and p[1, 1] < 0.1 and p[2, 1] < 0.1

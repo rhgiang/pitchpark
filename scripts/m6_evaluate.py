@@ -20,13 +20,16 @@ import pandas as pd
 from pitchsim.data import RAW_DIR, load_seasons
 from pitchsim.sequence.baseline import CountBaseline, log_loss, reliability
 from pitchsim.sequence.context import add_context
-from pitchsim.sequence.logistic import FEATURES, LogisticSeq
+from pitchsim.sequence.logistic import FEATURES, BoostedSeq, LogisticSeq
 from pitchsim.validation import split_by_game
 
 PITCHERS = {"Ohtani": 660271, "Misiorowski": 694819, "Sale": 519242}
 # model name -> (class, hyperparameter grid)
 MODELS = {"count": (lambda t, h: CountBaseline(t, a=h), [0.3, 1, 3, 10, 30, 100]),
           "logistic": (lambda t, h: LogisticSeq(t, C=h), [0.01, 0.03, 0.1, 0.3, 1, 3])}
+# Boosted trees on the logistic's best feature set; hyperparameter = number of boosting rounds.
+BEST = FEATURES + ["tto"]
+MODELS["boosted"] = (lambda t, h: BoostedSeq(t, C=h, features=BEST), [25, 50, 100, 200, 400])
 # Additions: the logistic model with one more context feature. Its loss drop is what that feature adds.
 EXTRA = ["pitch_of_game", "tto", "outs", "runners", "score_diff"]
 for add in EXTRA:
@@ -108,10 +111,16 @@ def main() -> None:
     wins = res.groupby("pitcher", sort=False).apply(lambda g: pd.Series(
         {m.removeprefix("logistic_plus_"): f"{(g[f'logloss_{m}'] < g.logloss_logistic).sum()}/{len(g)}" for m in plus}))
     print("folds where it beats logistic:"); print(wins.to_string())
-    big = pd.concat(rel_rows).query("n >= 100 and model in ['count', 'logistic']")
+    vs = res.groupby("pitcher", sort=False).apply(lambda g: pd.Series({
+        "logistic+tto": wavg(g, "logloss_logistic_plus_tto"), "boosted": wavg(g, "logloss_boosted"),
+        "gain": wavg(g, "logloss_logistic_plus_tto") - wavg(g, "logloss_boosted"),
+        "folds_won": f"{(g.logloss_boosted < g.logloss_logistic_plus_tto).sum()}/{len(g)}",
+        "rounds": ",".join(f"{x:g}" for x in g.boosted_hparam)}))
+    print("\nboosted trees vs logistic+tto (same features):"); print(vs.round(4).to_string())
+    big = pd.concat(rel_rows).query("n >= 100 and model in ['count', 'logistic', 'boosted']")
     print("\nlargest calibration gap in bins with n >= 100:")
     print((big.observed - big.mean_pred).abs().groupby([big.pitcher, big.model]).max().round(3).to_string())
-    shown = ["count", "logistic"]
+    shown = ["count", "logistic", "boosted"]
     fig, axes = plt.subplots(1, len(shown), figsize=(4.5 * len(shown), 4.5), sharey=True)
     for ax, m in zip(axes, shown):
         ax.plot([0, 1], [0, 1], "k:", lw=1)

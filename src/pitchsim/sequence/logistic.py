@@ -43,3 +43,27 @@ class LogisticSeq:
     def sample(self, context: pd.DataFrame, rng: np.random.Generator) -> list[str]:
         """One pitch type per context row, drawn from the distribution (never argmax)."""
         return [str(rng.choice(self.types, p=p)) for p in self.predict(context)]
+
+
+class BoostedSeq(LogisticSeq):
+    """Gradient-boosted trees over the same categorical context (Friedman 2001; scikit-learn's
+    histogram version, the same algorithm family as XGBoost/LightGBM).
+
+    Unlike the logistic model, a tree splits on one feature and then another, so it can learn
+    interactions like "2 strikes AND lefty -> more changeups" without a hand-made cross feature.
+    The price is more parameters: with a few thousand pitches it can overfit, which is why the
+    trees are shallow, leaves need min_samples_leaf pitches, and the number of trees is the
+    hyperparameter tuned on held-out training games. `C` here is that number of boosting rounds.
+    """
+
+    def fit(self, train: pd.DataFrame) -> "BoostedSeq":
+        from sklearn.ensemble import HistGradientBoostingClassifier
+        from sklearn.preprocessing import OrdinalEncoder
+        self.model = make_pipeline(
+            OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=np.nan),
+            HistGradientBoostingClassifier(categorical_features=[True] * len(self.features),
+                                           learning_rate=0.05, max_iter=int(self.C), max_depth=3,
+                                           min_samples_leaf=40, l2_regularization=1.0,
+                                           early_stopping=False, random_state=0))
+        self.model.fit(train[self.features], train["pitch_type"])
+        return self
