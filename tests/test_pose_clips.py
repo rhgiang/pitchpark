@@ -96,3 +96,13 @@ def test_match_downloads_reports_everything():
     assert r["partial"] == ["D.mp4.crdownload"]
     assert r["leftovers"] == ["Z.mp4"]
     assert clips.match_downloads(expected, ["1_1_1.mp4"])["renames"] == {}  # idempotent
+
+
+def test_listed_clip_names_reads_every_download_list(tmp_path):
+    """SYNTHETIC lists: a second download round must skip pitches any earlier list already named."""
+    cols = "game_pk,at_bat_number,pitch_number,play_id\n"
+    (tmp_path / "download_list.csv").write_text(cols + "1,2,3,a\n4,5,6,b\n")
+    (tmp_path / "download_list_2.csv").write_text(cols + "7,8,9,c\n")
+    (tmp_path / "clips.csv").write_text(cols + "9,9,9,z\n")        # not a download list
+    assert clips.listed_clip_names(tmp_path) == {"1_2_3.mp4", "4_5_6.mp4", "7_8_9.mp4"}
+    assert clips.listed_clip_names(tmp_path / "nope") == set()

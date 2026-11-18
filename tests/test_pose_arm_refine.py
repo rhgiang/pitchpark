@@ -113,3 +113,34 @@ def test_no_tracks_returns_input():
     rng = np.random.default_rng(2)
     body, _, _ = _true_arm(rng)
     np.testing.assert_array_equal(refine_arm(body, RI, FS, L, []), body)
+
+
+def test_more_data_weight_pulls_the_arm_toward_the_2d():
+    """SYNTHETIC: the lift's arm is turned 20 deg in the image plane from the true one; the tracks see the true
+    arm.  The lift prior holds the arm back; a larger data_w lets the 2D win, so the arm ends up nearer the truth."""
+    rng = np.random.default_rng(3)
+    body, u_true, v_true = _true_arm(rng)
+    tracks = _tracks(body, rng)[:1]      # one clip, a strong prior: the data has to be weighted up to win
+    lift = body.copy()
+    a = np.radians(20)
+    R = np.array([[np.cos(a), 0, np.sin(a)], [0, 1, 0], [-np.sin(a), 0, np.cos(a)]])   # about y: the x-z plane
+    for k in (EL, WR, HA):
+        lift[:, k] = body[:, SH] + (body[:, k] - body[:, SH]) @ R.T
+    err = lambda out: _turn_deg(_dirs(out)[0], u_true)[FS - 6:RI + 7].mean()   # noqa: E731
+    assert err(refine_arm(lift, RI, FS, L, tracks, data_w=4.0, pin=0.0, hand_w=0.0)) <         err(refine_arm(lift, RI, FS, L, tracks, data_w=1.0, prior=2.0, pin=0.0, hand_w=0.0))
+
+
+def test_release_reach_ratio_flags_a_foreshortened_arm():
+    """SYNTHETIC: a straight arm at release has ratio ~1; the same arm with the forearm folded back has less."""
+    from pitchsim.pose.arm_refine import release_reach_ratio
+    rng = np.random.default_rng(4)
+    body, _, _ = _true_arm(rng)
+    straight = body.copy()
+    straight[:, EL] = straight[:, SH] + [LU, 0, 0]
+    straight[:, WR] = straight[:, EL] + [LF, 0, 0]
+    straight[:, HA] = straight[:, WR] + [LH, 0, 0]
+    assert abs(release_reach_ratio(straight, RI, L) - 1.0) < 1e-6
+    folded = straight.copy()
+    folded[RI, WR] = folded[RI, EL] + [-LF * 0.5, 0, LF * 0.8]       # forearm turned back on itself at release
+    folded[RI, HA] = folded[RI, WR] + [-LH * 0.5, 0, LH * 0.8]
+    assert release_reach_ratio(folded, RI, L) < 0.6

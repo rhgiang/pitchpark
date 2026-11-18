@@ -113,3 +113,14 @@ def test_shot_start_finds_a_camera_cut():
     x[70, 6:8, 1] = 90.0                      # nor is a single bad frame
     assert shot_start(x, w, release_frame=110, fps=60.0) == 30
     assert shot_start(x[30:], w[30:], release_frame=80, fps=60.0) == 0
+
+
+def test_image_arm_angle_deg_synthetic():
+    """Synthetic points: image y points DOWN, so a hand 1 px right and 1 px up of the shoulder is +45 deg; a
+    hand on the other side (side = -1, a mirrored thrower) is read as if mirrored, so the same arm is still +45."""
+    from pitchsim.pose.compare2d import image_arm_angle_deg
+    sh = np.array([[100.0, 100.0], [100.0, 100.0]])
+    hand = np.array([[101.0, 99.0], [99.0, 99.0]])
+    assert np.allclose(image_arm_angle_deg(sh, hand, 1), [45.0, 135.0])
+    assert np.allclose(image_arm_angle_deg(sh, hand, -1), [135.0, 45.0])  # mirrored
+    assert np.allclose(image_arm_angle_deg(sh, sh + [0.0, 5.0], 1), -90.0)     # straight down

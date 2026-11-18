@@ -1,7 +1,9 @@
 """One HTML page of Savant video links to save by hand (the mp4 host refuses scripts), M5.
 
 usage: python scripts/m5_download_page.py data/video/<slug> [...] --n-train 25 --n-test 15 --out data/video/download.html
-Writes <clips_dir>/download_list.csv per pitcher (input to m5_match_clips.py).
+Writes <clips_dir>/<--list-name> per pitcher (input to m5_match_clips.py --list).  Skips clips already on disk and
+any pitch named in an earlier <clips_dir>/download_list*.csv, so a later round (--list-name download_list_2.csv
+--out data/video/download3.html) never overwrites the first round's list or page.
 """
 import argparse
 import json
@@ -9,7 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from pitchsim.pose.clips import clip_name, interleave, round_robin
+from pitchsim.pose.clips import clip_name, interleave, listed_clip_names, round_robin
 
 LINK = "https://baseballsavant.mlb.com/sporty-videos?playId={}"
 PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
@@ -54,7 +56,8 @@ def choose(clips_dir: Path, n_train: int, n_test: int, seed: int = 0) -> pd.Data
     """Rows to save: round-robin over games per split, train/test alternating; skips clips already on disk."""
     df = pd.read_csv(clips_dir / "clips.csv")
     df = df[df["play_id"].notna()].reset_index(drop=True)
-    df = df[[not (clips_dir / clip_name(r)).exists() for _, r in df.iterrows()]]
+    listed = listed_clip_names(clips_dir)
+    df = df[[not ((clips_dir / clip_name(r)).exists() or clip_name(r) in listed) for _, r in df.iterrows()]]
     tr, te = (round_robin(df[df["split"] == s].reset_index(drop=True), n, seed)
               for s, n in (("train", n_train), ("test", n_test)))
     return interleave(tr, te)
@@ -66,11 +69,12 @@ def main() -> None:
     ap.add_argument("--n-train", type=int, default=25)
     ap.add_argument("--n-test", type=int, default=15)
     ap.add_argument("--out", default="data/video/download.html")
+    ap.add_argument("--list-name", default="download_list.csv", help="per-pitcher list file written in the clips dir")
     a = ap.parse_args()
     sections = []
     for d in map(Path, a.clips_dirs):
         sel = choose(d, a.n_train, a.n_test)
-        sel.to_csv(d / "download_list.csv", index=False)
+        sel.to_csv(d / a.list_name, index=False)
         rows = [{"split": r["split"], "pitch_type": r["pitch_type"], "name": clip_name(r),
                  "url": LINK.format(r["play_id"])} for _, r in sel.iterrows()]
         sections.append({"name": d.name, "folder": str(d.resolve()), "rows": rows})

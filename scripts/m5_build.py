@@ -20,7 +20,7 @@ from pitchsim.pose.anchor import (anchor, correct_to_mean, lock_feet, mound_z_ft
                                   segment_lengths)
 from pitchsim.pose.delivery import (average_delivery, fix_leg_swaps, ground_root, has_rocker_step, jitter,
                                     landmarks, lift_snap, phase_smooth, rocker_step)
-from pitchsim.pose.arm_refine import refine_arm, track_from_pose
+from pitchsim.pose.arm_refine import refine_arm, release_reach_ratio, track_from_pose
 from pitchsim.pose.clips import read_labels
 from pitchsim.pose.joints3d import load_lift
 from pitchsim.pose.pose2d import load_pose2d
@@ -46,6 +46,11 @@ PRE_COVER_FRAC = 0.85   # pre_s = longest lead-in that >= 85% of train clips cov
 # ~2.8-2.3 s before release, and the clips start ~2.9-3.0 s before release: 2.5 s cut the step off.
 # 2.85 keeps 13 of 14 train clips after warping (2.9 s kept 11: clips whose step is early run out of frames).
 PRE_CAP_S = 2.85
+# arm_refine weights (see the two-pass comment in main): 2D residuals vs priors, and the jerk penalty of each pass
+ARM_DATA_W, ARM_PRE_JERK_W, ARM_POST_JERK_W = 3.0, 1.0, 1.5
+# pass 1 only where the lift left the arm shorter than this fraction of its full length at release (Sale 0.72; the
+# right-handers 0.82-0.91: on Misiorowski (0.85) it made his 2D legs score worse, 0.149 -> 0.177)
+ARM_PASS1_REACH = 0.8
 POST_S = 0.6
 # Release POSE frame = hand label - 1.  The labelling rule marks the first frame the ball is visibly out of
 # the hand, so at the label the hand has already whipped past release (it moves ~2 ft per frame at 60 fps):
@@ -286,6 +291,23 @@ def main():
     bases_empty = cl[cl[["on_1b", "on_2b", "on_3b"]].isna().all(axis=1)]
     target = {k: float(bases_empty[STAT[k]].mean()) for k in KEYS}
     cinfo: dict = {}
+    # Arm pass 1 of 2 (pitchsim.pose.arm_refine), BEFORE the correction and with the hand FREE (no release pin):
+    # the lift's arm reaches only ~1.7 ft from the shoulder at release (a real arm, seen sideways, ~2.1 ft), and
+    # correct_to_mean rotates that arm and places the shoulder from it, so a short arm leaves the shoulder too
+    # close to the Statcast release point and the hand pulled in at release.  The train clips' 2D (the catcher's-
+    # view plane the sideways reach lives in) fixes the arm's reach first; the correction then builds the body around it.
+    # Pass 2 (below, after the correction) pins the hand to the release point again.  Weights: arm_refine docstring;
+    # data_w / jerk_w set on Sale's test clips (round 2, see results/M5.md), the same fixed values for every pitcher.
+    train_tracks = []
+    avg_pre_arm = avg_ft   # before pass 1: the foot-lock check below compares the feet, not the arm
+    if not a.no_arm_refine:
+        train_tracks = [track_from_pose(load_pose2d(d / "pose2d" / c.replace(".mp4", ".npz")), rp[c], fs[c])
+                        for c in train_used]
+        reach = release_reach_ratio(avg_ft, ri, throws)
+        print(f"arm reach at release {reach:.2f} of full length: pass 1 {'on' if reach < ARM_PASS1_REACH else 'off'}")
+        if reach < ARM_PASS1_REACH:
+            avg_ft = refine_arm(avg_ft, ri, fsi, throws, train_tracks, fps=60.0, pin=0.0, hand_w=0.0,
+                                data_w=ARM_DATA_W, jerk_w=ARM_PRE_JERK_W)
     final = correct_to_mean(avg_ft, ri, fsi, throws, target, leg_lift_index=ll, info=cinfo)
     rv_fin = release_values(final, ri, throws)
     miss = {k: rv_fin[k] - target[k] for k in KEYS}
@@ -295,20 +317,19 @@ def main():
     # What the correction did to the body: bone lengths (vs its input; and the foot lock vs the raw
     # average), and the planted feet (pivot toe until foot strike, lead toe after) in the final delivery.
     seg_corr_ft = float(np.abs(segment_lengths(final) - segment_lengths(avg_ft)).max())
-    # 2D-guided arm path (pitchsim.pose.arm_refine), AFTER the correction: the correction rotates the arm in
-    # the image plane by ~20 deg, which would undo a refinement done before it.  The release frame is pinned,
-    # so the release values above stay on target (re-checked below).  TRAIN clips' 2D only.
+    # Arm pass 2 (pitchsim.pose.arm_refine), AFTER the correction: the correction rotates the arm in the image
+    # plane by ~20 deg, which undoes the in-plane angles pass 1 found.  The release frame is pinned, so the
+    # release values above stay on target (re-checked below).  TRAIN clips' 2D only.
     refine_info: dict = {"applied": False}
     if not a.no_arm_refine:
-        tracks = [track_from_pose(load_pose2d(d / "pose2d" / c.replace(".mp4", ".npz")), rp[c], fs[c])
-                  for c in train_used]
-        refine_info = {"applied": True}
-        final = refine_arm(final, ri, fsi, throws, tracks, fps=60.0, info=refine_info)
+        refine_info = {"applied": True, "pass1_reach_ratio": reach, "pass1": bool(reach < ARM_PASS1_REACH)}
+        final = refine_arm(final, ri, fsi, throws, train_tracks, fps=60.0, info=refine_info,
+                           data_w=ARM_DATA_W, jerk_w=ARM_POST_JERK_W)
         rv_fin = release_values(final, ri, throws)
         miss = {k: rv_fin[k] - target[k] for k in KEYS}
         if max(abs(miss[k]) for k in KEYS[:3]) > 0.05 or abs(miss["arm_angle_deg"]) > 1.0:
             raise SystemExit(f"arm refinement moved the release off target: misses {miss}")
-    seg_lock_ft = float(np.abs(segment_lengths(avg_ft) - segment_lengths(avg_raw)).max())
+    seg_lock_ft = float(np.abs(segment_lengths(avg_pre_arm) - segment_lengths(avg_raw)).max())
     seg_cv = segment_lengths(final).std(0) / segment_lengths(final).mean(0)
     piv, lead = HAND_TOE[throws]
     feet = {}

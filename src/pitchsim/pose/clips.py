@@ -51,6 +51,15 @@ def clip_name(row) -> str:
     return f"{int(row['game_pk'])}_{int(row['at_bat_number'])}_{int(row['pitch_number'])}.mp4"
 
 
+def listed_clip_names(clips_dir: Path) -> set[str]:
+    """Clip file names already named by any <dir>/download_list*.csv (earlier download rounds), so a new round
+    never picks them again even if the file was not saved or was renamed."""
+    names: set[str] = set()
+    for f in Path(clips_dir).glob("download_list*.csv"):
+        names |= {clip_name(r) for _, r in pd.read_csv(f).iterrows()}
+    return names
+
+
 def play_ids_from_feed(feed: dict) -> pd.DataFrame:
     """(game_pk, at_bat_number, pitch_number, play_id) for every pitch in a live feed.
     Only ``isPitch`` events count: pickoffs/steps-offs sit in playEvents but Statcast's

@@ -1,6 +1,6 @@
 """Rename hand-saved Savant clips to <game_pk>_<at_bat>_<pitch>.mp4 (M5).  Safe to re-run.
 
-usage: python scripts/m5_match_clips.py data/video/<slug>
+usage: python scripts/m5_match_clips.py data/video/<slug> [--list download_list_2.csv]
 For each row of download_list.csv: fetch its sporty-videos page (cached in <dir>/pages/), take the mp4
 basename Savant saves it under, rename the matching file.  Never deletes; reports what is left over.
 Then marks found clips `cached` in clips.csv.
@@ -24,8 +24,10 @@ def page(d: Path, pid: str) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("clips_dir")
-    d = Path(ap.parse_args().clips_dir)
-    want = pd.read_csv(d / "download_list.csv")
+    ap.add_argument("--list", default="download_list.csv", help="download list in the clips dir (a later round: download_list_2.csv)")
+    a = ap.parse_args()
+    d = Path(a.clips_dir)
+    want = pd.read_csv(d / a.list)
     expected = {}
     for _, r in want.iterrows():
         url = clip_url_from_page(page(d, r["play_id"]))

@@ -61,6 +61,16 @@ def track_from_pose(pose, rp: int, fs: int) -> Track:
     return Track(xy, w, rp, fs, float(pose.fps))
 
 
+def release_reach_ratio(j_ft: np.ndarray, ri: int, throws: str) -> float:
+    """Shoulder -> hand distance at the release frame over the full (standing) arm length: ~1 for a straight
+    arm.  Well below 1 means the monocular lift foreshortened the arm at release (Sale 0.72, Misiorowski 0.85),
+    which correct_to_mean then builds the body around (shoulder too close to the Statcast release point).
+    Standing = median over the first 60 frames (the set position, arms in view), as in refine_arm."""
+    sh, el, wr, ha = _SHOULDER[throws], _ELBOW[throws], _WRIST[throws], _HAND[throws]
+    seg = lambda a, b: float(np.median(np.linalg.norm(j_ft[:60, b] - j_ft[:60, a], axis=1)))  # noqa: E731
+    return float(np.linalg.norm(j_ft[ri, ha] - j_ft[ri, sh]) / (seg(sh, el) + seg(el, wr) + seg(wr, ha)))
+
+
 def _unit(a):
     return a / np.maximum(np.linalg.norm(a, axis=-1, keepdims=True), 1e-9)
 
@@ -83,7 +93,7 @@ def _smooth_penalty(d, lam):
 
 def refine_arm(j_ft: np.ndarray, ri: int, fsi: int, throws: str, tracks: list[Track], fps: float = 60.0,
                smooth: float = 0.3, prior: float = 0.5, pin: float = 100.0, hand_w: float = 1.0, jerk_w: float = 0.5, jump: float = 0.05,
-               info: dict | None = None) -> np.ndarray:
+               data_w: float = 1.0, info: dict | None = None) -> np.ndarray:
     """Return j_ft with the throwing arm's elbow, wrist and hand re-solved against the tracks' 2D keypoints.
 
     j_ft (T, 24, 3) in Statcast ft (the FINAL delivery); ri / fsi release and foot-strike frame indices;
@@ -93,7 +103,8 @@ def refine_arm(j_ft: np.ndarray, ri: int, fsi: int, throws: str, tracks: list[Tr
       current bone is (0 at length 0, 1 at full length); hand_w: weight (per ft) of the hand staying on its
       corrected path; jerk_w: weight on the third difference of the elbow / wrist / hand paths (ft per frame^3:
       0.08 is the smoothed delivery's own level, noisy 2D tracks give 0.3+); pin: weight (per ft) of the hand at the release frame;
-      jump: Viterbi cost per rad^2 turned between frames.
+      jump: Viterbi cost per rad^2 turned between frames; data_w: weight of the 2D residuals (torso lengths) against
+      the priors (torso lengths against unit vectors; raising it makes the 2D win over the lift prior).
     Segment lengths are the standing values (median over the set frames, hence 'fixed'); info (optional out-dict) gets diagnostics.
     """
     j = np.array(j_ft, float)
@@ -232,7 +243,7 @@ def refine_arm(j_ft: np.ndarray, ri: int, fsi: int, throws: str, tracks: list[Tr
         u, v = _unit(p[:n * 3].reshape(n, 3)), _unit(p[n * 3:].reshape(n, 3))
         E, W = arm(u, v)
         return np.concatenate([
-            data_res(E, W).ravel(),
+            data_w * data_res(E, W).ravel(),
             _smooth_penalty(u, smooth), _smooth_penalty(v, smooth),
             # 3rd difference of the joint paths: the build smooths the average (Savitzky-Golay 0.15 s) and this must not
             # undo that with the frame-to-frame noise of the 2D tracks (~4x the jerk without it)
