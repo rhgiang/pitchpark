@@ -14,7 +14,7 @@ import {
 import { makeTube, updateTube } from "./trail.js";
 import { makeBall, makeGhost, updateBall, spinBall } from "./ball.js";
 import { renderHud, buildStrip } from "./hud.js";
-import { makePitcher, poseAtRelease, poseAtTime, handPosition } from "./pitcher.js";
+import { makePitcher, boneLengths, poseAtRelease, poseAtTime, handPosition } from "./pitcher.js";
 import { buildPark } from "./park/index.js";
 import { initLook, setTimeOfDay, refreshShadows, inkProof, timeOfDay, TIMES } from "./look.js";
 import { showMenu } from "./menu.js";
@@ -238,7 +238,7 @@ async function pickPitcher(slug) {
       o.skeleton?.dispose(); // bone texture
     });
   }
-  figure = makePitcher(data.pitcher.throws, data.pitcher.height_in ?? 75); // scaled to his height
+  figure = makePitcher(data.pitcher.throws, data.pitcher.height_in ?? 75, delivery && boneLengths(delivery)); // his height and bone lengths
   posedAt = null; // new figure is in makePitcher's static pose: the poseFigure memo must not skip it (same t|ab|pitch after a round trip)
   refreshShadows(); // new figure: redraw even if this at-bat's first pitch has no release
   scene.add(figure);

@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { JOINTS, J, buildSkeleton } from "./skeleton.js";
+import { JOINTS, J, buildSkeleton, boneLengths, restFromLengths, RIG_HEIGHT_FT } from "./skeleton.js";
 import { toScene } from "./coords.js";
 import { groundHeightFt, RUBBER_FRONT_Y_FT } from "./field.js";
 import { figureGeometry } from "./figure.js";
@@ -8,10 +8,13 @@ const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const DEG = Math.PI / 180;
 const REST = JOINTS.map((j) => V(...j.rest));
 const CHILDREN = JOINTS.map((_, i) => JOINTS.flatMap((j, c) => (j.parent === i ? [c] : [])));
-const segFt = (a, b) => REST[J[a]].distanceTo(REST[J[b]]); // at the 75 in rest size
-const LEG_FT = segFt("left_hip", "left_knee") + segFt("left_knee", "left_ankle");
-const FOOT_FT = segFt("left_ankle", "left_foot");
-const ANKLE_UP_FT = REST[J.left_ankle].y; // ankle height above a flat-planted sole
+/** Lengths of a rest pose (the default 75 in rig, or a pitcher's own: restFromLengths), in rest units. */
+const dimsOf = (rest) => {
+  const seg = (a, b) => rest[J[a]].distanceTo(rest[J[b]]);
+  return { rest, seg, leg: seg("left_hip", "left_knee") + seg("left_knee", "left_ankle"),
+    foot: seg("left_ankle", "left_foot"), ankleUp: rest[J.left_ankle].y }; // ankle height above a flat-planted sole
+};
+const DEFAULT_DIMS = dimsOf(REST);
 /** Ground height under a scene point (scene z = -Statcast y). */
 const groundY = (p) => groundHeightFt(p.x, -p.z);
 
@@ -51,8 +54,8 @@ function twoBone(root, target, a, b, pole) {
 }
 
 /** Ball of the foot: flat towards the plate if the ankle is low enough, else pointing down. */
-function toeTarget(ankle, k = 1) {
-  const foot = FOOT_FT * k;
+function toeTarget(ankle, k = 1, dm = DEFAULT_DIMS) {
+  const foot = dm.foot * k;
   const dh = ankle.y - (groundY(ankle) + 0.06 * k);
   if (dh < foot * 0.95) return ankle.clone().add(V(0, -dh, Math.sqrt(foot ** 2 - dh * dh)));
   return ankle.clone().addScaledVector(V(0, -1, 0.3).normalize(), foot);
@@ -80,11 +83,11 @@ function toeTarget(ankle, k = 1) {
  * @returns {{targets: THREE.Vector3[], flexDeg: number, frontPlanted: boolean,
  *   kneeAsWanted: boolean, backGrounded: boolean, strideFt: number}}
  */
-export function solvePose(throws, release, armAngleDeg, k = 1) {
+export function solvePose(throws, release, armAngleDeg, k = 1, dm = DEFAULT_DIMS) {
   // A taller pitcher is the same body scaled up: bones, typical stride and foot heights all
   // scale with k; the field (rubber, mound) does not.
-  const seg = (a, b) => k * segFt(a, b);
-  const rest = (name) => REST[J[name]].clone().multiplyScalar(k);
+  const seg = (a, b) => k * dm.seg(a, b);
+  const rest = (name) => dm.rest[J[name]].clone().multiplyScalar(k);
   const s = throws === "L" ? 1 : -1; // x side of the throwing arm: a RHP releases at x < 0
   const T = throws === "L" ? "left" : "right";
   const G = throws === "L" ? "right" : "left"; // glove side = lead leg side
@@ -109,7 +112,7 @@ export function solvePose(throws, release, armAngleDeg, k = 1) {
   };
   const frontAnkle = (hip, lead) => {
     const p = V(hip.x, 0, hip.z + lead);
-    p.y = groundY(p) + ANKLE_UP_FT * k;
+    p.y = groundY(p) + dm.ankleUp * k;
     return p;
   };
   // Grid search over trunk flexion (1 deg) and lead-foot placement (0.1 ft). Cost: the lead-leg
@@ -121,7 +124,7 @@ export function solvePose(throws, release, armAngleDeg, k = 1) {
     const t = trunk(d * DEG);
     const hip = t.at(`${G}_hip`);
     for (let lead = FRONT_FOOT_LEAD_FT[0] * k; lead <= FRONT_FOOT_LEAD_FT[1] * k + 1e-9; lead += 0.1) {
-      const legErr = Math.abs(hip.distanceTo(frontAnkle(hip, lead)) - FRONT_LEG_REACH * LEG_FT * k);
+      const legErr = Math.abs(hip.distanceTo(frontAnkle(hip, lead)) - FRONT_LEG_REACH * dm.leg * k);
       const stride = PIVOT_FOOT_Y_FT + hip.z + lead;
       const cost = legErr + 0.05 * (((d - TYPICAL_TRUNK_FLEX_DEG) / 10) ** 2 + ((stride - TYPICAL_STRIDE_FT * k) / 0.7) ** 2);
       if (!body || cost < body.cost) body = { ...t, lead, legErr, cost };
@@ -157,11 +160,11 @@ export function solvePose(throws, release, armAngleDeg, k = 1) {
   const front = twoBone(fHip, fTarget, seg(`${G}_hip`, `${G}_knee`), seg(`${G}_knee`, `${G}_ankle`), V(0, 0.2, 1));
   p[J[`${G}_knee`]] = front.mid;
   p[J[`${G}_ankle`]] = front.end;
-  p[J[`${G}_foot`]] = toeTarget(front.end, k);
+  p[J[`${G}_foot`]] = toeTarget(front.end, k, dm);
 
   // Trailing leg: toe on the ground as far back as the leg reaches, never behind the rubber.
   const bHip = p[J[`${T}_hip`]];
-  const L = BACK_LEG_REACH * LEG_FT * k;
+  const L = BACK_LEG_REACH * dm.leg * k;
   const bTarget = V(bHip.x, groundY(bHip) + BACK_ANKLE_UP_FT * k, 0);
   const dy = bHip.y - bTarget.y;
   const backGrounded = dy < L;
@@ -172,7 +175,7 @@ export function solvePose(throws, release, armAngleDeg, k = 1) {
   const back = twoBone(bHip, bTarget, seg(`${T}_hip`, `${T}_knee`), seg(`${T}_knee`, `${T}_ankle`), V(0, -1, 0.5));
   p[J[`${T}_knee`]] = back.mid;
   p[J[`${T}_ankle`]] = back.end;
-  p[J[`${T}_foot`]] = toeTarget(back.end, k);
+  p[J[`${T}_foot`]] = toeTarget(back.end, k, dm);
 
   return {
     targets: p,
@@ -325,8 +328,8 @@ function applyGaze(figure, w) {
  * the arm at `armAngleDeg` (Statcast arm_angle). Remembers the arm angle in userData.armAngleDeg.
  */
 export function poseAtRelease(pitcher, release, armAngleDeg) {
-  const { bones, throws, scale } = pitcher.userData;
-  setBones(bones, solvePose(throws, release, armAngleDeg, scale).targets, scale);
+  const { bones, throws, scale, dims } = pitcher.userData;
+  setBones(bones, solvePose(throws, release, armAngleDeg, scale, dims).targets, scale);
   pitcher.userData.armAngleDeg = armAngleDeg;
   applyGaze(pitcher, 1);
   pitcher.updateMatrixWorld(true);
@@ -375,13 +378,13 @@ function jointPositions(figure) {
  * is (heel lift). Pinning the toe, not the ankle, is what keeps a planted foot planted: the video
  * skeleton's foot is half as long as the rig's, so following its direction would drag the toe.
  */
-function footTarget(src, sd, k) {
+function footTarget(src, sd, k, dm = DEFAULT_DIMS) {
   const sAnkle = src[J[`${sd}_ankle`]], toe = src[J[`${sd}_foot`]].clone();
   toe.y = Math.max(toe.y, groundY(toe) + 0.06 * k);
-  const len = FOOT_FT * k;
+  const len = dm.foot * k;
   const back = V(sAnkle.x - toe.x, 0, sAnkle.z - toe.z);
   if (back.lengthSq() < 1e-8) back.set(0, 0, -1); // foot straight down: any heading
-  const rise = Math.min(Math.max(sAnkle.y - toe.y, ANKLE_UP_FT * k - 0.06 * k), 0.95 * len);
+  const rise = Math.min(Math.max(sAnkle.y - toe.y, dm.ankleUp * k - 0.06 * k), 0.95 * len);
   const ankle = toe.clone().addScaledVector(back.normalize(), Math.sqrt(len * len - rise * rise));
   ankle.y += rise;
   return { ankle, toe };
@@ -416,14 +419,14 @@ function pelvisDrops(figure, delivery) {
   const ud = figure.userData;
   if (ud.dropsFor === delivery) return ud.drops;
   const k = ud.scale;
-  const R = 0.9995 * LEG_FT * k; // straight leg (twoBone straightens at 0.9999)
+  const R = 0.9995 * ud.dims.leg * k; // straight leg (twoBone straightens at 0.9999)
   const planted = { left: plantWeights(delivery, J.left_foot), right: plantWeights(delivery, J.right_foot) };
   const need = delivery.joints_ft.map((fr, i) => {
     const src = fr.map(toScene);
     setBones(ud.bones, src, k);
     const p = jointPositions(figure);
     return ["left", "right"].map((sd) => {
-      const d = p[J[`${sd}_hip`]].clone().sub(footTarget(src, sd, k).ankle);
+      const d = p[J[`${sd}_hip`]].clone().sub(footTarget(src, sd, k, ud.dims).ankle);
       const h = Math.hypot(d.x, d.z);
       // [drop that brings the ankle into reach, how far inside the leg's horizontal reach the foot is]
       return [h < R ? d.y - Math.sqrt(R * R - h * h) : d.y, 1 - smoothstep((h / R - REACH_FADE[0]) / (REACH_FADE[1] - REACH_FADE[0]))];
@@ -502,7 +505,7 @@ export function blendDirection(from, goal, w) {
  * @param armAngleDeg kept in userData like poseAtRelease (the arm itself follows the delivery)
  */
 export function poseAtTime(figure, delivery, t, release, armAngleDeg) {
-  const { bones, throws, scale: k } = figure.userData;
+  const { bones, throws, scale: k, dims: dm } = figure.userData;
   const scalar = (v, w) => v.reduce((s, x, k) => s + x * w[k], 0);
   const drop = atTime(delivery, pelvisDrops(figure, delivery), t, scalar);
   const src = deliveryFrame(delivery, t);
@@ -511,11 +514,11 @@ export function poseAtTime(figure, delivery, t, release, armAngleDeg) {
 
   for (const sd of ["left", "right"]) {
     const [hip, knee, ankle, foot] = ["hip", "knee", "ankle", "foot"].map((n) => J[`${sd}_${n}`]);
-    const target = footTarget(src, sd, k);
+    const target = footTarget(src, sd, k, dm);
     // Pole: the delivery's knee off its hip-ankle midpoint. When the leg is nearly straight this
     // is short and noisy, but then the knee sits on the line whatever its direction.
     const pole = src[knee].clone().sub(src[hip].clone().add(src[ankle]).multiplyScalar(0.5));
-    const [thigh, shin] = [k * segFt(`${sd}_hip`, `${sd}_knee`), k * segFt(`${sd}_knee`, `${sd}_ankle`)];
+    const [thigh, shin] = [k * dm.seg(`${sd}_hip`, `${sd}_knee`), k * dm.seg(`${sd}_knee`, `${sd}_ankle`)];
     // A foot that is not planted gets no pelvis drop (pelvisDrops), so its leg may not reach it;
     // its reach eases toward 0.99 of the leg past 0.97 (tanh, as _soft_limit in anchor.py) instead
     // of straightening at full length. Why: near full extension the knee angle changes without
@@ -537,7 +540,7 @@ export function poseAtTime(figure, delivery, t, release, armAngleDeg) {
     p[knee] = leg.mid;
     p[ankle] = leg.end;
     // Toe on its target (exactly, when the leg reached), lifted if it would dig into the mound.
-    const len = FOOT_FT * k;
+    const len = dm.foot * k;
     // The toe moves with its ankle when the leg could not reach (a dragging foot pulled in): the foot
     // keeps its shape and its toe stays on the mound instead of tilting up toward a target left behind.
     const dir = target.toe.clone().add(reachTo).sub(target.ankle).sub(p[ankle]).setLength(len);
@@ -554,9 +557,9 @@ export function poseAtTime(figure, delivery, t, release, armAngleDeg) {
   if (w > 0) {
     const T = throws === "L" ? "left" : "right";
     const [sh, el, wr, hd] = ["shoulder", "elbow", "wrist", "hand"].map((n) => J[`${T}_${n}`]);
-    const a = k * segFt(`${T}_shoulder`, `${T}_elbow`);
-    const forearm = k * segFt(`${T}_elbow`, `${T}_wrist`);
-    const palm = k * segFt(`${T}_wrist`, `${T}_hand`);
+    const a = k * dm.seg(`${T}_shoulder`, `${T}_elbow`);
+    const forearm = k * dm.seg(`${T}_elbow`, `${T}_wrist`);
+    const palm = k * dm.seg(`${T}_wrist`, `${T}_hand`);
     // Elbow bends the way the delivery's does at this instant (pole = its elbow off the shoulder).
     const ik = twoBone(p[sh], toScene(release), a, forearm + palm, p[el].clone().sub(p[sh]));
     const ikWrist = ik.mid.clone().add(ik.end.clone().sub(ik.mid).setLength(forearm));
@@ -583,13 +586,18 @@ export function handPosition(figure, throws = figure.userData.throws) {
 
 /**
  * The pitcher: a Group holding one SkinnedMesh (figure.js) on the SMPL/Mixamo skeleton (skeleton.js),
- * posed at a typical release until poseAtRelease is called with a real pitch. The rest skeleton
- * is 75 in tall; the figure is scaled by heightIn / 75.
- * userData: {throws, bones (JOINTS order), scale, armAngleDeg}.
+ * posed at a typical release until poseAtRelease is called with a real pitch. The default rest
+ * skeleton is 75 in tall; the figure is scaled by heightIn / 75. With `lengths` (boneLengths of the
+ * pitcher's delivery) the rig and meshes get his own bone lengths, at his standing height heightIn
+ * (restFromLengths): the legs, arms and torso differ per pitcher, not just the overall size.
+ * userData: {throws, bones (JOINTS order), scale, dims (rest lengths), armAngleDeg}.
  */
-export function makePitcher(throws, heightIn = 75) {
-  const { bones, skeleton } = buildSkeleton();
-  const { geometry, materials } = figureGeometry(throws);
+export { boneLengths };
+export function makePitcher(throws, heightIn = 75, lengths = null) {
+  const fit = lengths ? restFromLengths(lengths, heightIn / 12) : null;
+  const dims = fit ? dimsOf(fit.rest) : DEFAULT_DIMS;
+  const { bones, skeleton } = buildSkeleton(fit?.rest);
+  const { geometry, materials } = figureGeometry(throws, fit?.rest);
   const mesh = new THREE.SkinnedMesh(geometry, materials);
   mesh.add(bones[0]);
   mesh.bind(skeleton); // at rest: T-pose is the bind pose
@@ -597,9 +605,9 @@ export function makePitcher(throws, heightIn = 75) {
   mesh.castShadow = mesh.receiveShadow = true;
   const g = new THREE.Group();
   g.add(mesh);
-  const scale = heightIn / 75;
+  const scale = fit ? 1 : heightIn / 12 / RIG_HEIGHT_FT; // a fitted rest pose is already in the pitcher's own feet
   g.scale.setScalar(scale); // uniform: bone rotations are unchanged, every length scales
-  g.userData = { throws, bones, scale };
+  g.userData = { throws, bones, scale, dims };
   poseAtRelease(g, [throws === "L" ? 2 : -2, 54.5, 5.6], 35);
   return g;
 }

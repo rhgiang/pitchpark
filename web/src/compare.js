@@ -16,7 +16,7 @@ import { toScene } from "./coords.js";
 import { buildField } from "./field.js";
 import { tvView } from "./cameras.js";
 import { loadDelivery } from "./data.js";
-import { makePitcher, poseAtTime } from "./pitcher.js";
+import { makePitcher, boneLengths, poseAtTime } from "./pitcher.js";
 
 // ---- pure helpers (tested in test/compare.test.js) ---------------------------------------------------
 
@@ -100,7 +100,7 @@ async function main() {
   const camera = new THREE.PerspectiveCamera(tv.vfovDeg, 1, tv.near, 6000);
   camera.position.copy(toScene(tv.position));
   camera.lookAt(toScene(tv.target));
-  const figure = makePitcher(delivery.throws, delivery.height_in ?? 75);
+  const figure = makePitcher(delivery.throws, delivery.height_in ?? 75, boneLengths(delivery));
   scene.add(figure);
   const resize = () => {
     const w = pane.clientWidth, h = pane.clientHeight;
