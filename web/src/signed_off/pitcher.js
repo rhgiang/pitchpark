@@ -417,7 +417,73 @@ function pelvisDrops(figure, delivery) {
 
 /** Leg-jitter fix switch (ON by default; ?legfix=0 in signed_off/index.js turns it off). Not in 70c9f22. */
 export const legfix = { on: true };
+const airborne = (ankle, lo = 0.5, span = 0.4) => smoothstep((ankle.y - groundY(ankle) - lo) / span); // 0 planted .. 1 in the air
+// Height band (ft above the mound) over which the airborne-leg fix fades in; wide so the foot is not shifted abruptly at toe-off.
+const AIR_LO = 0.3, AIR_SPAN = 1.4;
 const SOFT_REACH_FT = 0.05; // slack at which the airborne leg starts easing into full extension
+
+/**
+ * Leg-fix: the delivery is 60 fps; the Catmull-Rom spline through its toe-off / foot-strike frames
+ * (a foot going 0 -> 17 ft/s in two frames) overshoots into a kick the real clips do not show (real
+ * ankle acceleration there is ~2.5x gentler). A [1 2 1]/4 filter one frame either side of the foot
+ * targets removes it (right ankle peak acceleration 1505 -> 646 ft/s^2) and leaves held feet where they are.
+ */
+const FOOT_S = 1 / 60;
+function smoothFeet(delivery, t, src) {
+  const a = deliveryFrame(delivery, t - FOOT_S), b = deliveryFrame(delivery, t + FOOT_S);
+  const out = src.slice();
+  for (const n of ["left_ankle", "right_ankle", "left_foot", "right_foot"]) {
+    const j = J[n];
+    out[j] = src[j].clone().multiplyScalar(0.5).addScaledVector(a[j], 0.25).addScaledVector(b[j], 0.25);
+  }
+  return out;
+}
+/**
+ * Leg-fix: the lead knee's bend direction (pole) swings fast at foot strike, and the rig's shorter leg
+ * doubles the knee's offset from the hip-ankle line, so its sideways swing peaked at 38 ft/s (delivery
+ * 17). Averaging the pole over +-0.05 s (0.25/0.5/0.25) brings that to 22 without moving a planted foot.
+ */
+const POLE_S = 0.05;
+function smoothedPole(delivery, t, sd, pole0) {
+  const [hip, knee, ankle] = ["hip", "knee", "ankle"].map((n) => J[`${sd}_${n}`]);
+  const at = (dt) => { const f = deliveryFrame(delivery, t + dt); return f[knee].clone().sub(f[hip].clone().add(f[ankle]).multiplyScalar(0.5)); };
+  const out = pole0.clone().multiplyScalar(0.5);
+  for (const dt of [-POLE_S, POLE_S]) out.addScaledVector(at(dt), 0.25);
+  return out;
+}
+
+/** Rig leg length / the delivery's median leg length (<= 1): the video skeleton's legs are ~10% longer. */
+function legRatio(figure, delivery, sd) {
+  const ud = figure.userData;
+  if (ud.legRatioFor !== delivery) {
+    ud.legRatioFor = delivery;
+    ud.legRatio = {};
+    for (const side of ["left", "right"]) {
+      const [h, kn, an] = ["hip", "knee", "ankle"].map((n) => J[`${side}_${n}`]);
+      const L = delivery.joints_ft.map((fr) => 
+        Math.hypot(...fr[kn].map((v, c) => v - fr[h][c])) + Math.hypot(...fr[an].map((v, c) => v - fr[kn][c]))).sort((a, b) => a - b);
+      ud.legRatio[side] = Math.min(1, (LEG_FT * ud.scale) / L[L.length >> 1]);
+    }
+  }
+  return ud.legRatio[sd];
+}
+
+/**
+ * Leg-fix, airborne foot. The pelvis is dropped to keep the planted foot planted and the rig's
+ * legs are ~10% shorter than the video skeleton's, so a foot in the air that follows the delivery
+ * in world space can end up farther from the hip than the delivery's own leg is (scaled to the rig):
+ * the knee runs straight, holds, and snaps (the drive leg pumped straight-bent-straight-bent while the
+ * video's knee bends once). Instead pull the foot in along the hip-to-foot line until the hip-to-ankle
+ * distance is the delivery's times the leg-length ratio (similar triangle: the knee angle is then the
+ * delivery's). Pull in only, never push out; weighted by foot height so planted feet are untouched.
+ * @returns the shift to add to the foot target (ankle and toe)
+ */
+function airborneLeg(target, hip, srcHip, ratio) {
+  const air = airborne(target.ankle, AIR_LO, AIR_SPAN);
+  const d = target.ankle.clone().sub(hip);
+  const want = target.ankle.distanceTo(srcHip) * ratio;
+  return d.setLength(Math.min(0, want - d.length()) * air);
+}
 
 /**
  * Leg-fix: a foot in the air that the delivery puts beyond the rig's (shorter) leg used to run
@@ -428,7 +494,7 @@ const SOFT_REACH_FT = 0.05; // slack at which the airborne leg starts easing int
  * Weighted by foot height above the ground so planted feet keep their exact position.
  */
 function softReach(hip, ankle, R, s) {
-  const air = smoothstep((ankle.y - groundY(ankle) - 0.5) / 0.4);
+  const air = airborne(ankle);
   const d = ankle.clone().sub(hip);
   const u = R - d.length();
   if (air <= 0 || u >= s) return ankle;
@@ -457,16 +523,23 @@ export function poseAtTime(figure, delivery, t, release, armAngleDeg) {
   const { bones, throws, scale: k } = figure.userData;
   const drop = atTime(delivery, pelvisDrops(figure, delivery), t, (v, w) => v.reduce((s, x, k) => s + x * w[k], 0));
   const src = deliveryFrame(delivery, t);
+  const feet = legfix.on ? smoothFeet(delivery, t, src) : src;
   setBones(bones, src, k);
   const p = jointPositions(figure).map((v) => v.setY(v.y - drop));
 
   for (const sd of ["left", "right"]) {
     const [hip, knee, ankle, foot] = ["hip", "knee", "ankle", "foot"].map((n) => J[`${sd}_${n}`]);
-    const target = footTarget(src, sd, k);
-    if (legfix.on) target.ankle = softReach(p[hip], target.ankle, 0.9999 * LEG_FT * k, SOFT_REACH_FT * k);
+    const target = footTarget(feet, sd, k);
+    if (legfix.on) {
+      // Airborne foot: keep the delivery's knee bend (see airborneLeg), then ease the last bit of reach.
+      const d = airborneLeg(target, p[hip], src[hip], legRatio(figure, delivery, sd));
+      target.ankle.add(d); target.toe.add(d);
+      target.ankle = softReach(p[hip], target.ankle, 0.9999 * LEG_FT * k, SOFT_REACH_FT * k);
+    }
     // Pole: the delivery's knee off its hip-ankle midpoint. When the leg is nearly straight this
     // is short and noisy, but then the knee sits on the line whatever its direction.
-    const pole = src[knee].clone().sub(src[hip].clone().add(src[ankle]).multiplyScalar(0.5));
+    let pole = src[knee].clone().sub(src[hip].clone().add(src[ankle]).multiplyScalar(0.5));
+    if (legfix.on) pole = smoothedPole(delivery, t, sd, pole);
     const leg = twoBone(p[hip], target.ankle, k * segFt(`${sd}_hip`, `${sd}_knee`), k * segFt(`${sd}_knee`, `${sd}_ankle`), pole);
     p[knee] = leg.mid;
     p[ankle] = leg.end;
