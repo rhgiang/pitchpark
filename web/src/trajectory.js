@@ -1,5 +1,9 @@
 // Playback of exported paths. No physics here (Python is the source of truth): we only
-// interpolate the exporter's time-stamped samples, so what flies is what Python computed.
+// evaluate what the exporter wrote (schema 3: the Statcast fit's 9 parameters, and RK4 knots joined
+// by cubic Hermite), so what flies is what Python computed. expandPitcher turns that into the
+// {t, p} sample arrays (5 ms) that the ball, trail and cameras read.
+
+export const SCHEMA = 3;
 
 /** Flight time of a path {t: [...s], p: [[x,y,z] ft, ...]}, release (t = 0) to the plate, in s. */
 export function duration(path) {
@@ -43,4 +47,69 @@ export function visibleEnd(path, minZ_ft) {
     return { t: t[k - 1] + f * (t[k] - t[k - 1]), p: p[k - 1].map((a, i) => a + f * (p[k][i] - a)) };
   }
   return { t: t[t.length - 1], p: [...p[p.length - 1]] };
+}
+
+/** Playback sample times: 0, dt, ... strictly before T, then T (the exporter's old 5 ms grid). */
+function grid(T, dt) {
+  const n = Math.ceil((T - 1e-9) / dt);
+  const t = new Array(n + 1);
+  for (let k = 0; k < n; k++) t[k] = Math.round(k * dt * 1e4) / 1e4;
+  t[n] = T;
+  return t;
+}
+
+/** The Statcast fit {f: [pos, vel, acc at y = 50 ft], r: release time on the fit's clock, T} as {t, p}. */
+export function expandFit({ f, r, T }, dt) {
+  const t = grid(T, dt);
+  const p = t.map((s) => {
+    const tau = r + s;
+    return [0, 1, 2].map((k) => f[k] + f[3 + k] * tau + 0.5 * f[6 + k] * tau * tau);
+  });
+  return { t, p };
+}
+
+/**
+ * RK4 knots {s: [[x, y, z, vx, vy, vz], ...], T} as {t, p}: cubic Hermite between knots (knot k
+ * is at k * knot, the last at T). Error is about h^4 / 384 times the 4th derivative of position,
+ * far under 0.01 ft at 50 ms (results/web-performance.md).
+ */
+export function expandKnots({ s, T }, knot, dt) {
+  const t = grid(T, dt);
+  const at = (j) => (j === s.length - 1 ? T : j * knot);
+  let j = 0;
+  const p = t.map((u) => {
+    while (j < s.length - 2 && at(j + 1) <= u) j++;
+    const h = at(j + 1) - at(j);
+    const x = (u - at(j)) / h;
+    const x2 = x * x, x3 = x2 * x;
+    const h00 = 2 * x3 - 3 * x2 + 1, h10 = x3 - 2 * x2 + x, h01 = -2 * x3 + 3 * x2, h11 = x3 - x2;
+    return [0, 1, 2].map((k) => h00 * s[j][k] + h10 * h * s[j][3 + k] + h01 * s[j + 1][k] + h11 * h * s[j + 1][3 + k]);
+  });
+  return { t, p };
+}
+
+/**
+ * Schema-3 export -> the layout the viewer reads: each pitch's real / sim / nospin becomes a
+ * {t, p} path, expanded on first access (most pitches are never played). Throws on any other
+ * schema so the caller can show the data-error card instead of misreading old or newer files.
+ */
+export function expandPitcher(data) {
+  const m = data?.meta;
+  if (m?.schema !== SCHEMA) throw new Error(`pitch data schema ${m?.schema} is not supported (expected ${SCHEMA})`);
+  const expanders = {
+    real: (c) => expandFit(c, m.step_s),
+    sim: (c) => expandKnots(c, m.knot_s, m.step_s),
+    nospin: (c) => expandKnots(c, m.knot_s, m.step_s),
+  };
+  for (const ab of data.at_bats) {
+    for (const pitch of ab.pitches) {
+      for (const [key, expand] of Object.entries(expanders)) {
+        const c = pitch[key];
+        if (!c) continue;
+        let path;
+        Object.defineProperty(pitch, key, { enumerable: true, configurable: true, get: () => (path ??= expand(c)) });
+      }
+    }
+  }
+  return data;
 }

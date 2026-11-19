@@ -304,6 +304,25 @@ async function pickPitcher(slug) {
   $("ab-count").textContent = `(${data.at_bats.length} held-out)`;
   dispatch({ type: "pickPitcher", slug, data, delivery });
   dispatch({ type: "pickAtBat", index: 0 });
+  await warmUp(); // still inside the loading chip: the first pitch should not stall on shader compiles
+}
+
+/**
+ * Compile the shaders the first pitch needs while the loading chip is up. The park drew once behind
+ * the menu, but the new figure (skinned), zone, ball, ghost and trails only meet the GPU when first
+ * drawn, and three's compile() skips invisible objects, so they are shown for the call. Never blocks
+ * the load for long: a failure or a slow driver is ignored (it just compiles lazily, as before).
+ */
+async function warmUp() {
+  const hidden = [ball, ghost, trail, ghostTrail, noSpinLine].filter((o) => !o.visible);
+  hidden.forEach((o) => { o.visible = true; });
+  try {
+    await Promise.race([renderer.compileAsync(scene, camera), new Promise((r) => setTimeout(r, 3000))]);
+  } catch (err) {
+    console.warn("shader warm-up skipped:", err);
+  } finally {
+    hidden.forEach((o) => { o.visible = false; });
+  }
 }
 
 /** Open or close the pitcher / at-bat picker (no argument: toggle). */

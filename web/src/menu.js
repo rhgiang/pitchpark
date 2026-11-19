@@ -17,11 +17,16 @@ const MIX_SHOWN = 5;
  * @returns {{type: string, pct: number}[]}
  */
 export function pitchMix(data) {
-  const counts = new Map();
-  for (const ab of data.at_bats) for (const p of ab.pitches) if (p.pitch_type) counts.set(p.pitch_type, (counts.get(p.pitch_type) ?? 0) + 1);
-  const total = [...counts.values()].reduce((s, n) => s + n, 0);
+  const counts = {};
+  for (const ab of data.at_bats) for (const p of ab.pitches) if (p.pitch_type) counts[p.pitch_type] = (counts[p.pitch_type] ?? 0) + 1;
+  return mixFromCounts(counts);
+}
+
+/** Same as pitchMix from index.json's per-type pitch counts ({FF: 120, ...}); empty/missing gives none. */
+export function mixFromCounts(counts = {}) {
+  const total = Object.values(counts).reduce((s, n) => s + n, 0);
   if (!total) return [];
-  let rows = [...counts].sort((a, b) => b[1] - a[1]);
+  let rows = Object.entries(counts).sort((a, b) => b[1] - a[1]);
   const rest = rows.slice(MIX_SHOWN).reduce((s, r) => s + r[1], 0);
   rows = rows.slice(0, MIX_SHOWN);
   if (rest) rows.push(["Other", rest]);
@@ -36,6 +41,7 @@ export function cardModels(index, deliverySlugs) {
   const bySlug = new Map(index.map((p) => [p.slug, p]));
   return [...bySlug.values()].map((p) => ({
     slug: p.slug, name: displayName(p.name), hand: `${p.throws}HP`, nAtBats: p.n_at_bats,
+    height: heightLabel(p.height_in), mix: mixFromCounts(p.mix),
     fullDelivery: deliverySlugs.has(p.slug),
   }));
 }

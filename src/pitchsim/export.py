@@ -1,15 +1,21 @@
 """Viewer export (M4): a pitcher's held-out at-bats as JSON for the Three.js viewer.
 
 Python is the source of truth; the browser only interpolates the samples written here.
-Layout (schema 2: schema 1 from the M4 plan, Task 3, plus Task 11's no-spin path and bases) is
-read by every web module.
+Layout (schema 3) is read by every web module. Schema 3 stores paths compactly (the viewer
+expands them back to 5 ms samples in web/src/trajectory.js `expandPitcher`; schema 2 stored every
+5 ms sample, 5-15 MB per pitcher):
 
 - "real" is Statcast's 9-parameter constant-acceleration fit, evaluated analytically from
-  release to the front of the plate (not raw tracking points).
+  release to the front of the plate (not raw tracking points). Stored as the fit itself:
+  {"f": [x, y, z, vx, vy, vz, ax, ay, az] at y = 50 ft, "r": release time on the fit's clock
+  (< 0), "T": flight time}; position at time s after release is the fit at tau = r + s.
+- "sim" and "nospin" are RK4 flights stored as {"s": [[x, y, z, vx, vy, vz], ...], "T": flight
+  time}: knots every meta.knot_s seconds from release plus one exactly at T; the viewer joins
+  them with cubic Hermite (position + velocity at both ends), error << 0.01 ft (results/web-performance.md).
 - "sim" is M1 + M3: physics.simulate from release_state with the pitch type's calibrated Cd /
   spin efficiency, that game's air density, and the per-pitch push, exactly as M3 scored it
   (seam.fit_pitch_types is the one place those fits live).
-- "nospin" (schema 2) is a reference for seeing the movement: the same release state, the type's
+- "nospin" (schema 3) is a reference for seeing the movement: the same release state, the type's
   calibrated Cd, gravity, and nothing else (spin efficiency 0 removes the Magnus force; no M3
   push). Real plate minus no-spin plate is the "break vs no spin" (tunnel.break_x_in / _z_in):
   what spin and seams did to the pitch, as measured against a spinless ball thrown the same way.
@@ -29,7 +35,8 @@ from pitchsim.statcast import _time_to_y, clean, fit_plate_crossing, initial_sta
 from pitchsim.tunneling import (DECISION_Y_FT, approach_angles_deg, perceived_velocity_mph,
                                 separation_in)
 
-SCHEMA = 2
+SCHEMA = 3
+KNOT_S = 0.05   # sim / nospin knot spacing (s); the error table is in results/web-performance.md
 
 
 def _num(x) -> float | None:
@@ -51,31 +58,42 @@ def _grid(t_end_s: float, dt_s: float) -> np.ndarray:
     return np.append(np.arange(0.0, t_end_s - 1e-9, dt_s), t_end_s)
 
 
-def _path(t: np.ndarray, pos: np.ndarray) -> dict:
-    return {"t": np.round(t, 4).tolist(), "p": np.round(pos, 4).tolist()}
+def _knots(t_end_s: float, knot_s: float) -> np.ndarray:
+    """0, knot_s, 2 knot_s, ... strictly before t_end, then t_end (same rule as _grid)."""
+    return _grid(t_end_s, knot_s)
 
 
-def _sampled(tr: dict, dt_s: float) -> tuple[dict, list, list]:
-    """A physics.simulate result resampled on the viewer's grid: (path, plate [x, z, t], check).
+def _sampled(tr: dict, knot_s: float) -> tuple[dict, list, list]:
+    """A physics.simulate result as Hermite knots: (path, plate [x, z, t], check).
 
-    check: [t, x, y, z] at 1/4, 1/2, 3/4 of the flight from the 1 ms RK4 output itself, for the
-    viewer's truth test (independent of the 5 ms samples). Times are rounded before evaluating,
-    like check_real: the JSON stores t to 1e-4 s, and at ~130 ft/s 5e-5 s is ~0.08 in.
+    path: {"s": [[x, y, z, vx, vy, vz], ...], "T": flight time}, taken from the 1 ms RK4 output
+    at 0, knot_s, ... and T (positions to 1e-4 ft, velocities to 1e-3 ft/s).
+    check: [t, x, y, z] at 1/4, 1/2, 3/4 of the flight from the RK4 output itself, for the
+    viewer's truth test (independent of the knots and of the Hermite join).
     """
-    s = _grid(tr["t"][-1], dt_s)
-    p = np.column_stack([np.interp(s, tr["t"], tr["pos"][:, k]) for k in range(3)])
-    q = np.round(s[-1] * np.array([0.25, 0.5, 0.75]), 4)
-    check = np.column_stack([q] + [np.interp(q, tr["t"], tr["pos"][:, k]) for k in range(3)])
-    return _path(s, p), [_num(p[-1, 0]), _num(p[-1, 2]), _num(s[-1])], np.round(check, 4).tolist()
+    T = float(tr["t"][-1])
+    k = _knots(T, knot_s)
+    at = lambda q, a: np.column_stack([np.interp(q, tr["t"], a[:, j]) for j in range(3)])
+    rows = np.hstack([np.round(at(k, tr["pos"]), 4), np.round(at(k, tr["vel"]), 3)])
+    q = np.round(T * np.array([0.25, 0.5, 0.75]), 4)
+    check = np.round(np.column_stack([q, at(q, tr["pos"])]), 4).tolist()
+    pos_end = at(np.array([T]), tr["pos"])[0]
+    return ({"s": rows.tolist(), "T": round(T, 6)},
+            [_num(pos_end[0]), _num(pos_end[2]), round(T, 6)], check)
 
 
 def export_pitcher(raw: pd.DataFrame, rho: pd.Series, dt_s: float = 0.005,
-                   height_in: int | None = None) -> dict:
+                   height_in: int | None = None, knot_s: float = KNOT_S,
+                   checks: bool = False) -> dict:
     """One pitcher's held-out at-bats in the viewer's JSON layout (schema 2).
 
     raw: this pitcher's Statcast rows, uncleaned (rows with no tracking still count).
     rho: air density (lb/ft^3) per row of raw (same index).
-    dt_s: path sampling step in seconds; each path also ends exactly at y = 17/12 ft.
+    dt_s: the viewer's playback sampling step in seconds (meta.step_s); also the grid for the
+        decision-point separation computed here. Paths end exactly at y = 17/12 ft.
+    knot_s: spacing of the stored sim / nospin Hermite knots.
+    checks: also write check_real / check_nospin (independent truth points for the viewer
+        tests; only the test fixture needs them, so the shipped export leaves them None).
     height_in: the pitcher's height (StatsAPI) for the 3D delivery's scale; None if unknown.
     Added to schema 2 as an optional field, so readers of older files still work.
     """
@@ -123,13 +141,15 @@ def export_pitcher(raw: pd.DataFrame, rho: pd.Series, dt_s: float = 0.005,
                 p = fit_at(i, s)
                 p[-1] = plate_pos[i]    # same formula; exact at the plate by construction
                 path = (s, p)
-                real = _path(s, p)
-                plate_real = [_num(plate_pos[i, 0]), _num(plate_pos[i, 2]), _num(flight[i])]
+                real = {"f": [round(float(v), 4) for v in (*pos50[i], *vel50[i], *acc[i])],
+                        "r": round(float(t_rel[i]), 6), "T": round(float(flight[i]), 6)}
+                plate_real = [_num(plate_pos[i, 0]), _num(plate_pos[i, 2]), real["T"]]
                 # Round the times before evaluating: the JSON stores t to 1e-4 s, and a ball
                 # at ~130 ft/s moves ~0.08 in in 5e-5 s, so positions must match the stored t.
                 q = np.round(flight[i] * np.array([0.25, 0.5, 0.75]), 4)
                 # Independent of the samples (Task 4 checks the samples against these).
-                check = np.round(np.column_stack([q, fit_at(i, q)]), 4).tolist()
+                if checks:
+                    check = np.round(np.column_stack([q, fit_at(i, q)]), 4).tolist()
             if status == "ok":
                 tf = fits[ptype]
                 spin = float(test.at[i, "release_spin_rate"])
@@ -138,10 +158,12 @@ def export_pitcher(raw: pd.DataFrame, rho: pd.Series, dt_s: float = 0.005,
                 tr = simulate(rel_pos[i], rel_vel[i], spin, axis,
                               PhysicsParams(cd=tf.cd, spin_efficiency=tf.eff, rho=rho_i),
                               extra_acc=push[i])
-                sim, plate_sim, _ = _sampled(tr, dt_s)
+                sim, plate_sim, _ = _sampled(tr, knot_s)
                 tr0 = simulate(rel_pos[i], rel_vel[i], spin, axis,
                                PhysicsParams(cd=tf.cd, spin_efficiency=0.0, rho=rho_i))
-                nospin, plate_nospin, check_nospin = _sampled(tr0, dt_s)
+                nospin, plate_nospin, check_nospin = _sampled(tr0, knot_s)
+                if not checks:
+                    check_nospin = None
             sep = None
             if path is not None and prev is not None:
                 try:
@@ -192,6 +214,7 @@ def export_pitcher(raw: pd.DataFrame, rho: pd.Series, dt_s: float = 0.005,
         "meta": {"schema": SCHEMA, "units": "ft, s, mph, rpm, deg",
                  "axes": "x catcher's right, y plate->pitcher, z up",
                  "real_label": "Statcast fit", "sim_label": "M1 + M3",
+                 "step_s": dt_s, "knot_s": knot_s,
                  "decision_y_ft": DECISION_Y_FT, "synthetic": "Synthetic" in name},
         "pitcher": {"name": name, "id": int(raw["pitcher"].iloc[0]),
                     "throws": str(raw["p_throws"].iloc[0]), "height_in": height_in},
