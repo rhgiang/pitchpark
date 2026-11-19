@@ -1,5 +1,7 @@
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { PALETTE, makeToonMaterial, noOutline, timeOfDay } from "../look.js";
+import { isOld } from "./old.js";
 import { place } from "./build.js";
 import { polar, fenceDistFt, rng } from "./layout.js";
 import { fallTexture } from "./surrounds.js";
@@ -41,18 +43,35 @@ export function cliffHeight(a, off, i = 0, j = 0) {
   return Math.max(0, plateau * (1 - smooth((off - 150) / 110)) + rough * 0.6);
 }
 
-/** Cliff mesh: a polar grid, flat-shaded, vertex-coloured by slope and height. */
-function cliffGeometry() {
-  const cols = Math.round((FALLS.aCliff1 - FALLS.aCliff0) / A_STEP);
+// Cliff v2 palette (greener; ?old=falls restores the first-built grey): grass and moss on every surface that faces up,
+// rock only where it is steep, with moss streaks down some of the steep faces.
+const GRASS = [0x5fa04a, 0x6fae4e, 0x4f9444, 0x7cb552, 0x3f8644];
+const MOSS = [0x6c8f4e, 0x5d8447, 0x7c9a58];
+const ROCK_V2 = [0x9a8470, 0x85705c, 0x72604f, 0xa8957f];
+const TERRACE_FT = 17; // ledges: the face's height is pulled toward multiples of this
+
+const COLS = Math.round((FALLS.aCliff1 - FALLS.aCliff0) / A_STEP);
+
+/** The cliff's polar grid of [x, h, z] nodes, P[column][row] (rows = OFFS). v2 steps the face into terraces. */
+function cliffGrid(v1) {
+  const cols = COLS;
   const P = [];
   for (let i = 0; i <= cols; i++) {
     const a = FALLS.aCliff0 + i * A_STEP;
     P.push(OFFS.map((off, j) => {
-      const h = cliffHeight(a, off, i, j);
+      let h = cliffHeight(a, off, i, j);
+      // v2: terraces. Pull the steep face toward flat ledges every TERRACE_FT, so it steps instead of ramping (the fall's own columns stay smooth).
+      if (!v1 && Math.abs(a - FALLS.aFall) > 3.1 && off > 0 && off <= FALLS.faceRun + 14) h = h * 0.5 + Math.round(h / TERRACE_FT) * TERRACE_FT * 0.5 * Math.min(1, off / 12);
       const xy = polar(a, fenceAt(a) + FALLS.cliffOff + off);
       return [xy[0], h, -xy[1]];
     }));
   }
+  return P;
+}
+
+/** Cliff mesh: the grid as flat-shaded triangles, vertex-coloured by slope and height. */
+function cliffGeometry(P, v1) {
+  const cols = COLS;
   const pos = [], col = [];
   const c = new THREE.Color();
   const A = new THREE.Vector3(), B = new THREE.Vector3(), C = new THREE.Vector3(), N = new THREE.Vector3();
@@ -61,9 +80,17 @@ function cliffGeometry() {
     N.crossVectors(B.clone().sub(A), C.clone().sub(A)).normalize();
     const up = Math.abs(N.y);
     const mid = (p[1] + q[1] + r[1]) / 3;
-    if (up > 0.72 && mid > 4) c.setHex(PALETTE.foliage[k % 3 + 1]).multiplyScalar(0.95 + 0.1 * hash(k, 3)); // grass on the top
+    if (!v1) {
+      const r = hash(k, 9);
+      if (up > 0.62 && mid > 3) c.setHex(GRASS[k % GRASS.length]).multiplyScalar(0.92 + 0.16 * hash(k, 3));
+      else if (up > 0.5 && mid > 3) c.setHex(MOSS[k % MOSS.length]).lerp(new THREE.Color(ROCK_V2[Math.floor(r * 4)]), 0.35 + 0.3 * hash(k, 5));
+      else if (mid > 8 && r > 0.8) c.setHex(MOSS[k % MOSS.length]).multiplyScalar(0.9); // a few moss streaks down the steep rock
+      else if (mid <= 3) c.setHex(PALETTE.grassFoul);
+      else c.setHex(ROCK_V2[Math.floor(r * 4)]).multiplyScalar(0.92 + 0.3 * Math.min(1, mid / 90));
+    } else if (up > 0.72 && mid > 4) c.setHex(PALETTE.foliage[k % 3 + 1]).multiplyScalar(0.95 + 0.1 * hash(k, 3)); // grass on the top
     else if (up > 0.72) c.setHex(PALETTE.grassFoul);
     else c.setHex([0xa08a74, 0x8a7360, 0x76604f, 0xb5a28c][Math.floor(hash(k, 9) * 4)]).multiplyScalar(0.9 + 0.35 * Math.min(1, mid / 90));
+    if (!v1) c.multiplyScalar(1.18); // the face looks toward home, out of the sun: lift it
     pos.push(...p, ...q, ...r);
     for (let n = 0; n < 3; n++) col.push(c.r, c.g, c.b);
   };
@@ -115,10 +142,12 @@ function fallStrip(halfW, offs) {
 }
 
 export function buildFalls() {
+  const v1 = isOld("falls"); // ?old=falls: the first-built grey cliff
   const g = new THREE.Group();
   g.name = "falls";
   const rock = makeToonMaterial(0xffffff, { vertexColors: true, surface: "rock", side: THREE.DoubleSide });
-  const cliff = new THREE.Mesh(cliffGeometry(), rock);
+  const grid = cliffGrid(v1);
+  const cliff = new THREE.Mesh(cliffGeometry(grid, v1), rock);
   cliff.castShadow = cliff.receiveShadow = true;
   g.add(cliff);
 
@@ -167,6 +196,38 @@ export function buildFalls() {
   sites.forEach((s, i) => { place(boulders, i, toScene(s.p, 0), s.yaw, s.s); boulders.setColorAt(i, col.set(i % 2 ? PALETTE.rock : 0xa49482)); });
   boulders.castShadow = boulders.receiveShadow = true;
   g.add(boulders);
+
+  // v2: pines on the plateau and shrubs and rock outcrops on the ledges, all sitting on grid nodes (so on the surface), instanced.
+  if (!v1) {
+    const pines = [], shrubs = [], outcrops = [];
+    for (let i = 1; i < COLS; i++) {
+      const a = FALLS.aCliff0 + i * A_STEP;
+      if (Math.abs(a - FALLS.aFall) < 4.6) continue; // the river runs through here
+      for (let j = 2; j < OFFS.length - 3; j++) {
+        const n = grid[i][j], q = hash(i + 3, j + 7);
+        if (n[1] < 6) continue;
+        if (OFFS[j] >= FALLS.faceRun + 8) { if (q < 0.4) pines.push({ p: n, s: 0.8 + hash(i, j + 11) * 0.7, yaw: q * 40 }); }
+        else if (OFFS[j] > 6) { if (q < 0.16) shrubs.push({ p: n, s: 1.6 + hash(j, i) * 2 }); else if (q > 0.78) outcrops.push({ p: n, s: 3 + hash(i, j) * 4, yaw: q * 30 }); }
+      }
+    }
+    const pineGeo = mergeGeometries([
+      new THREE.CylinderGeometry(0.35, 0.5, 3, 5).translate(0, 1.5, 0).toNonIndexed(),
+      new THREE.ConeGeometry(3, 7, 6).translate(0, 5.5, 0).toNonIndexed(),
+      new THREE.ConeGeometry(2.3, 6, 6).translate(0, 9.5, 0).toNonIndexed(),
+      new THREE.ConeGeometry(1.5, 5, 6).translate(0, 13, 0).toNonIndexed(),
+    ].map((geo) => (geo.deleteAttribute("uv"), geo)));
+    const tone = new THREE.Color();
+    const inst = (geo, list, mat, colours, shadow = true) => {
+      const m = new THREE.InstancedMesh(geo, mat, Math.max(1, list.length));
+      m.count = list.length;
+      list.forEach((o, i) => { place(m, i, o.p, o.yaw ?? 0, o.s); m.setColorAt(i, tone.set(colours[i % colours.length])); });
+      m.castShadow = shadow; m.receiveShadow = true;
+      g.add(m);
+    };
+    inst(pineGeo, pines, makeToonMaterial(0xffffff, { surface: "foliage" }), [0x2f7a45, 0x3f8f4a, 0x2c6b4c, 0x4a9a50]);
+    inst(new THREE.IcosahedronGeometry(1, 1).scale(1.2, 1, 1.1).translate(0, 0.3, 0), shrubs, makeToonMaterial(0xffffff, { surface: "foliage" }), [0x5ea24c, 0x7fb24a, 0x4f9444]);
+    inst(new THREE.DodecahedronGeometry(1, 0).scale(1.2, 0.8, 1).translate(0, 0.4, 0), outcrops, makeToonMaterial(0xffffff, { surface: "rock" }), [0xa8957f, 0x9a8470, 0xb5a28c]);
+  }
 
   // Animation lives on its own empty: a tick on the group would stop mergeStatic merging the cliff and pool.
   const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), S = new THREE.Vector3(), Pv = new THREE.Vector3();

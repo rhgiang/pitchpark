@@ -4,7 +4,8 @@ import { makeBall, spinBall, setSeams, seamStyle, BALL_RADIUS_FT } from "../ball
 import { box, place } from "./build.js";
 import { wordmarkTexture } from "./brand.js";
 import { fenceDistFt, BATTERS_EYE_GAP_FT } from "./layout.js";
-import { TOWER, EYE_PANEL, rpmLabel } from "./signature.js";
+import { isOld } from "./old.js";
+import { TOWER, TOWER_V1, EYE_PANEL, rpmLabel } from "./signature.js";
 
 /*
  * The Spin Tower: a giant baseball on a pylon behind centre field, between twin light towers. It is the
@@ -60,7 +61,8 @@ function makePanel(w, h, arcRadius = 0) {
       p.setXYZ(i, r * Math.sin(a), p.getY(i), -r * Math.cos(a));
     }
   }
-  const mesh = noOutline(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide })));
+  const mesh = noOutline(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8 })));
+  // (polygon offset: a board 0.2 ft off a face 500 ft away is below the depth buffer's resolution)
   return { mesh, update };
 }
 
@@ -75,14 +77,16 @@ function mast(steel, h, r0, r1) {
 }
 
 /** One light tower: mast, a lamp bank facing home, pennants on top. Lamps are written to lampSites for one instanced mesh. */
-function lightTower(x, y, flags, poles, lampSites, glows) {
+function lightTower(x, y, flags, poles, lampSites, glows, T) {
+  const k = T.mastH / 68; // the first-built tower's mast was 68 ft; everything scales with it
   const g = new THREE.Group();
   g.position.set(x, 0, -y);
+  g.scale.setScalar(k);
   const steel = makeToonMaterial(PALETTE.steel);
-  g.add(mast(steel, TOWER.mastH, 4.2, 2.3));
+  g.add(mast(steel, 68, 4.2, 2.3));
   g.add(box(makeToonMaterial(PALETTE.navy), 9, 3, 9, 0, 0, 0)); // footing
   const head = new THREE.Group();
-  head.position.set(0, TOWER.mastH, 0);
+  head.position.set(0, 68, 0);
   head.rotation.x = 0.1; // tilted down toward the field
   g.add(head);
   head.add(box(steel, 28, 15, 2.2, 0, -7.5, 0));
@@ -96,8 +100,8 @@ function lightTower(x, y, flags, poles, lampSites, glows) {
   // Pennants on three short masts along the top.
   const colours = [PALETTE.coral, PALETTE.mustard, PALETTE.teal];
   [-11, 0, 11].forEach((dx, i) => {
-    poles.push({ p: [x + dx, y], y: TOWER.mastH + 7.5, s: [1, 9, 1] });
-    flags.push({ base: [x + dx, TOWER.mastH + 7.5 + 9 - 0.3, -y], yaw: 0, len: 9, h: 3.6, color: colours[(i + (x > 0 ? 1 : 0)) % 3], pennant: true });
+    poles.push({ p: [x + dx * k, y], y: T.mastH + 7.5 * k, s: [1, 9 * k, 1] });
+    flags.push({ base: [x + dx * k, T.mastH + (7.5 + 9) * k - 0.3, -y], yaw: 0, len: 9 * k, h: 3.6 * k, color: colours[(i + (x > 0 ? 1 : 0)) % 3], pennant: true });
   });
   return g;
 }
@@ -105,48 +109,87 @@ function lightTower(x, y, flags, poles, lampSites, glows) {
 export function buildTower(flags, poles) {
   const g = new THREE.Group();
   g.name = "spin-tower";
-  const { x, y, ballR, ballZ, twinX } = TOWER;
-
-  // The pylon: a tapered navy shaft with cream bands, a plinth, and a collar under the ball.
+  const v1 = isOld("tower"); // ?old=tower: as first built (far away, readout on the batter's eye wall)
+  const T = v1 ? TOWER_V1 : TOWER;
+  const { x, y, ballR, ballZ, twinX } = T;
   const navy = makeToonMaterial(PALETTE.navy), cream = makeToonMaterial(PALETTE.cream), coral = makeToonMaterial(PALETTE.coral);
-  const shaftH = ballZ - ballR - 3;
-  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(3.6, 6, shaftH, 8).translate(0, shaftH / 2, 0), navy);
-  shaft.position.set(x, 3, -y);
-  shaft.castShadow = shaft.receiveShadow = true;
-  g.add(shaft);
-  g.add(box(cream, 18, 3, 18, x, 0, -y));
-  for (const h of [14, 28, 42]) {
-    const t = h / shaftH;
-    const band = new THREE.Mesh(new THREE.CylinderGeometry(6 - 2.4 * t - 0.05, 6 - 2.4 * t - 0.05 + 0.5, 1.6, 8), coral);
-    band.position.set(x, 3 + h, -y);
-    g.add(band);
+  const lampSites = [], glows = [];
+  let pylonPanel = null, eyePanel = null;
+
+  if (v1) {
+    // The pylon: a tapered navy shaft with cream bands, a plinth, and a collar under the ball.
+    const shaftH = ballZ - ballR - 3;
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(3.6, 6, shaftH, 8).translate(0, shaftH / 2, 0), navy);
+    shaft.position.set(x, 3, -y);
+    shaft.castShadow = shaft.receiveShadow = true;
+    g.add(shaft);
+    g.add(box(cream, 18, 3, 18, x, 0, -y));
+    for (const h of [14, 28, 42]) {
+      const t = h / shaftH;
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(6 - 2.4 * t - 0.05, 6 - 2.4 * t - 0.05 + 0.5, 1.6, 8), coral);
+      band.position.set(x, 3 + h, -y);
+      g.add(band);
+    }
+    const collar = new THREE.Mesh(new THREE.CylinderGeometry(7, 4, 4, 8), cream);
+    collar.position.set(x, ballZ - ballR - 1, -y);
+    collar.castShadow = true;
+    g.add(collar);
+    // Crest: the park's wordmark on a board between the twin towers, in front of the pylon.
+    const crest = noOutline(new THREE.Mesh(new THREE.PlaneGeometry(56, 14), new THREE.MeshBasicMaterial({ map: wordmarkTexture() })));
+    crest.position.set(x, 30, -y + 7.2);
+    g.add(crest);
+    g.add(box(navy, 58, 16, 1.2, x, 22, -y + 6.4));
+    for (const sx of [-26, 26]) g.add(box(navy, 2, 22, 2, x + sx, 0, -y + 6.4));
+    // The readout under the ball, and a big one on the face of the batter's eye wall (where the umpire's and batter's frames see it).
+    pylonPanel = makePanel(24, 6.5);
+    pylonPanel.mesh.position.set(x, ballZ - ballR - 3.5, -y + 6.4);
+    pylonPanel.mesh.rotation.x = -0.12;
+    g.add(pylonPanel.mesh);
+    const eyeR = fenceDistFt(0) + BATTERS_EYE_GAP_FT - 1.0; // 1 ft off the wall face: depth resolution out here is a few tenths of a foot
+    eyePanel = makePanel(EYE_PANEL.w, EYE_PANEL.h, eyeR);
+    eyePanel.mesh.position.set(0, EYE_PANEL.z, 0);
+    g.add(eyePanel.mesh);
+  } else {
+    // v2. A wide navy scoreboard-style head at the height of the ball: the crest on its left, the rpm readout on its right,
+    // the ball between them, all inside the umpire's band of sky above the batter's eye wall. The batter's eye stays plain dark.
+    const { boardW, boardH, boardX } = T;
+    const steel = makeToonMaterial(PALETTE.steel);
+    const headW = 2 * (boardX + boardW / 2 + 6), headH = 2 * ballR + 4;
+    const faceZ = -y - ballR - 1.5; // the head's front face, just behind the ball's back (scene z: home is +z)
+    g.add(box(navy, headW, headH, 2, x, ballZ - headH / 2, faceZ - 1));
+    g.add(box(coral, headW + 1.6, 1.6, 3, x, ballZ + headH / 2, faceZ - 1)); // coral cap and sill
+    g.add(box(coral, headW + 1.6, 1.6, 3, x, ballZ - headH / 2 - 1.6, faceZ - 1));
+    g.add(box(steel, headW + 1.2, 0.8, 1.2, x, ballZ + headH / 2 + 1.6, faceZ - 1)); // lamp rail
+    // Legs and the pylon under the ball (the batter's eye wall hides all of it from the plate).
+    for (const sx of [-1, 1]) g.add(box(navy, 5, ballZ - headH / 2 - 1.6, 3, x + sx * (headW / 2 - 8), 0, faceZ - 1));
+    const pylonH = ballZ - ballR - 2;
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(4.6, 9, pylonH, 8).translate(0, pylonH / 2, 0), navy);
+    shaft.position.set(x, 3, -y);
+    shaft.castShadow = shaft.receiveShadow = true;
+    g.add(shaft);
+    g.add(box(cream, 26, 3, 26, x, 0, -y));
+    for (const h of [10, 22, 34]) {
+      const r = 9 - 4.4 * (h / pylonH);
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(r - 0.05, r + 0.4, 1.8, 8), coral);
+      band.position.set(x, 3 + h, -y);
+      g.add(band);
+    }
+    const collar = new THREE.Mesh(new THREE.CylinderGeometry(6.4, 4.4, 3.4, 8), cream);
+    collar.position.set(x, ballZ - ballR - 1, -y);
+    collar.castShadow = true;
+    g.add(collar);
+    // The two boards, flush on the head's face (planes face +z, toward home).
+    pylonPanel = makePanel(boardW, boardH);
+    pylonPanel.mesh.position.set(x + boardX, ballZ, faceZ + 0.2); // the readout on the right: the scorebug (top left) covers the left end in the batter's view
+    g.add(pylonPanel.mesh);
+    const crest = noOutline(new THREE.Mesh(new THREE.PlaneGeometry(boardW, boardH), new THREE.MeshBasicMaterial({ map: wordmarkTexture(), polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8 })));
+    crest.position.set(x - boardX, ballZ, faceZ + 0.2);
+    g.add(crest);
+    // A row of lamps along the head's top edge, lit at night (the shared lamp material).
+    for (let i = -9; i <= 9; i++) lampSites.push({ parent: g, p: [x + i * (headW / 20), ballZ + headH / 2 + 3.4, faceZ] });
   }
-  const collar = new THREE.Mesh(new THREE.CylinderGeometry(7, 4, 4, 8), cream);
-  collar.position.set(x, ballZ - ballR - 1, -y);
-  collar.castShadow = true;
-  g.add(collar);
 
-  // Crest: the park's wordmark on a board between the twin towers, in front of the pylon.
-  const crest = noOutline(new THREE.Mesh(new THREE.PlaneGeometry(56, 14), new THREE.MeshBasicMaterial({ map: wordmarkTexture() })));
-  crest.position.set(x, 30, -y + 7.2);
-  g.add(crest);
-  const frame = box(navy, 58, 16, 1.2, x, 22, -y + 6.4);
-  g.add(frame);
-  for (const sx of [-26, 26]) g.add(box(navy, 2, 22, 2, x + sx, 0, -y + 6.4));
-
-  // The readout under the ball (a copy of the one on the batter's eye wall: one texture each, same text).
-  const pylonPanel = makePanel(24, 6.5);
-  pylonPanel.mesh.position.set(x, ballZ - ballR - 3.5, -y + 6.4);
-  pylonPanel.mesh.rotation.x = -0.12;
-  g.add(pylonPanel.mesh);
-
-  // The big panel on the face of the batter's eye wall, where the umpire's and batter's frames can see it.
-  const eyeR = fenceDistFt(0) + BATTERS_EYE_GAP_FT - 1.0; // 1 ft off the wall face: depth resolution out here is a few tenths of a foot
-  const eyePanel = makePanel(EYE_PANEL.w, EYE_PANEL.h, eyeR);
-  eyePanel.mesh.position.set(0, EYE_PANEL.z, 0);
-  g.add(eyePanel.mesh);
-
-  // The ball: ball.js's, 120x bigger. Outline = a slightly bigger ink-coloured back-face shell (the viewer's
+  // The ball: ball.js's, scaled up. Outline = a slightly bigger ink-coloured back-face shell (the viewer's
   // ball is not outlined by the post pass, and neither is this: it would scribble over the seams).
   const k = ballR / BALL_RADIUS_FT;
   const ball = noOutline(makeBall());
@@ -159,8 +202,7 @@ export function buildTower(flags, poles) {
   g.add(ball);
 
   // Twin light towers, lamps as one instanced mesh.
-  const lampSites = [], glows = [];
-  for (const s of [-1, 1]) g.add(lightTower(x + s * twinX, y, flags, poles, lampSites, glows));
+  for (const s of [-1, 1]) g.add(lightTower(x + s * twinX, y, flags, poles, lampSites, glows, T));
   g.updateMatrixWorld(true);
   const lamps = new THREE.InstancedMesh(new THREE.BoxGeometry(3.8, 3.2, 0.7), lampMaterial, lampSites.length);
   const m = new THREE.Matrix4();
@@ -173,7 +215,7 @@ export function buildTower(flags, poles) {
   const ups = new THREE.InstancedMesh(new THREE.BoxGeometry(2.2, 1.4, 2.2), lampMaterial, 6);
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2;
-    place(ups, i, [x + Math.cos(a) * 9, 0.6, -y + Math.sin(a) * 9], 0, 1);
+    place(ups, i, [x + Math.cos(a) * (v1 ? 9 : 13), 0.6, -y + Math.sin(a) * (v1 ? 9 : 13)], 0, 1);
   }
   g.add(noOutline(ups));
 
@@ -197,7 +239,7 @@ export function buildTower(flags, poles) {
     setSeams(ball, seamStyle(spin.pitchType));
     const text = rpmLabel(spin.rpm);
     pylonPanel.update(text);
-    eyePanel.update(text);
+    eyePanel?.update(text);
   };
   return g;
 }

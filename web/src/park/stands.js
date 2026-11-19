@@ -124,7 +124,7 @@ export function bleacherPaths() {
     return pts;
   };
   // Signature features: the right-field bleachers stop at 22 deg; the brick wall and the Falls' pool (signature.js) take the rest.
-  const rightEnd = isOld("falls") && isOld("oracle") ? 42 : 22;
+  const rightEnd = isOld("signature") ? 42 : 22;
   return [side(-42, -BATTERS_EYE_HALF_DEG), side(BATTERS_EYE_HALF_DEG, rightEnd)];
 }
 

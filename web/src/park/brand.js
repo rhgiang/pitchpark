@@ -4,6 +4,7 @@ import { PALETTE, makeToonMaterial } from "../look.js";
 import { box } from "./build.js";
 import { normals, polar, fenceDistFt } from "./layout.js";
 import { isOld } from "./old.js";
+import { scoreboardDeg } from "./signature.js";
 import { upperPath, bleacherPaths, MAIN_DEPTH_FT, BLEACHER_DEPTH_FT } from "./stands.js";
 
 /*
@@ -65,7 +66,7 @@ export function brandSigns(plan) {
     add(`backstop${k}`, [x, y], 2.4, 7.3, [-x, -y]);
   }
   // 2. Scoreboard: on the cream block over the board (props.js scoreboard()), facing home.
-  const sb = polar(24, fenceDistFt(24) + 32 + BLEACHER_DEPTH_FT + 20);
+  const sb = polar(scoreboardDeg(), fenceDistFt(scoreboardDeg()) + 32 + BLEACHER_DEPTH_FT + 20);
   const toHome = unit([-sb[0], -sb[1]]);
   add("scoreboard", [sb[0] + toHome[0] * 1.6, sb[1] + toHome[1] * 1.6], 90.5, 28, toHome);
   // 3. Main grandstand: a big rooftop sign (on posts, over the roof, facing out behind home) and

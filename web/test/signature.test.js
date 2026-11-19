@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { isOld } from "../src/park/old.js";
 import {
-  rpmLabel, spinAngleRad, wallBays, palmSites, inSector, clearForSignature, FALLS, WALL, TOWER,
+  rpmLabel, spinAngleRad, wallBays, palmSites, inSector, clearForSignature, FALLS, WALL, TOWER, TOWER_V1, scoreboardDeg,
 } from "../src/park/signature.js";
 import { cliffHeight } from "../src/park/falls.js";
 import { fenceDistFt, polar } from "../src/park/layout.js";
@@ -42,8 +42,17 @@ test("the Spin Tower's ball fits the band of sky the umpire sees above the batte
   assert.ok(deg(TOWER.ballZ + TOWER.ballR) < topDeg - 0.2, `ball top ${deg(TOWER.ballZ + TOWER.ballR)} vs frame top ${topDeg}`);
   const wallTopDeg = (Math.atan2(36 - eye, 426 + 5) * 180) / Math.PI; // the eye wall: 36 ft tall, 426 ft from home
   assert.ok(deg(TOWER.ballZ - TOWER.ballR) > wallTopDeg, "ball bottom clears the batter's eye wall");
-  // The light towers' tops (mast + lamp bank + pennant mast) stay in frame too.
-  assert.ok(deg(TOWER.mastH + 16) < topDeg);
+  // The boards beside the ball (crest, readout) sit in the same band, and the tower is nearer than the first-built 690 ft.
+  assert.ok(deg(TOWER.ballZ + TOWER.boardH / 2) < topDeg - 0.2 && deg(TOWER.ballZ - TOWER.boardH / 2) > wallTopDeg);
+  assert.ok(TOWER.y < TOWER_V1.y && TOWER.y > 426 + 26 + 3 + 20, "closer than before, still behind the batter's eye wall");
+  // The batter's eye stays plain dark: no readout on its wall any more (only ?old=tower paints one).
+  assert.ok(Math.abs(TOWER.x) + TOWER.boardX + TOWER.boardW / 2 < 160);
+});
+
+test("scoreboard: dry ground beside the falls (left of the pool at 22 deg), as first built under ?old=falls", () => {
+  const legDeg = (24 / (fenceDistFt(scoreboardDeg()) + 80)) * (180 / Math.PI); // its legs stand 24 ft off the centre, ~80 ft behind the fence
+  assert.ok(scoreboardDeg() + legDeg < FALLS.a0, "both legs are on the bleachers' side of the pool");
+  assert.ok(scoreboardDeg() - legDeg > 9 + 2, "and clear of the batter's eye");
 });
 
 test("wall bays: continuous from the right-field bleachers to the foul pole and round the corner, on the fence line", () => {

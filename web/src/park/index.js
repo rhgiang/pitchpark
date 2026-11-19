@@ -84,8 +84,8 @@ function makePlan() {
   // Light towers: four behind the main stands, two behind the outfield bleachers.
   const back = offsetPath(main, MAIN_DEPTH_FT + 6);
   for (const f of [0.12, 0.33, 0.67, 0.88]) plan.towers.push({ p: back[Math.round(f * (back.length - 1))], h: 150 });
-  // (the right one moves in to 16 deg when the Falls' pool takes the bleachers' place at 33 deg: see signature.js)
-  for (const s of [-1, 1]) { const a = s > 0 && !(isOld("falls") && isOld("oracle")) ? 16 : 33; plan.towers.push({ p: polar(s * a, fenceDistFt(a) + 32 + BLEACHER_DEPTH_FT + 8), h: 125 }); }
+  // (the right one moves in to 10.5 deg when the Falls' pool takes the bleachers' place at 33 deg, and clear of the scoreboard (17 deg): see signature.js)
+  for (const s of [-1, 1]) { const a = s > 0 && !isOld("signature") ? (isOld("falls") ? 16 : 10.5) : 33; plan.towers.push({ p: polar(s * a, fenceDistFt(a) + 32 + BLEACHER_DEPTH_FT + 8), h: 125 }); }
 
   // Paths from the plazas out to the island's edge (gentle curves).
   for (const a of [180, 138, 222, 98, 262, 0, 40, -40]) {

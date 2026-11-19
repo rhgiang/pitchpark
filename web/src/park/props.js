@@ -3,6 +3,7 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { PALETTE, makeToonMaterial, lampMaterial, makeGlowSprite, noOutline, terrain } from "../look.js";
 import { PARK_NAME, wordmarkTexture } from "./brand.js";
 import { isOld } from "./old.js";
+import { scoreboardDeg } from "./signature.js";
 import { sweep, frameAt, radialFrame, box, place, textTexture, shadeOf } from "./build.js";
 import {
   POLE_R, POLE_L, ISLAND, polar, fenceDistFt, normals, rng, BLEACHER_GAP_FT,
@@ -377,7 +378,7 @@ export function buildProps(plan, flags, poles) {
   });
   g.add(lamps);
   g.add(foulPole(POLE_R, 1), foulPole(POLE_L, -1));
-  const board = scoreboard(24, fenceDistFt(24) + BLEACHER_GAP_FT + plan.bleacherDepth + 20);
+  const board = scoreboard(scoreboardDeg(), fenceDistFt(scoreboardDeg()) + BLEACHER_GAP_FT + plan.bleacherDepth + 20);
   g.userData.setBoard = board.userData.setBoard;
   g.add(board);
   g.add(distanceMarkers(), battersEye(), bullpens(), wallAds());
