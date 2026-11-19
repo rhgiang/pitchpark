@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { getFlag, setFlag, LITE_KEY, canMakeWebGL, makeSlowDetector, isPhone, slugInIndex, compareChoices, debugList } from "../src/health.js";
+import { getFlag, setFlag, LITE_KEY, canMakeWebGL, makeSlowDetector, makeAutoLite, shouldAutoLite, isPhone, slugInIndex, compareChoices, debugList } from "../src/health.js";
 import { pixelRatio } from "../src/pacing.js";
 
 const memory = () => { const m = new Map(); return { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => m.set(k, v), removeItem: (k) => m.delete(k) }; };
@@ -71,4 +71,26 @@ test("debug switches parse from the query; lighter graphics draw at pixel ratio 
   assert.deepEqual(debugList(""), []);
   assert.equal(pixelRatio(2, true), 1);
   assert.equal(pixelRatio(2, false), 1.5);
+});
+
+test("auto lighter graphics: median over 28 ms trips it, but never when light already or the user ever chose", () => {
+  const slow = Array(40).fill(40), fine = Array(40).fill(16);
+  assert.equal(shouldAutoLite(slow), true);
+  assert.equal(shouldAutoLite(fine), false);
+  assert.equal(shouldAutoLite([...Array(30).fill(16), ...Array(10).fill(200)]), false, "a few hitches do not move the median");
+  assert.equal(shouldAutoLite(slow, { lite: true }), false);
+  assert.equal(shouldAutoLite(slow, { userChose: true }), false, "an explicit choice (even 'off') is final");
+  assert.equal(shouldAutoLite(Array(3).fill(90)), false, "too few frames to judge");
+});
+
+test("auto lighter graphics watcher: decides once after 3 s of active playback; idle frames and stalls do not count", () => {
+  const run = (d, step, n, t0 = 0, active = true) => { let r = false; for (let i = 0; i < n; i++) r = d.frame(t0 + i * step, active) || r; return r; };
+  assert.equal(run(makeAutoLite({}), 50, 80), true, "20 fps for 4 s");
+  assert.equal(run(makeAutoLite({}), 50, 40), false, "only 2 s so far");
+  assert.equal(run(makeAutoLite({}), 1000 / 60, 300), false);
+  assert.equal(run(makeAutoLite({}), 50, 80, 0, false), false, "idle frames are ignored");
+  const d = makeAutoLite({});
+  assert.equal(run(d, 1000 / 60, 300), false);
+  assert.equal(run(d, 50, 80, 10000), false, "already decided: never asks again");
+  assert.equal(run(makeAutoLite(() => ({ userChose: true })), 50, 80), false, "options are read when it decides");
 });

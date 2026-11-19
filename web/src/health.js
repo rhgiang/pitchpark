@@ -2,6 +2,7 @@
 import { displayName } from "./menu.js";
 
 export const LITE_KEY = "pitchpark.lite.v1";
+export const LITE_CHOICE_KEY = "pitchpark.liteChoice.v1"; // set once the user flips the lighter-graphics button either way
 export const PHONE_KEY = "pitchpark.phone.v1";
 
 /** Storage that may be missing or throw (private window, blocked site data). */
@@ -46,6 +47,43 @@ export function makeSlowDetector({ minFps = SLOW_FPS, windowMs = SLOW_WINDOW_MS 
       const fps = (frames * 1000) / ms;
       frames = ms = 0;
       return fps < minFps;
+    },
+  };
+}
+
+export const AUTO_LITE_MS = 28; // median frame time above this (under ~36 fps) switches to lighter graphics
+export const AUTO_LITE_WINDOW_MS = 3000; // of active playback right after the scene is ready
+const AUTO_LITE_MIN_FRAMES = 5;
+
+/**
+ * Pure decision: switch to lighter graphics on its own? Yes when the median of `frameMs` is above
+ * AUTO_LITE_MS, unless the device is already light or the user ever chose (either way).
+ * Median, not mean, so a shader-compile hitch or two does not trip it.
+ */
+export function shouldAutoLite(frameMs, { lite = false, userChose = false } = {}) {
+  if (lite || userChose || frameMs.length < AUTO_LITE_MIN_FRAMES) return false;
+  const s = [...frameMs].sort((a, b) => a - b);
+  const mid = s.length >> 1;
+  return (s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2) > AUTO_LITE_MS;
+}
+
+/**
+ * Collects frame gaps of ACTIVE playback (same rules as makeSlowDetector: idle frames and stall
+ * gaps are skipped) until AUTO_LITE_WINDOW_MS has passed, then answers once: `frame` returns true if
+ * the caller should switch to lighter graphics, false otherwise (and false forever after).
+ */
+export function makeAutoLite(opts) {
+  let prev = null, ms = 0, done = false;
+  const gaps = [];
+  return {
+    frame(now, active) {
+      if (done) return false;
+      if (!active) { prev = null; return false; }
+      if (prev !== null && now - prev <= SLOW_GAP_MS) { gaps.push(now - prev); ms += now - prev; }
+      prev = now;
+      if (ms < AUTO_LITE_WINDOW_MS) return false;
+      done = true;
+      return shouldAutoLite(gaps, typeof opts === "function" ? opts() : opts);
     },
   };
 }
