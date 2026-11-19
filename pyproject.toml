@@ -12,6 +12,7 @@ dependencies = ["numpy", "pandas", "scipy", "matplotlib", "pybaseball>=2.2.7", "
 dev = ["pytest"]
 mcp = ["mcp>=2"]
 video = ["rtmlib", "onnxruntime", "opencv-python"]
+seq = ["torch"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
