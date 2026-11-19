@@ -40,6 +40,12 @@ export const FALLS = {
 
 /** The brick wall: bay width, lower (solid, over the 8 ft padded fence) and upper (arcade) storey heights, thickness, arch opening width and spring height, sill height, walkway depth (ft). */
 export const WALL = { bay: 22, h1: 18, h2: 22, thick: 3, openW: 14, spring: 12, sill: 3.5, deck: 9 };
+/**
+ * The grand wall (default; ?old=oracle draws WALL's first-built one): heights in ft above the field. Storey 1 solid brick over
+ * a limestone plinth, storey 2 an arcade (arch opening width, sill, spring of the arch), then a frieze, a dentil band, a
+ * cornice and a balustraded parapet; pedestals with lamps stand on the piers. The bay width is WALL.bay (the bays are shared).
+ */
+export const GRAND = { h1: 20, h2: 30, openW: 14, sill: 4.5, spring: 17, thick: 3, deck: 9, plinth: 3.2, cornice: 51.1, parapetTop: 58.5, pedestalTop: 60.3, lampTop: 66 };
 export const WALL_TOP_FT = WALL.h1 + WALL.h2; // 40; the cornice adds 3.2
 
 /** Bearing (deg) of the park scoreboard: on dry ground at the right-centre bleachers (the first-built Falls had the pool under it at 24). */
