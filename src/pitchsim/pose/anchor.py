@@ -416,3 +416,39 @@ def correct_to_mean(j_ft: np.ndarray, release_index: int, foot_strike_index: int
                     pelvis_drop_at_release_ft=float(drop[ri]), iterations=it + 1,
                     converged=bool(np.abs(gaps).max() < 0.005 and abs(g_a) < 0.05))
     return j
+
+
+def smooth_extra(j_ft: np.ndarray, fps: float, until: int, throws: str, sigma_s: float = 0.12,
+                 blend_s: float = 0.5) -> np.ndarray:
+    """Zero-phase extra smoothing of the windup, before the leg-lift peak `until` only (opt-in, per pitcher).
+
+    Why: Cease's lead foot/knee still show a ~150 ft/s^2 acceleration spike and a creeping foot before the
+    leg lift that phase_smooth (3-frame sigma) leaves, because the averaged lifts disagree there.  Joint
+    positions get a wide Gaussian (sigma_s, symmetric = no time shift) blended in with weight 1 until
+    `until` - blend_s, easing (smootherstep: C2) to 0 at `until`, so the leg-lift peak and everything after
+    it are untouched bit for bit.  Then the skeleton is rebuilt so nothing else changes: bones keep their
+    exact per-frame lengths (child = parent + length * smoothed direction, root first), and the planted
+    pivot foot (ankle and toe) stays where it was, its knee re-solved by two-bone IK from the moved hip.
+    """
+    _check(throws)
+    j = np.asarray(j_ft, float)
+    sm = gaussian_filter1d(j, sigma_s * fps, axis=0, mode="nearest")
+    u = np.clip((until - np.arange(len(j))) / max(blend_s * fps, 1.0), 0.0, 1.0)
+    w = _smootherstep(u)[:, None, None]
+    tgt = j + w * (sm - j)
+    out = j.copy()
+    out[:, 0] = tgt[:, 0]
+    for k in range(1, j.shape[1]):  # SMPL_PARENT lists parents before children
+        p = SMPL_PARENT[k]
+        d = tgt[:, k] - tgt[:, p]
+        d /= np.maximum(np.linalg.norm(d, axis=1), 1e-9)[:, None]
+        out[:, k] = out[:, p] + np.linalg.norm(j[:, k] - j[:, p], axis=1)[:, None] * d
+    # the pivot (throwing-side) leg is the planted one in the windup
+    hip, knee, ank, toe = _HIP[throws], _KNEE[throws], _ANKLE[throws], _TOE[throws]
+    out[:, ank], out[:, toe] = j[:, ank], j[:, toe]
+    a = np.linalg.norm(j[:, knee] - j[:, hip], axis=1)
+    b = np.linalg.norm(j[:, ank] - j[:, knee], axis=1)
+    pole = j[:, knee] - j[:, hip]
+    out[:, knee], _ = _two_bone(out[:, hip], j[:, ank], a, b, pole)
+    out[w[:, 0, 0] == 0] = j[w[:, 0, 0] == 0]  # weight 0: exactly the input (no float residue from the rebuild)
+    return out

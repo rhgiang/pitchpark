@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-from pitchsim.pose.anchor import anchor, correct_to_mean, mound_z_ft, release_values, segment_lengths
+from pitchsim.pose.anchor import anchor, correct_to_mean, mound_z_ft, release_values, segment_lengths, smooth_extra
 
 RUBBER_Y, MOUND_Z = 60.5, 10 / 12
 
@@ -297,3 +297,19 @@ def test_correct_to_mean_keeps_arms_and_pelvis_off_the_mound(kind):
     assert pel.min() > 0.55 * standing, f"pelvis {pel.min():.2f} of standing {standing:.2f} ft"
     got = release_values(out, RI, "R")
     assert max(abs(got[k] - target[k]) for k in ("release_x_ft", "release_z_ft", "extension_ft")) < 0.05
+
+
+def test_smooth_extra_damps_spike_keeps_anchors():
+    """SYNTHETIC: a slow sway of the left ankle plus a one-frame spike before `until`; nothing from `until` on moves."""
+    j = _figure(120)
+    j[:, 4] = [0.1, 0.5, 0]; j[:, 5] = [-0.1, 0.5, 0.1]  # bent knee (a straight leg would hit the IK reach clip)
+    k, until = 7, 90
+    f = np.arange(120)
+    j[:, k, 0] += 0.1 * np.sin(2 * np.pi * f / 120)
+    j[40, k, 0] += 0.1  # the spike
+    clean = j.copy(); clean[40, k, 0] -= 0.1
+    o = smooth_extra(j, 60.0, until, "R", sigma_s=0.1, blend_s=0.4)
+    assert abs(o[40, k, 0] - clean[40, k, 0]) < 0.1 * 0.5      # spike mostly gone
+    assert np.array_equal(o[until:], j[until:])                  # exactly untouched from the peak on
+    assert np.allclose(o[:, 8], j[:, 8]) and np.allclose(o[:, 11], j[:, 11])  # planted pivot ankle/toe fixed
+    assert np.allclose(segment_lengths(o), segment_lengths(j), atol=1e-9)
