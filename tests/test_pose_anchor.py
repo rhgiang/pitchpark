@@ -336,3 +336,22 @@ def test_smooth_knee_removes_rate_jump_keeps_bones_and_tail():
     assert np.array_equal(o[until:], j[until:]) and np.array_equal(o[:start], j[:start])
     assert np.allclose(segment_lengths(o), segment_lengths(j), atol=1e-9)
     assert np.array_equal(o[:, [1, 4]], j[:, [1, 4]])               # hip and knee never move
+
+
+def test_retime_windup_shortens_keeps_tail_bones_and_seam():
+    """SYNTHETIC: a smooth sinusoidal sway of the lead ankle; the windup is replayed in fewer frames, the tail is untouched."""
+    from pitchsim.pose.anchor import retime_windup
+    n, until, new = 140, 100, 90
+    j = _figure(n)
+    j[:, 4] = [0.1, 0.5, 0]; j[:, 5] = [-0.1, 0.5, 0.1]
+    f = np.arange(n)
+    j[:, 7, 0] += 0.3 * np.sin(2 * np.pi * f / 200)  # lead ankle; period 200 frames, smooth
+    o = retime_windup(j, 60.0, until, new, "R")
+    assert len(o) == n - (until - new)
+    assert np.array_equal(o[new:], j[until:])                                  # tail bit-identical, shifted
+    assert np.abs(segment_lengths(o)[new:] - segment_lengths(j)[until:]).max() < 1e-9
+    # the windup motion now runs ~11% faster on average: ankle reaches old frame-`until` value at `new`
+    assert np.allclose(o[new, 7], j[until, 7])
+    v = np.linalg.norm(np.diff(o[:, 7], axis=0), axis=1)
+    assert v[:new].mean() > 1.05 * np.linalg.norm(np.diff(j[:until, 7], axis=0), axis=1).mean()
+    assert abs(v[new - 1] - v[new]) < 0.2 * v[new] + 1e-4                       # seam: no velocity step (C1 join)

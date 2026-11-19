@@ -490,3 +490,46 @@ def smooth_knee(j_ft: np.ndarray, fps: float, start: int, until: int, throws: st
     src = np.asarray(j_ft, float)
     j[:start], j[until:] = src[:start], src[until:]  # exact, no float residue outside the window
     return j
+
+
+def retime_windup(j_ft: np.ndarray, fps: float, until: int, new_until: int, throws: str, ease_frames: int = 8) -> np.ndarray:
+    """Speed up the windup before the leg-lift peak `until` (opt-in, per pitcher); returns len - (until - new_until) frames.
+
+    Why: the averaged template's leg lift reads slower than the pitcher's own clips (knee rise to the peak
+    takes ~20% longer).  Frames 0..until are replayed in `new_until` = M frames through a monotone old-time map
+    with slope r > 1 that eases (smootherstep) to exactly 1 over the last `ease_frames` before the peak, so the
+    join with the untouched tail is C1 (no velocity step) while the whole rise still runs ~r times faster
+    (a map that eased over the whole windup left the rise, which sits just before the peak, unchanged).
+    With E = ease_frames and I(u) = int_0^u (1 - smootherstep), t_old(k) = k + (r-1) (min(k, M-E) + E I((k-M+E)/E)^+)
+    and t_old(M) = until fixes r.  Positions are cubic-interpolated at t_old, then the skeleton is rebuilt as in
+    smooth_extra: bones keep their (interpolated) lengths, the planted pivot ankle/toe stay as resampled, the
+    pivot knee is re-solved.  Frames >= `until` are copied bit for bit, so everything after the peak is unchanged
+    except its index (shifted by until - new_until); the caller must move release_index / pre_s by the same amount.
+    """
+    from scipy.interpolate import CubicSpline
+    _check(throws)
+    j = np.asarray(j_ft, float)
+    M, E = int(new_until), int(ease_frames)
+    assert E < M < until, "need ease_frames < new_until < until"
+    ug = np.linspace(0.0, 1.0, 2001)
+    Ig = np.concatenate([[0.0], np.cumsum(1 - _smootherstep(ug[:-1] + 0.5 / 2000)) / 2000])
+    I = lambda u: np.interp(np.clip(u, 0.0, 1.0), ug, Ig)       # noqa: E731
+    k = np.arange(M + 1, dtype=float)
+    shape = np.minimum(k, M - E) + E * I((k - M + E) / E)
+    r = 1.0 + (until - M) / shape[-1]
+    t_old = k + (r - 1.0) * shape
+    t_old[-1] = until                                            # quadrature residue only
+    src = np.arange(until + 1)
+    res = CubicSpline(src, j[: until + 1], axis=0)(t_old)
+    ln = np.stack([np.linalg.norm(j[:, c] - j[:, SMPL_PARENT[c]], axis=1) for c in range(1, j.shape[1])], 1)
+    ln = np.stack([np.interp(t_old, src, ln[: until + 1, c]) for c in range(ln.shape[1])], 1)
+    out = res.copy()
+    for c in range(1, j.shape[1]):  # parents before children
+        d = res[:, c] - res[:, SMPL_PARENT[c]]
+        d /= np.maximum(np.linalg.norm(d, axis=1), 1e-9)[:, None]
+        out[:, c] = out[:, SMPL_PARENT[c]] + ln[:, c - 1, None] * d
+    hip, knee, ank, toe = _HIP[throws], _KNEE[throws], _ANKLE[throws], _TOE[throws]
+    out[:, ank], out[:, toe] = res[:, ank], res[:, toe]
+    a, b = ln[:, knee - 1], ln[:, ank - 1]
+    out[:, knee], _ = _two_bone(out[:, hip], res[:, ank], a, b, res[:, knee] - res[:, hip])
+    return np.concatenate([out[:M], j[until:]])
