@@ -568,3 +568,82 @@ def fix_lead_stance(j_ft: np.ndarray, until: int, throws: str, ease_start: int =
     out[:, knee] = j[:, knee] + (k1 - k0)  # shift by the IK change only: weight 0 gives the input exactly
     out[until:] = j[until:]
     return out
+
+
+def land_trailing_leg(j_ft: np.ndarray, release_index: int, start: int, land: int, throws: str,
+                      foot_drop_ft: float = 0.305, reach: float = 0.95) -> np.ndarray:
+    """Bring the trailing (throwing-side) leg down and plant it after release (opt-in, per pitcher).
+
+    Why: in Cease's averaged template the trailing foot is still ~1.8 ft up and moving when the clip ends,
+    because the averaging of clips cut off at different times smears the landing away.  A real follow-through
+    swings the back leg through and plants it (the foot passes the lead foot and lands, then the pitcher is
+    done).  Hip and pelvis stay where they are; only knee, ankle and toe move, by blending (weight w, a
+    smootherstep ease from 0 at `start` to 1 at `land`, so C2 at both ends) from the data to a landing:
+      ankle: xy goes to where the data's ankle is at `land` and stays there (no sliding once planted), z goes to
+             mound height there + `foot_drop_ft` (the flat-foot ankle height, measured on the planted lead foot);
+      toe:   same foot-bone direction, tilted to the flat foot;
+      knee:  two-bone IK (_two_bone) from the hip to the new ankle, bend direction = the data's own knee.
+    The data's leg bones shrink to ~2.4 ft total by the clip end (averaging artefact), which cannot reach the
+    ground from the hip.  So the thigh, shin and foot lengths are blended to their values at the release frame
+    (a constant leg) as w -> 1; every bone is then exactly that length for frames >= `land`.
+    Frames <= max(release_index, start) are returned bit for bit.
+    """
+    _check(throws)
+    j = np.asarray(j_ft, float)
+    hip, knee, ank, toe = _HIP[throws], _KNEE[throws], _ANKLE[throws], _TOE[throws]
+    n = len(j)
+    k = np.arange(n)
+    w = _smootherstep(np.clip((k - start) / max(land - start, 1), 0.0, 1.0))
+    a0 = np.linalg.norm(j[:, knee] - j[:, hip], axis=1)
+    b0 = np.linalg.norm(j[:, ank] - j[:, knee], axis=1)
+    f0 = np.linalg.norm(j[:, toe] - j[:, ank], axis=1)
+    a = (1 - w) * a0 + w * a0[release_index]
+    b = (1 - w) * b0 + w * b0[release_index]
+    f = (1 - w) * f0 + w * f0[release_index]
+    # Where the foot lands: under the data's ankle at `land`, but pulled toward the hip until the (constant)
+    # leg reaches it with `reach` of its length, so the knee stays bent (a straight leg locks and, for IK,
+    # snaps).  If the hip is too high even directly above, the ankle stops that far below it instead.
+    Lc = a[-1] + b[-1]
+    hip_land = j[land, hip].copy()
+    off = j[land, ank, :2] - hip_land[:2]
+    az = mound_z_ft(*(hip_land[:2] + off)) + foot_drop_ft
+    dz = hip_land[2] - az
+    if dz > reach * Lc:
+        az = hip_land[2] - reach * Lc
+        dz = reach * Lc
+    hmax = np.sqrt((reach * Lc) ** 2 - dz ** 2)
+    nrm = np.linalg.norm(off)
+    axy = hip_land[:2] + off * min(1.0, hmax / max(nrm, 1e-9))
+    az = max(az, mound_z_ft(*axy) + foot_drop_ft) if hip_land[2] - mound_z_ft(*axy) - foot_drop_ft <= reach * Lc else az
+    # Swing the ankle about the hip like a pendulum rather than cutting a straight line: blend the unit
+    # direction hip->ankle and the distance R separately, so the foot never passes close to the hip (a
+    # straight blend does, and with the longer constant leg the knee then folds up and pops over the hip).
+    P = np.array([*axy, az])
+    hip_ref = (1 - w[:, None]) * j[:, hip] + w[:, None] * j[land, hip]   # = hip(k) before, hip(land) once w = 1
+    rel_old = j[:, ank] - j[:, hip]
+    R_old = np.linalg.norm(rel_old, axis=1)
+    rel_land = P - j[land, hip]
+    R_land = np.linalg.norm(rel_land)
+    u0, u1 = rel_old / R_old[:, None], np.broadcast_to(rel_land / R_land, rel_old.shape)
+    om = np.arccos(np.clip((u0 * u1).sum(1), -1.0, 1.0))[:, None]   # slerp: constant-rate swing, no speed spike
+    so = np.maximum(np.sin(om), 1e-9)
+    u = (np.sin((1 - w[:, None]) * om) * u0 + np.sin(w[:, None] * om) * u1) / so
+    u = np.where(om < 1e-6, u0, u)
+    u /= np.linalg.norm(u, axis=1)[:, None]
+    new_ank = hip_ref + u * ((1 - w) * R_old + w * R_land)[:, None]
+    new_ank[land:] = P
+    d_old = (j[:, toe] - j[:, ank]) / f0[:, None]
+    h = j[land, toe] - j[land, ank]
+    h[2] = 0.0
+    h = h / np.linalg.norm(h)
+    sz = foot_drop_ft / f0[release_index]  # downward tilt of the flat foot
+    d_land = h * np.sqrt(1 - sz ** 2) + np.array([0.0, 0.0, -sz])
+    d = (1 - w[:, None]) * d_old + w[:, None] * d_land
+    d /= np.linalg.norm(d, axis=1)[:, None]
+    p0 = j[:, knee] - j[:, hip]
+    new_knee, new_ank = _two_bone(j[:, hip], new_ank, a, b, p0)
+    out = j.copy()
+    out[:, knee], out[:, ank], out[:, toe] = new_knee, new_ank, new_ank + d * f[:, None]
+    m = k > max(release_index, start)
+    out[~m] = j[~m]
+    return out
