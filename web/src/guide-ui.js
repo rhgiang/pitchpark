@@ -155,6 +155,7 @@ export function openHow() {
     t.append(el("b", "", s.t), el("span", "", s.d));
     num.append(el("small", "", s.c));
     row.append(el("div", "n", String(i + 1)), t, num);
+    row.style.setProperty("--i", i); // cascade stagger (cards.css)
     pipe.append(row);
   });
   panel.append(x, h, el("div", "sub", HOW.sub), pipe, el("div", "disc", HOW.disclaimer));

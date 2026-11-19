@@ -21,6 +21,7 @@ export function menuPick(index, preselect) {
     const b = el("button", "card");
     b.type = "button";
     b.dataset.slug = c.slug; // guide-ui.js puts the loading bar on this card
+    b.style.setProperty("--i", i); // entrance stagger (ui.css)
     b.setAttribute("role", "radio");
     b.append(el("b", "", c.name), Object.assign(el("div", "facts"), { textContent: [c.hand, c.height, `${c.nAtBats} at-bats`].filter(Boolean).join(" · ") }));
     const badge = el("span", "badge", "Full delivery");
