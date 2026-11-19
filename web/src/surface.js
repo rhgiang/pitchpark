@@ -15,6 +15,18 @@
  * clay (home plate, the rubber).
  */
 import { chalkSegments, CHALK_WIDTH_FT } from "./park/layout.js";
+import { isOld } from "./park/old.js";
+
+/*
+ * Turf v2 (?old=grass restores v1), added after the grass read as flat lime:
+ * - colour: the painted lime pulled toward a deeper broadcast green (less red, a touch of blue);
+ * - stripes: a fixed light/dark step on top of the view-dependent sheen, so the mowing pattern
+ *   reads from every camera (the painted stripes alone differ by ~10%, near-invisible from TV);
+ * - blades: up close, fine streaks stretched along the mower's direction (~0.1 ft wide, ~0.7 ft
+ *   long), posterised into lit blades and darker gaps, plus a matching bump; faded by pixel
+ *   footprint so it never shimmers far away.
+ */
+const TURF_V2 = !isOld("grass");
 
 export const SURFACE_KINDS = { none: 0, plaster: 1, foliage: 2, wood: 3, ground: 4, rock: 5 };
 
@@ -196,7 +208,21 @@ export const SURFACE_GLSL = /* glsl */`
     float striped = infield || abs(S.x) < S.y ? 1.0 : 0.0;
     vec3 V = normalize(w - cameraPosition);
     float along = -V.z / max(length(V.xz), 1e-3); // view direction along Statcast +y
-    g *= 1.0 + 0.09 * sgn * along * striped * (1.0 - 0.6 * abs(V.y));
+    // v2: abs(along). The true reversal cancelled the painted stripes from centre field (TV view);
+    // here every camera sees them strengthened (a stylised choice, not the physical sheen).
+    g *= 1.0 + 0.09 * sgn * ${TURF_V2 ? "abs(along)" : "along"} * striped * (1.0 - 0.6 * abs(V.y));
+    ${TURF_V2 ? `
+    // Broadcast turf: deeper and a touch blue. Tuned on screen (after tone mapping) toward
+    // ~rgb(75,130,48) from the old lime ~rgb(123,181,60).
+    g *= vec3(0.5, 0.68, 0.56);
+    g *= 1.0 + 0.05 * sgn * striped;
+    // Mower direction: across the centre-field line (along x) in the outfield; along the
+    // checkerboard's diagonals on the infield. Streaks are stretched along it.
+    vec2 mw = infield ? ab : S;
+    float bladeVis = 1.0 - smoothstep(0.02, 0.12, fp);
+    float blade = band(sNoise(vec3(mw.x * 1.4, 3.0, mw.y * 10.0)), 0.52);
+    g *= 1.0 + 0.11 * (blade - 0.5) * bladeVis;
+    hg += 0.006 * (blade - 0.5) * bladeVis;` : ""}
 
     // --- chalk: a little rough, and scuffed through to the clay where feet go; never on the
     // plate or the rubber (CHALK_CLEAN) ---
