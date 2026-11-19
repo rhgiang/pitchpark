@@ -3,6 +3,7 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { PALETTE, makeToonMaterial } from "../look.js";
 import { box } from "./build.js";
 import { normals, polar, fenceDistFt } from "./layout.js";
+import { isOld } from "./old.js";
 import { upperPath, bleacherPaths, MAIN_DEPTH_FT, BLEACHER_DEPTH_FT } from "./stands.js";
 
 /*
@@ -108,7 +109,8 @@ function signGeometry(s) {
 export function buildBrand(plan) {
   const g = new THREE.Group();
   const tex = wordmarkTexture();
-  const signs = brandSigns(plan);
+  // The new backdrop behind home (home.js) has its own ads; ?old=home keeps the nine wordmark boards.
+  const signs = brandSigns(plan).filter((x) => isOld("home") || !x.id.startsWith("backstop"));
   // Lit like the scoreboard (emissive map): readable at night, and the gold blooms a little.
   // Polygon offset: a sign 0.2 ft off a wall seen from 1400 ft is below the depth buffer's resolution.
   const mat = makeToonMaterial(0xffffff, { map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.35, surface: "none",

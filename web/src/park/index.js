@@ -6,6 +6,9 @@ import { buildProps, ISLETS } from "./props.js";
 import { buildSurrounds, buildFlags } from "./surrounds.js";
 import { mergeStatic } from "./build.js";
 import { buildBrand, PARK_NAME } from "./brand.js";
+import { isOld } from "./old.js";
+import { buildHome } from "./home.js";
+import { bullpenFences } from "./structure.js";
 import {
   ISLAND, fieldBoundary, fencePath, polar, fenceDistFt, resample, normals, rng, inside,
   BATTERS_EYE_HALF_DEG, FIELD_CENTRE_FT,
@@ -238,6 +241,8 @@ export function buildPark() {
   const flags = [], poles = [];
   const props = buildProps(plan, flags, poles);
   g.add(props, buildSurrounds(plan, flags, poles), ...buildFlags(flags, poles), buildBrand(plan));
+  if (!isOld("home")) g.add(buildHome(upperPath()));
+  if (!isOld("structure")) g.add(bullpenFences());
   mergeStatic(g); // fewer draw calls (see build.js)
   // Everything animated registers a tick(t); collected once here, not traversed every frame.
   const tickers = [];
