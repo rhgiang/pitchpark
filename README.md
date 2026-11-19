@@ -128,6 +128,8 @@ usable after a second, venue-picked round of clips (40% yield against 16%). His 
 2D noise floor (0.083); the raw build has not yet had its smoothing post-processes re-applied.
 Michael King (fifth) is built and in the viewer from only 2 train clips and 1 held-out clip (3 of 40 usable:
 the screen passed 22 clips and 18 were the wrong view). Spot check only; his 2D score matches the 2D noise floor.
+Cristopher Sanchez (sixth, left-handed) is built and in the viewer from 9 train clips (9 games) and 2 held-out clips: 11 of 40 usable
+(28%; 21 had no pitcher in a centre-field view). His 2D test score (0.101) is ~1.7x the 2D noise floor (0.057); no smoothing applied.
 
 **Clips are for personal research only: never commit or redistribute them.** `data/` is gitignored,
 and the viewer's compare page plays a clip from a file picker without serving or uploading it.
