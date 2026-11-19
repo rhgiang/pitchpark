@@ -28,7 +28,7 @@ export const handModel = (name) => cache[name]?.map(([k, g]) => [k, g.clone()]) 
  * Flatten a glTF scene to [material key, geometry] with only the attributes the figure's merge
  * expects (indexed position, normal, uv), transforms baked in.
  */
-function toParts(scene) {
+export function toParts(scene) {
   scene.updateMatrixWorld(true);
   const parts = [];
   scene.traverse((o) => {
