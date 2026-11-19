@@ -1,11 +1,11 @@
 data/
+!web/public/data/
 results/*
 !results/*.md
 *.zip
 __pycache__/
 .venv/
 *.egg-info/
-web/public/data/
 web/node_modules/
 web/dist/
 .superpowers/

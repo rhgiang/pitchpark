@@ -1,0 +1,117 @@
+[
+ {
+  "slug": "sale-chris",
+  "name": "Sale, Chris",
+  "throws": "L",
+  "n_at_bats": 198,
+  "height_in": 78,
+  "mix": {
+   "SL": 337,
+   "FF": 319,
+   "CH": 75,
+   "SI": 45
+  }
+ },
+ {
+  "slug": "king-michael",
+  "name": "King, Michael",
+  "throws": "R",
+  "n_at_bats": 203,
+  "height_in": 75,
+  "mix": {
+   "SI": 232,
+   "CH": 224,
+   "ST": 160,
+   "FF": 158,
+   "SL": 57
+  }
+ },
+ {
+  "slug": "sanchez-cristopher",
+  "name": "S\u00e1nchez, Cristopher",
+  "throws": "L",
+  "n_at_bats": 228,
+  "height_in": 78,
+  "mix": {
+   "SI": 353,
+   "CH": 309,
+   "SL": 194
+  }
+ },
+ {
+  "slug": "cease-dylan",
+  "name": "Cease, Dylan",
+  "throws": "R",
+  "n_at_bats": 422,
+  "height_in": 74,
+  "mix": {
+   "FF": 722,
+   "SL": 657,
+   "KC": 172,
+   "CH": 119,
+   "SI": 71,
+   "ST": 68,
+   "FC": 2
+  }
+ },
+ {
+  "slug": "ohtani-shohei",
+  "name": "Ohtani, Shohei",
+  "throws": "R",
+  "n_at_bats": 178,
+  "height_in": 76,
+  "mix": {
+   "FF": 324,
+   "ST": 190,
+   "CU": 52,
+   "SI": 46,
+   "FS": 42,
+   "SL": 17,
+   "FC": 9
+  }
+ },
+ {
+  "slug": "schlittler-cam",
+  "name": "Schlittler, Cam",
+  "throws": "R",
+  "n_at_bats": 310,
+  "height_in": 78,
+  "mix": {
+   "FF": 608,
+   "FC": 332,
+   "SI": 166,
+   "CU": 119,
+   "ST": 17,
+   "SL": 12
+  }
+ },
+ {
+  "slug": "misiorowski-jacob",
+  "name": "Misiorowski, Jacob",
+  "throws": "R",
+  "n_at_bats": 269,
+  "height_in": 79,
+  "mix": {
+   "FF": 667,
+   "FC": 193,
+   "CU": 122,
+   "SL": 97,
+   "CH": 25
+  }
+ },
+ {
+  "slug": "yamamoto-yoshinobu",
+  "name": "Yamamoto, Yoshinobu",
+  "throws": "R",
+  "n_at_bats": 401,
+  "height_in": 70,
+  "mix": {
+   "FF": 460,
+   "FS": 411,
+   "CU": 208,
+   "FC": 205,
+   "SI": 173,
+   "SL": 89
+  }
+ }
+]
