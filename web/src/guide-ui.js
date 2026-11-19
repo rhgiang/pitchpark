@@ -29,28 +29,81 @@ function trapKeys(root, onKey) {
 
 // ---- generic message card: title, a sentence, one or two buttons ------------------------------------
 /**
- * Centred glass card. buttons: [{label, big?, onClick}]; a click closes the card first. Returns {close}.
- * Reused for the load-error panel; Part 2 error pages can call it too.
+ * Glass message card. Options:
+ *   title, text, tone ("error": red edge)
+ *   buttons: [{label, big?, keep?, onClick}]  a click closes the card first, unless keep (e.g. "How it works")
+ *   choices: [{label, onClick}]  a row of smaller buttons above `buttons` (the compare page's pitcher list)
+ *   icon (large glyph above the title), spinner (inline), layout "stack" (centred column) | default inline row
+ *   pos "corner" | "bottom": a placement instead of the screen centre
+ *   modal (default true): traps Tab and swallows keys so Space does not throw a pitch behind it, and
+ *     moves focus to the primary button (back to where it was on close). modal:false leaves the page usable;
+ *     `focus: true` still moves focus to the primary button.
+ *   dismissible: Esc closes it.
+ * Returns {close, card, buttons}; close() is safe to call twice.
  */
-export function showCard({ title, text, tone, buttons = [] }) {
+export function showCard({ title, text, tone, icon, spinner, layout, pos, modal = true, focus = modal, dismissible = false, choices = [], buttons = [] }) {
   const prev = document.activeElement;
-  const card = el("div", `gp msg${tone === "error" ? " err" : ""}`);
-  card.setAttribute("role", "alertdialog");
+  const card = el("div", `gp msg${tone === "error" ? " err" : ""}${layout === "stack" ? " stack" : ""}${pos ? ` ${pos}` : ""}`);
+  card.setAttribute("role", modal ? "alertdialog" : "dialog");
+  card.setAttribute("aria-modal", String(modal));
   card.setAttribute("aria-label", title);
-  const row = el("div", "msg-row");
-  const btns = buttons.map((b) => {
-    const n = el("button", `btn${b.big ? " big" : ""}`, b.label);
+  const mk = (b, big) => {
+    const n = el("button", `btn${big ? " big" : ""}`, b.label);
     n.type = "button";
-    n.onclick = () => { close(); b.onClick?.(); };
+    n.onclick = () => { if (!b.keep) close(); b.onClick?.(); };
     return n;
-  });
+  };
+  const btns = buttons.map((b) => mk(b, b.big));
+  const picks = choices.map((c) => mk(c, false));
+  const row = el("div", "msg-row");
   row.append(...btns);
-  card.append(el("span", "msg-icon", tone === "error" ? "!" : "i"), (() => { const t = el("div", "msg-text"); t.append(el("b", "", title), el("span", "", text)); return t; })(), row);
+  const t = el("div", "msg-text");
+  t.append(el("b", "", title), el("span", "", text ?? ""));
+  const glyph = icon ?? (layout === "stack" || spinner ? null : tone === "error" ? "!" : "i");
+  card.append(...[
+    glyph && el("span", `msg-icon${icon ? " big" : ""}`, glyph), spinner && el("span", "spin"), t,
+    picks.length && el("div", "msg-choices"), row,
+  ].filter(Boolean));
+  if (picks.length) card.querySelector(".msg-choices").append(...picks);
   document.body.append(card);
-  btns.find((n) => n.classList.contains("big"))?.focus() ?? btns[0]?.focus();
-  const untrap = trapKeys(card, () => {});
-  function close() { untrap(); card.remove(); prev?.isConnected && prev.focus?.(); }
-  return { close };
+  if (focus) (btns.find((n) => n.classList.contains("big")) ?? btns[0] ?? picks[0])?.focus();
+  const onEsc = (e) => { if (dismissible && e.key === "Escape") close(); };
+  let untrap = null;
+  if (modal) untrap = trapKeys(card, onEsc); else card.addEventListener("keydown", onEsc);
+  let open = true;
+  function close() {
+    if (!open) return;
+    open = false;
+    untrap?.();
+    card.remove();
+    if (focus && prev?.isConnected) prev.focus?.();
+  }
+  return { close, card, buttons: btns };
+}
+
+/** showCard whose buttons carry a `value`: resolves with the clicked button's value. */
+export const askCard = (opts) => new Promise((resolve) => showCard({
+  ...opts, buttons: opts.buttons.map((b) => ({ ...b, onClick: () => resolve(b.value) })),
+}));
+
+// ---- toast ---------------------------------------------------------------------------------------
+/** A key cap for toast text: toast("Press ", kbd("?"), " anytime"). */
+export const kbd = (key) => el("kbd", "", key);
+/** Small glass pill, announced politely, gone after ~3 s. `parts` are strings and/or nodes. */
+export function toast(...parts) {
+  let live = document.getElementById("toasts");
+  if (!live) { // one polite live region, created before its first message so screen readers pick it up
+    live = Object.assign(el("div"), { id: "toasts" });
+    live.setAttribute("aria-live", "polite");
+    document.body.append(live);
+  }
+  const n = el("div", "gp toast");
+  const msg = el("span");
+  msg.append(...parts);
+  n.append(el("span", "ok", "✓"), msg);
+  live.replaceChildren(n);
+  setTimeout(() => n.classList.add("out"), 2600);
+  setTimeout(() => n.remove(), 3100);
 }
 
 // ---- loading feedback ----------------------------------------------------------------------------
@@ -74,10 +127,10 @@ export async function loadOrAsk(slug, name, fn) {
   for (;;) {
     try { return await withLoading(slug, name, fn); } catch (err) {
       console.error(`loading ${slug} failed:`, err);
-      const choice = await new Promise((resolve) => showCard({
+      const choice = await askCard({
         tone: "error", title: errorText(name), text: "Check your connection and try again.",
-        buttons: [{ label: "Retry", big: true, onClick: () => resolve("retry") }, { label: "Back to menu", onClick: () => resolve("menu") }],
-      }));
+        buttons: [{ label: "Retry", big: true, value: "retry" }, { label: "Back to menu", value: "menu" }],
+      });
       if (choice === "menu") return null;
     }
   }
@@ -160,14 +213,19 @@ export function startTour() {
     Object.assign(card.style, { left: `${p.left}px`, top: `${p.top}px` });
   }
   function go(to) { if (to === null) return close(); i = to; show(); }
+  // Done (Next on the last tip) is finishing; Skip / Esc / clicking away are not, so only Done gets the toast.
+  function advance() {
+    const to = nextStep(i, TOUR_STEPS.length);
+    if (to === null) { close(); toast("You're all set. Press ", kbd("?"), " anytime for controls and the tour."); } else go(to);
+  }
   function close() { untrap(); window.removeEventListener("resize", place); root.remove(); tourOpen = false; prev?.isConnected && prev.focus?.(); }
   const untrap = trapKeys(card, (e) => {
     if (e.key === "Escape") close();
-    else if (e.key === "ArrowRight") go(nextStep(i, TOUR_STEPS.length));
+    else if (e.key === "ArrowRight") advance();
     else if (e.key === "ArrowLeft") go(prevStep(i));
   });
   skip.onclick = close;
-  next.onclick = () => go(nextStep(i, TOUR_STEPS.length));
+  next.onclick = advance;
   shade.onclick = close;
   window.addEventListener("resize", place);
   show();

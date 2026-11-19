@@ -605,7 +605,8 @@ export const timeOfDay = () => look.timeOfDay;
 /**
  * Set up lights, fog, sky and the post-processing chain for `scene` seen by `camera`.
  * @returns {{render: () => void, setSize: (w: number, h: number) => void,
- *   setFocus: (focusFt: number | null, maxPx?: number) => void}} setFocus: depth of field (intro only)
+ *   setFocus: (focusFt: number | null, maxPx?: number) => void, setLite: (on: boolean) => void}}
+ *   setFocus: depth of field (intro only); setLite: the lighter-graphics mode
  */
 export function initLook(renderer, scene, camera) {
   Object.assign(look, { renderer, scene, camera });
@@ -684,6 +685,15 @@ export function initLook(renderer, scene, camera) {
       look.edge.uniforms.uTexel.value.set(1 / s.x, 1 / s.y);
       look.edge.uniforms.uScale.value = Math.max(1, s.y / 900);
       look.dof.uniforms.uTexel.value.set(1 / s.x, 1 / s.y);
+    },
+    /**
+     * Lighter graphics: no shadow map (the sun stops casting; three recompiles the receivers) and no bloom.
+     * Both off means the default look is untouched; the caller also drops the pixel ratio to 1.
+     */
+    setLite(on) {
+      look.sun.castShadow = !on;
+      look.bloom.enabled = !on;
+      if (!on) refreshShadows(); // the shadow map is only redrawn on request: it is stale after being off
     },
     /** Depth of field focused at focusFt (ft from the camera), blurring up to maxPx; null: off. */
     setFocus(focusFt, maxPx = 6) {

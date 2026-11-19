@@ -20,15 +20,21 @@ import { loadHandModels } from "./handModels.js";
 import { buildPark } from "./park/index.js";
 import { initLook, setTimeOfDay, refreshShadows, inkProof, timeOfDay, TIMES } from "./look.js";
 import { showMenu, displayName } from "./menu.js";
-import { loadOrAsk, openHow, startTour } from "./guide-ui.js";
+import { loadOrAsk, openHow, startTour, toast, kbd } from "./guide-ui.js";
 import { shouldAutoTour, tourSeen } from "./guide.js";
 import { menuPick } from "./menu-ui.js";
 import { frameSlot, shouldDraw, pixelRatio } from "./pacing.js";
+import { makeSlowDetector, getFlag, setFlag, LITE_KEY, slugInIndex } from "./health.js";
+import { loadIndexOrAsk, askNotInPark, watchContext, offerLite, phoneNote } from "./notices.js";
+import { debugHas } from "./debug.js";
 
 // No MSAA: the composer renders to its own targets, and SMAA (look.js) anti-aliases instead.
 const renderer = new THREE.WebGLRenderer({ antialias: false });
-renderer.setPixelRatio(pixelRatio(window.devicePixelRatio)); // capped: see pacing.js
+let lite = getFlag(LITE_KEY); // lighter graphics (look.setLite): saved across visits
+renderer.setPixelRatio(pixelRatio(window.devicePixelRatio, lite)); // capped: see pacing.js
 document.body.appendChild(renderer.domElement);
+// GPU reset: no drawing while the context is gone; redraw everything when it is back (see notices.watchContext).
+let contextLost = false;
 
 const scene = new THREE.Scene();
 const park = buildPark(); // swappable: see park/index.js
@@ -52,6 +58,7 @@ const camera = new THREE.PerspectiveCamera(UMPIRE_VFOV_DEG, 1, 0.05, 6000);
 camera.layers.enable(1); // layer 1: drawn but not outlined (look.js)
 camera.layers.enable(2); // layer 2: not outlined and never inked over (look.js)
 const look = initLook(renderer, scene, camera);
+look.setLite(lite);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enabled = false;
@@ -200,7 +207,7 @@ function maybeTour() {
 function resize() {
   menuDrawn = false;
   dirty = true;
-  renderer.setPixelRatio(pixelRatio(window.devicePixelRatio)); // the window may have moved screens
+  renderer.setPixelRatio(pixelRatio(window.devicePixelRatio, lite)); // the window may have moved screens
   renderer.setSize(window.innerWidth, window.innerHeight);
   look.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -208,6 +215,27 @@ function resize() {
 }
 window.addEventListener("resize", resize);
 resize();
+watchContext(renderer.domElement, {
+  onLost: () => { contextLost = true; },
+  onRestored: () => { contextLost = false; menuDrawn = false; dirty = true; refreshShadows(); },
+});
+// Dev only (?debug=contextloss[-stuck]): drop the context 4 s in; "-stuck" never gives it back.
+if (debugHas("contextloss") || debugHas("contextloss-stuck")) {
+  const ext = renderer.getContext().getExtension("WEBGL_lose_context");
+  setTimeout(() => ext?.loseContext(), 4000);
+  if (debugHas("contextloss")) setTimeout(() => ext?.restoreContext(), 7000);
+}
+
+/** Lighter graphics on/off: pixel ratio 1, no shadows or bloom (look.setLite). Saved; the ? panel button shows it. */
+function setLite(on, announce = true) {
+  lite = on;
+  setFlag(LITE_KEY, on);
+  look.setLite(on);
+  resize();
+  $("lite-btn").classList.toggle("on", on);
+  $("lite-btn").setAttribute("aria-pressed", String(on));
+  if (announce) on ? toast("Lighter graphics on · change it in ", kbd("?")) : toast("Lighter graphics off");
+}
 
 const $ = (id) => document.getElementById(id);
 let state = initialState();
@@ -335,6 +363,9 @@ for (const v of VIEWS) $(`view-${v}`).onclick = () => dispatch({ type: "setView"
 for (const v of SPEEDS) $(`speed-${v}`).onclick = () => dispatch({ type: "setSpeed", speed: v });
 $("tod").onclick = cycleTimeOfDay;
 $("how-btn").onclick = openHow;
+$("lite-btn").onclick = () => setLite(!lite);
+$("lite-btn").classList.toggle("on", lite);
+$("lite-btn").setAttribute("aria-pressed", String(lite));
 $("how-link").onclick = openHow;
 $("tour-btn").onclick = () => { $("help").open = false; startTour(); };
 let pitcherIndex = [];
@@ -347,8 +378,13 @@ const q = new URLSearchParams(location.search);
 setTimeOfDay(q.get("tod") ?? "day");
 $("tod").textContent = `${timeOfDay()[0].toUpperCase()}${timeOfDay().slice(1)}`;
 
+let indexFailOnce = debugHas("indexfail"); // dev only: ?debug=indexfail fails the first load so "Try again" can be seen
 async function start() {
-  const index = await loadIndex();
+  const index = await loadIndexOrAsk(async () => {
+    if (indexFailOnce) { indexFailOnce = false; throw new Error("debug=indexfail"); }
+    return loadIndex();
+  });
+  phoneNote();
   $("pitchers").replaceChildren(...index.map((p) => {
     const b = document.createElement("button");
     b.dataset.slug = p.slug;
@@ -359,7 +395,10 @@ async function start() {
   pitcherIndex = index;
   tourPending = shouldAutoTour(location.search, tourSeen());
   if (showMenu(location.search)) await chooseFromMenu(index, index[0].slug);
-  else if (await loadOrAsk(q.get("pitcher"), q.get("pitcher"), () => pickPitcher(q.get("pitcher"))) === null) await chooseFromMenu(index, index[0].slug);
+  else if (!slugInIndex(index, q.get("pitcher"))) { // a link to someone who is not in the park
+    await askNotInPark();
+    await chooseFromMenu(index, index[0].slug);
+  } else if (await loadOrAsk(q.get("pitcher"), q.get("pitcher"), () => pickPitcher(q.get("pitcher"))) === null) await chooseFromMenu(index, index[0].slug);
   if (q.has("ab")) {
     const ab = q.get("ab");
     dispatch(ab === "random"
@@ -465,6 +504,16 @@ function poseFigure(p) {
   refreshShadows();
 }
 
+// Slow-device check: only frames of active playback count (a pitch flying or the intro sweep, tab visible);
+// pacing.js idles a still picture at 20 fps on purpose. Asked once per visit, and never when already light.
+const slowWatch = makeSlowDetector();
+let slowAsked = lite;
+function watchSpeed(now) {
+  const active = !menuOpen && !document.hidden && (state.playing || (intro && !intro.frozen));
+  const slow = slowWatch.frame(now, active) || (debugHas("slow") && active); // ?debug=slow (dev): ask at the first pitch
+  if (slow && !slowAsked) { slowAsked = true; offerLite(() => setLite(true)); }
+}
+
 let last = null;
 let nextSlot = 0; // when the next capped frame is due (ms)
 let lastDraw = -Infinity;
@@ -473,7 +522,8 @@ renderer.info.autoReset = false; // count the whole frame (all passes), reset be
 renderer.setAnimationLoop((now) => {
   const slot = frameSlot(now, nextSlot); // 60 fps cap, whatever the display's rate
   nextSlot = slot.next;
-  if (!slot.due) return countFrame(now, false);
+  if (!slot.due || contextLost) return countFrame(now, false); // lost context: nothing can be drawn
+  watchSpeed(now);
   if (menuOpen) { // one still frame behind the blur, then nothing until Play ball
     if (menuDrawn) return countFrame(now, false);
     const pose = introSweep(MENU_VIEW_S);

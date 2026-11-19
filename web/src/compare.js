@@ -18,6 +18,7 @@ import { tvView } from "./cameras.js";
 import { loadDelivery } from "./data.js";
 import { loadHandModels } from "./handModels.js";
 import { boneLengths } from "./pitcher.js";
+import { showNoWebGL, showNoCompare } from "./notices.js";
 import { pitcherApi } from "./signed_off/index.js"; // Ohtani keeps his signed-off pose code
 
 // ---- pure helpers (tested in test/compare.test.js) ---------------------------------------------------
@@ -85,6 +86,7 @@ async function main() {
     await run(slug);
   } catch (err) {
     console.error("compare page failed to load:", err);
+    if (/webgl|context/i.test(String(err?.message))) return showNoWebGL(); // the renderer constructor threw
     const retry = Object.assign(document.createElement("button"), { textContent: "Retry", onclick: () => main() });
     const back = Object.assign(document.createElement("a"), { textContent: "Back to the park", href: "/" });
     status.replaceChildren(`Couldn't load ${slug}'s delivery. `, retry, " ", back);
@@ -101,7 +103,8 @@ async function run(slug) {
     loadHandModels(), // sculpted glove/hand before makePitcher (?models=0: procedural)
   ]);
   if (!delivery || !cmp) {
-    $("status").textContent = `No delivery / comparison data for ${slug}: run scripts/m5_build.py and scripts/m5_compare2d.py.`;
+    $("status").textContent = "No video comparison for this pitcher yet.";
+    showNoCompare(slug); // visitor card; the developer hint goes to the console
     return;
   }
 
