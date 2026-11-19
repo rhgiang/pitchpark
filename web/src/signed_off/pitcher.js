@@ -503,33 +503,83 @@ function softReach(hip, ankle, R, s) {
 }
 
 /**
- * Pose the figure from a recovered delivery (M5 JSON) at t s from release (t = 0).
- *
- * 1. The rig's fixed-length bones point where the delivery's segments point. Averaging many
- *    clips shrinks fast-moving segments (the delivery's lengths vary over time), so positions are
- *    not copied: bones follow directions, and the rig never stretches.
- * 2. Legs: following directions with different lengths would slide the feet, so the pelvis is
- *    lowered until the legs reach (pelvisDrops) and each leg is re-solved by two-bone IK so the
- *    toe lands on the delivery's toe (footTarget; planted in the video), the knee bending the
- *    way the delivery's does. Ankle and toe are kept above the mound.
- * 3. Throwing arm: blended (weight blendWeight(t)) from the delivery's arm to the two-bone IK
- *    arm whose hand is on this pitch's `release`. Each bone's direction is slerped, so lengths
- *    hold and the hand glides onto the release instead of snapping. A null release: no blend.
- *
- * @param release Statcast [x, y, z] ft, or null
- * @param armAngleDeg kept in userData like poseAtRelease (the arm itself follows the delivery)
+ * Leg-fix, pelvis. pelvisDrops lowers the pelvis by "just enough" for the planted foot to be reached,
+ * but the rig's legs are ~10% shorter than the video skeleton's and the lead foot lands farther
+ * from the hips than the rig can span, so the pelvis fell 1.2-2.1 ft below the delivery's at release and
+ * popped back up by 0.4 s (hip speed 6.5 torso/s at +0.25 s, the real clips 1.5; lead knee 38 deg flexed at
+ * release against the delivery's 85). Instead scale the delivery's hip-over-planted-ankle vector by the
+ * leg-length ratio: a similar triangle, so the pelvis stays on the delivery's own smooth path (just pulled
+ * 10% toward the planted foot), the knee bends as the delivery's and the foot is reached by construction.
+ * Each planted foot votes with weight 1 - airborne(foot); both planted: the mean; none: no shift.
+ * @returns the shift (scene ft) to add to every joint of the body
  */
-export function poseAtTime(figure, delivery, t, release, armAngleDeg) {
-  const { bones, throws, scale: k } = figure.userData;
+/** Smooth saturation: x below lo, easing (tanh, slope-matched) to hi. */
+const softCap = (x, lo, hi) => (x <= lo ? x : lo + (hi - lo) * Math.tanh((x - lo) / (hi - lo)));
+function pelvisShift(figure, delivery, p, feet, targets) {
+  const k = figure.userData.scale, R = 0.9995 * LEG_FT * k;
+  const sum = V(0, 0, 0);
+  let wsum = 0;
+  for (const sd of ["left", "right"]) {
+    const [hip, ankle] = [J[`${sd}_hip`], J[`${sd}_ankle`]];
+    const w = 1 - airborne(targets[sd].ankle);
+    if (w <= 0) continue;
+    const leg = feet[hip].clone().sub(feet[ankle]).multiplyScalar(legRatio(figure, delivery, sd));
+    leg.setLength(softCap(leg.length(), 0.96 * R, 0.995 * R)); // never dead straight: the knee would snap at the singularity
+    sum.addScaledVector(targets[sd].ankle.clone().add(leg).sub(p[hip]), w);
+    wsum += w;
+  }
+  return sum.divideScalar(Math.max(wsum, 1));
+}
+
+/**
+ * Leg-fix: zero-phase smoothing of the whole body. The delivery is 60 fps; its Catmull-Rom spline is
+ * only C1, so acceleration jumps at every frame and the solved joints inherit it as jerk (and the legs'
+ * IK adds more). Averaging the body at t +-1/60, +-1/120 and t (weights 1 2 3 2 1 / 9, a triangle one frame
+ * wide) is symmetric, so there is no lag. The bones are re-derived from the averaged points (directions
+ * only), so their lengths do not change. The throwing arm is solved afterwards, from the smoothed shoulder.
+ */
+const BODY_S = 1 / 120; // tap spacing: 9 taps span +-4/120 s = +-1/30 s
+const ARM_TAPS = [1, 2, 3, 4, 5, 4, 3, 2, 1].map((w) => w / 25);
+function smoothBody(figure, delivery, t) {
+  const T = figure.userData.throws === "L" ? "left" : "right";
+  const arm = ["shoulder", "elbow", "wrist", "hand"].map((n) => J[`${T}_${n}`]);
+  const wide = [1, 2, 3, 4, 5, 4, 3, 2, 1].map((w) => w / 25);
+  const dirs = [V(0, 0, 0), V(0, 0, 0), V(0, 0, 0)]; // the throwing arm's three bones, as averaged unit directions
+  let out = null;
+  for (let o = -4; o <= 4; o++) {
+    const p = bodyAt(figure, delivery, t + o * BODY_S);
+    if (!out) out = p.map(() => V(0, 0, 0));
+    p.forEach((v, i) => out[i].addScaledVector(v, wide[o + 4]));
+    dirs.forEach((d, n) => d.addScaledVector(p[arm[n + 1]].clone().sub(p[arm[n]]).normalize(), ARM_TAPS[o + 4]));
+  }
+  // The delivery's arm direction is noisy where the limb is foreshortened toward the camera (the upper arm is
+  // 0.3 ft long in the 3D lift around -0.09 s, the rig's is 1.0 ft: the same direction noise is 3x bigger on the rig),
+  // so smooth the arm's directions, not its points, then rebuild it from the smoothed shoulder at rig bone lengths.
+  const T_ = figure.userData.scale;
+  [["shoulder", "elbow"], ["elbow", "wrist"], ["wrist", "hand"]].forEach(([a, b], n) => {
+    out[arm[n + 1]] = out[arm[n]].clone().addScaledVector(dirs[n].normalize(), T_ * segFt(`${T}_${a}`, `${T}_${b}`));
+  });
+  return out;
+}
+
+/**
+ * The body at t s from release before the arm is pinned to the pitch's release: pelvis placed, legs by IK.
+ * Returns the 24 joint positions (scene ft).
+ */
+function bodyAt(figure, delivery, t) {
+  const { bones, scale: k } = figure.userData;
   const drop = atTime(delivery, pelvisDrops(figure, delivery), t, (v, w) => v.reduce((s, x, k) => s + x * w[k], 0));
   const src = deliveryFrame(delivery, t);
   const feet = legfix.on ? smoothFeet(delivery, t, src) : src;
   setBones(bones, src, k);
-  const p = jointPositions(figure).map((v) => v.setY(v.y - drop));
+  const p = jointPositions(figure);
+  const targets = { left: footTarget(feet, "left", k), right: footTarget(feet, "right", k) };
+  const shift = legfix.on ? pelvisShift(figure, delivery, p, feet, targets) : V(0, -drop, 0);
+  p.forEach((v) => v.add(shift));
 
   for (const sd of ["left", "right"]) {
     const [hip, knee, ankle, foot] = ["hip", "knee", "ankle", "foot"].map((n) => J[`${sd}_${n}`]);
-    const target = footTarget(feet, sd, k);
+    const target = targets[sd];
     if (legfix.on) {
       // Airborne foot: keep the delivery's knee bend (see airborneLeg), then ease the last bit of reach.
       const d = airborneLeg(target, p[hip], src[hip], legRatio(figure, delivery, sd));
@@ -554,9 +604,91 @@ export function poseAtTime(figure, delivery, t, release, armAngleDeg) {
     }
     p[foot] = p[ankle].clone().add(dir);
   }
+  return p;
+}
 
-  const w = release ? blendWeight(t) : 0;
-  if (w > 0) {
+/**
+ * Leg-fix, throwing arm. The old pin solved a straight-wrist two-bone arm onto the release and slerped
+ * every bone toward it. Two things the real arm does not do: the hand is parked on the release (it ran
+ * at 123 ft/s, stopped dead at t = 0 and set off again, ~70 ft/s, where the real hand sweeps through), and the
+ * straight-wrist arm differs from the delivery's own arm by up to 50 deg once it folds after release, where
+ * the elbow whips. Instead the arm keeps the delivery's own shape and motion and gets two small corrections
+ * that put its hand on this pitch's release at t = 0: (1) a bend of the elbow by delta, so the shoulder-to-hand
+ * distance is the release's, then (2) a rotation R of the whole arm about the shoulder, so the hand lies in
+ * the release's direction. Both are solved once (from the delivery's arm at t = 0) and applied scaled by a
+ * smooth weight w(t) (0 -> 1 over [-0.15, 0], 1 -> 0 over [0, 0.08], smootherstep), so there is no IK
+ * flip, no pause, and the hand crosses the release at the delivery's own speed.
+ */
+/** Upper arm, forearm and palm vectors of a posed body, at the rig's bone lengths (averaged points are slightly short). */
+function armVectors(figure, p) {
+  const k = figure.userData.scale, T = figure.userData.throws === "L" ? "left" : "right";
+  const [sh, el, wr, hd] = ["shoulder", "elbow", "wrist", "hand"].map((n) => J[`${T}_${n}`]);
+  const len = (a, b) => k * segFt(`${T}_${a}`, `${T}_${b}`);
+  return [p[el].clone().sub(p[sh]).setLength(len("shoulder", "elbow")), p[wr].clone().sub(p[el]).setLength(len("elbow", "wrist")), p[hd].clone().sub(p[wr]).setLength(len("wrist", "hand"))];
+}
+function armPin(figure, delivery, release) {
+  const ud = figure.userData, k = ud.scale, T = ud.throws === "L" ? "left" : "right";
+  const [sh, el, wr, hd] = ["shoulder", "elbow", "wrist", "hand"].map((n) => J[`${T}_${n}`]);
+  const key = release.join(",");
+  if (ud.pinFor === delivery && ud.pinKey === key) return ud.pin;
+  const p0 = smoothBody(figure, delivery, 0);
+  const [u1, f, pm] = armVectors(figure, p0);
+  const n = u1.clone().cross(f).normalize();
+  const rel = toScene(release).sub(p0[sh]);
+  const hand = (d) => u1.clone().add(f.clone().add(pm).applyQuaternion(new THREE.Quaternion().setFromAxisAngle(n, d)));
+  const g = (d) => hand(d).length() - rel.length();
+  let delta = 0;
+  for (let d = 0.005; d <= 1.5 && g(0) !== 0; d += 0.005) { // nearest bend, either way, that gives the release's distance
+    const hit = [d, -d].find((x) => g(0) * g(x) <= 0);
+    if (hit !== undefined) { let [lo, hi] = [0, hit]; for (let it = 0; it < 40; it++) { const m = (lo + hi) / 2; if (g(lo) * g(m) <= 0) hi = m; else lo = m; } delta = (lo + hi) / 2; break; }
+  }
+  const R = new THREE.Quaternion().setFromUnitVectors(hand(delta).normalize(), rel.clone().normalize());
+  ud.pinFor = delivery; ud.pinKey = key; ud.pin = { delta, R, n };
+  return ud.pin;
+}
+// smootherstep (zero 1st and 2nd derivative at both ends): the correction has no acceleration jump where the two ramps meet at t = 0.
+const smootherstep = (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * x * (x * (6 * x - 15) + 10));
+const OFFSET_OUT_S = 0.08;
+const offsetWeight = (t) => (t <= 0 ? smootherstep((t + BLEND_IN_S) / BLEND_IN_S) : 1 - smootherstep(t / OFFSET_OUT_S));
+function pinArm(figure, delivery, p, release, w) {
+  const ud = figure.userData, T = ud.throws === "L" ? "left" : "right";
+  const [sh, el, wr, hd] = ["shoulder", "elbow", "wrist", "hand"].map((n) => J[`${T}_${n}`]);
+  const { delta, R, n } = armPin(figure, delivery, release);
+  const [u1, f, pm] = armVectors(figure, p);
+  const axis = u1.clone().cross(f);
+  if (axis.length() < 0.2 * u1.length() * f.length()) axis.copy(n); // arm nearly straight: hinge axis undefined, use t = 0's
+  const bend = new THREE.Quaternion().setFromAxisAngle(axis.normalize(), delta * w);
+  const turn = new THREE.Quaternion().slerp(R, w);
+  f.applyQuaternion(bend); pm.applyQuaternion(bend);
+  p[el] = p[sh].clone().add(u1.applyQuaternion(turn));
+  p[wr] = p[el].clone().add(f.applyQuaternion(turn));
+  p[hd] = p[wr].clone().add(pm.applyQuaternion(turn));
+}
+
+/**
+ * Pose the figure from a recovered delivery (M5 JSON) at t s from release (t = 0).
+ *
+ * 1. The rig's fixed-length bones point where the delivery's segments point. Averaging many
+ *    clips shrinks fast-moving segments (the delivery's lengths vary over time), so positions are
+ *    not copied: bones follow directions, and the rig never stretches.
+ * 2. Legs: following directions with different lengths would slide the feet, so the pelvis is
+ *    lowered until the legs reach (pelvisDrops) and each leg is re-solved by two-bone IK so the
+ *    toe lands on the delivery's toe (footTarget; planted in the video), the knee bending the
+ *    way the delivery's does. Ankle and toe are kept above the mound.
+ * 3. Throwing arm: blended (weight blendWeight(t)) from the delivery's arm to the two-bone IK
+ *    arm whose hand is on this pitch's `release`. Each bone's direction is slerped, so lengths
+ *    hold and the hand glides onto the release instead of snapping. A null release: no blend.
+ *
+ * @param release Statcast [x, y, z] ft, or null
+ * @param armAngleDeg kept in userData like poseAtRelease (the arm itself follows the delivery)
+ */
+export function poseAtTime(figure, delivery, t, release, armAngleDeg) {
+  const { bones, throws, scale: k } = figure.userData;
+  const p = legfix.on ? smoothBody(figure, delivery, t) : bodyAt(figure, delivery, t);
+
+  const w = release ? (legfix.on ? offsetWeight(t) : blendWeight(t)) : 0;
+  if (w > 0 && legfix.on) pinArm(figure, delivery, p, release, w);
+  else if (w > 0) {
     const T = throws === "L" ? "left" : "right";
     const [sh, el, wr, hd] = ["shoulder", "elbow", "wrist", "hand"].map((n) => J[`${T}_${n}`]);
     const a = k * segFt(`${T}_shoulder`, `${T}_elbow`);
