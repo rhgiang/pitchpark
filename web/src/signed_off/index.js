@@ -6,6 +6,9 @@
 import * as current from "../pitcher.js";
 import * as frozen from "./pitcher.js";
 
+// ?legfix=0 turns Ohtani's leg-jitter fix off (A/B by eye); see frozen.legfix in pitcher.js.
+frozen.legfix.on = new URLSearchParams(globalThis.location?.search).get("legfix") !== "0";
+
 export const SIGNED_OFF = new Set(["ohtani-shohei"]);
 
 /** The pose API (makePitcher, poseAtTime, poseAtRelease, handPosition) for this pitcher. */

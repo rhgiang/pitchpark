@@ -20,7 +20,7 @@ before(async () => {
   execSync(`git archive 70c9f22 ./src | tar -x -C test/.ref-70c9f22`, { cwd: fileURLToPath(new URL("..", import.meta.url)) });
   ref = await import(pathToFileURL(`${REF_DIR}src/pitcher.js`).href);
 });
-after(() => rmSync(REF_DIR, { recursive: true, force: true }));
+after(() => { frozen.legfix.on = true; rmSync(REF_DIR, { recursive: true, force: true }); });
 
 const load = (rel) => { const u = new URL(rel, import.meta.url); return existsSync(u) ? JSON.parse(readFileSync(u)) : null; };
 const bones = (fig) => {
@@ -31,6 +31,7 @@ const bones = (fig) => {
 };
 
 function maxDeviation(delivery, releases, armAngle) {
+  frozen.legfix.on = false; // equality is for the signed-off path with the leg-jitter fix OFF (?legfix=0)
   const a = ref.makePitcher(delivery.throws, delivery.height_in ?? 75);
   const b = frozen.makePitcher(delivery.throws, delivery.height_in ?? 75);
   const times = [];

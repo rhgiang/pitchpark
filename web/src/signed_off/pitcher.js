@@ -415,6 +415,27 @@ function pelvisDrops(figure, delivery) {
   return ud.drops;
 }
 
+/** Leg-jitter fix switch (ON by default; ?legfix=0 in signed_off/index.js turns it off). Not in 70c9f22. */
+export const legfix = { on: true };
+const SOFT_REACH_FT = 0.05; // slack at which the airborne leg starts easing into full extension
+
+/**
+ * Leg-fix: a foot in the air that the delivery puts beyond the rig's (shorter) leg used to run
+ * the knee out to dead straight and hold it, snapping 15-30 deg in a frame or two when the foot
+ * came back in reach (drive leg, around release and mid follow-through). Ease the reach
+ * instead: slack u = R - d is kept as-is above s, and below s becomes s*e^(u/s - 1) (value and
+ * slope match at u = s), so it never reaches zero and the knee approaches straight smoothly.
+ * Weighted by foot height above the ground so planted feet keep their exact position.
+ */
+function softReach(hip, ankle, R, s) {
+  const air = smoothstep((ankle.y - groundY(ankle) - 0.5) / 0.4);
+  const d = ankle.clone().sub(hip);
+  const u = R - d.length();
+  if (air <= 0 || u >= s) return ankle;
+  const eased = s * Math.exp(u / s - 1);
+  return hip.clone().addScaledVector(d.normalize(), R - (u + air * (eased - u)));
+}
+
 /**
  * Pose the figure from a recovered delivery (M5 JSON) at t s from release (t = 0).
  *
@@ -442,6 +463,7 @@ export function poseAtTime(figure, delivery, t, release, armAngleDeg) {
   for (const sd of ["left", "right"]) {
     const [hip, knee, ankle, foot] = ["hip", "knee", "ankle", "foot"].map((n) => J[`${sd}_${n}`]);
     const target = footTarget(src, sd, k);
+    if (legfix.on) target.ankle = softReach(p[hip], target.ankle, 0.9999 * LEG_FT * k, SOFT_REACH_FT * k);
     // Pole: the delivery's knee off its hip-ankle midpoint. When the leg is nearly straight this
     // is short and noisy, but then the knee sits on the line whatever its direction.
     const pole = src[knee].clone().sub(src[hip].clone().add(src[ankle]).multiplyScalar(0.5));
