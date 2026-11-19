@@ -4,6 +4,7 @@ import { isOld } from "../src/park/old.js";
 import { planFans, occupancy, awayShare } from "../src/park/crowd.js";
 import { adLayout, adUV, AD_BRANDS, AD_ROWS } from "../src/park/home.js";
 import { tvView } from "../src/cameras.js";
+import { WALL_H_FT } from "../src/park/stands.js";
 
 test("isOld: comma list in ?old=", () => {
   assert.ok(isOld("crowd", "?old=crowd,home"));
@@ -37,13 +38,14 @@ test("crowd: denser behind home than in the far corners; same seed, same crowd",
   assert.deepEqual(planFans(seats, 5), planFans(seats, 5));
 });
 
-test("home ads: boards on the 60 ft wall arc facing home, 4:1, within the 4.5 ft wall; neighbours differ", () => {
+test("home ads: boards on the 60 ft wall arc facing home, 4:1, within the 3.4 ft wall, one row; neighbours differ", () => {
   const boards = adLayout();
-  assert.ok(boards.length >= 45);
+  assert.equal(AD_ROWS.length, 1);
+  assert.ok(boards.length >= 9);
   for (const b of boards) {
     assert.ok(Math.abs(Math.hypot(...b.p) - 59.7) < 0.01);
     assert.ok(b.p[1] < 0 && b.n[1] > 0.5 || Math.abs(b.p[0]) > 10, "faces home");
-    assert.ok(Math.abs(b.w / b.h - 4) < 1e-9 && b.z + b.h / 2 <= 4.5);
+    assert.ok(Math.abs(b.w / b.h - 4) < 1e-9 && b.z + b.h / 2 <= WALL_H_FT);
     assert.ok(b.tile >= 0 && b.tile < AD_BRANDS.length);
   }
   const at = (row, k) => boards.filter((b) => b.z === AD_ROWS[row].z)[k];
@@ -62,5 +64,5 @@ test("home ads: atlas tiles tile the unit square; the TV camera's wall strip is 
   // The board directly behind home (centre of the arc) is within a few ft of the TV camera's line to the plate.
   const tv = tvView().position;
   const ahead = adLayout().filter((b) => Math.abs(b.p[0] - (-tv[0] * 60) / tv[1]) < 8);
-  assert.ok(ahead.length >= 3, "boards in the TV frame");
+  assert.ok(ahead.length >= 1, "boards in the TV frame");
 });

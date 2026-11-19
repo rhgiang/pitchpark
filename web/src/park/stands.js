@@ -30,13 +30,20 @@ const outline = (segs) => segs.map((g) => g[0]).concat([segs[segs.length - 1][1]
 
 // Structure: dark-green steel stands (walls and fascia bands in two greens, roof in green stripes) instead of cream and coral.
 const C = isOld("structure") ? { cream: PALETTE.cream, coral: PALETTE.coral } : { cream: 0x3b7a63, coral: 0x1f4538 };
-// Lower bowl: 4.5 ft padded wall, 18 rows (1.3 ft rise, 2.9 ft tread), concourse, back wall.
-const LOWER_ROWS = rows(1.5, 4.5, 18, 1.3, 2.9);
-// Home: the first riser continues the padded wall (navy), so the TV frame, which ends on that row, has no grey columns.
-if (!isOld("home")) LOWER_ROWS.segs[0][2] = PALETTE.navy;
+// Lower bowl: padded wall, 18 rows (1.3 ft rise, 2.9 ft tread), concourse, back wall.
+// Home (?old=home restores the 4.5 ft wall with the first row floor 1.3 ft above it): the wall is the
+// low 3.4 ft padded barrier of a real park (MLB backstop walls run about 3 to 5 ft; the 60 ft
+// distance is OBR 2.01's recommended minimum backstop distance, and parks run about 55 to 60 ft),
+// and the first row's floor sits BELOW its top, so the fans' heads and shoulders show over it. That
+// matters for the TV camera (cameras.js): at its zoom, the top of the frame behind home is only
+// ~7 ft up, so a first row above the wall (as before) was entirely out of frame. Rows climb from 1.4 ft.
+const NEW_HOME = !isOld("home");
+export const WALL_H_FT = NEW_HOME ? 3.4 : 4.5;
+const LOWER_ROWS = rows(1.5, NEW_HOME ? 0.1 : 4.5, 18, 1.3, 2.9);
 const LOWER = [
-  [[0, 0], [0, 4.5], PALETTE.navy, 0.75, 1],
-  [[0, 4.5], [1.5, 4.5], C.cream],
+  [[0, 0], [0, WALL_H_FT], PALETTE.navy, 0.75, 1],
+  [[0, WALL_H_FT], [1.5, WALL_H_FT], C.cream],
+  ...(NEW_HOME ? [[[1.5, WALL_H_FT], [1.5, 1.4], PALETTE.concreteShade, 0.85, 1]] : []), // drop behind the wall to the first floor
   ...LOWER_ROWS.segs,
   [LOWER_ROWS.end, [62, LOWER_ROWS.end[1]], PALETTE.paving, 1, 0.8],
   [[62, LOWER_ROWS.end[1]], [62, 34], C.cream, 0.8, 1],
@@ -225,7 +232,7 @@ function backstop() {
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(140, 14);
-  const net = new THREE.Mesh(sweep(path, [[[0, 4.5], [0, 32], 0xffffff]]),
+  const net = new THREE.Mesh(sweep(path, [[[0, WALL_H_FT], [0, 32], 0xffffff]]),
     new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide, depthWrite: false, opacity: 0.55 }));
   // sweep() has no UVs: give the strip u along the path, v up.
   const uv = [];
@@ -233,7 +240,7 @@ function backstop() {
   net.geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
   g.add(noOutline(net));
   const post = makeToonMaterial(PALETTE.steel);
-  for (let i = 0; i < path.length; i += 8) {
+  for (let i = 4; i < path.length; i += 8) { // offset: no post dead centre behind the plate
     const m = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 32, 8), post);
     m.position.set(path[i][0], 16, -path[i][1]);
     g.add(m);

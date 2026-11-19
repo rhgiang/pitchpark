@@ -8,11 +8,12 @@ import { polar, normals, BACKSTOP_FT } from "./layout.js";
 /*
  * Behind home plate: the backdrop of the TV view (?old=home restores the single repeated banner).
  *
- * The TV camera (cameras.js) is a 2.6 degree telephoto from centre field: through the plate it sees
- * only about 21 ft of height, and behind home that is the padded wall (0 to 4.5 ft) and the first
- * row of seats. So that strip is the whole backdrop: this fills the wall with three rows of
- * different ads (a lower board row, a middle one and a ribbon board at the top), and the fan rail
- * and first seats above it get a rail and posts. Higher up, the press box hangs under the roof.
+ * The TV camera (cameras.js) is a 2.6 degree telephoto from centre field. At the wall behind home
+ * (60 ft back, about 470 ft from the camera) its frame is ~21 ft tall, but its TOP is only ~7 ft above
+ * the field (the lens looks down at the plate), so the frame holds: the padded wall (0 to 3.4 ft), then
+ * ~3.5 ft of the first rows of fans, then nothing higher. Like a real broadcast, this is one low
+ * wall with ONE row of ads (an LED-ribbon style board, 2.2 ft tall, on a navy pad) and the fans
+ * seated right behind it (stands.js: first row below the wall top). The protective net is stands.js's backstop().
  *
  * All the ads share ONE atlas texture, ONE material and are merged into one mesh: one draw call.
  * The names are invented (Pitch Park themed; no real brands).
@@ -81,8 +82,8 @@ function adAtlas() {
   return atlas;
 }
 
-// The padded wall's rows: centre height and size of each (4:1 boards). 3 rows x 1.3 ft = the 4.5 ft wall.
-export const AD_ROWS = [{ z: 0.8, w: 5.2 }, { z: 2.3, w: 5.2 }, { z: 3.75, w: 5.2 }];
+// One row of 4:1 boards: 0.7 ft of navy pad below, 2.2 ft of ad, 0.5 ft of pad above = the 3.4 ft wall.
+export const AD_ROWS = [{ z: 1.8, w: 8.8 }];
 export const WALL_R_FT = BACKSTOP_FT - 0.3; // a hair in front of the wall
 
 /**
@@ -123,27 +124,6 @@ function adBoards() {
   return new THREE.Mesh(mergeGeometries(geos), mat);
 }
 
-/** Fan rail along the top of the wall: a steel bar on posts every 6 ft, on the arc (instanced posts). */
-function fanRail() {
-  const g = new THREE.Group();
-  const steel = makeToonMaterial(PALETTE.steelLight);
-  const pts = [];
-  for (let a = 135; a <= 225 + 1e-9; a += 2) pts.push(polar(a, BACKSTOP_FT + 1.3));
-  const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.16, 1.3, 0.16).translate(0, 0.65, 0), steel, pts.length);
-  const m = new THREE.Matrix4();
-  pts.forEach(([x, y], i) => posts.setMatrixAt(i, m.makeTranslation(x, 4.5, -y)));
-  posts.castShadow = true;
-  g.add(posts);
-  // Top bar: one thin box per arc step.
-  pts.slice(1).forEach(([x, y], i) => {
-    const [x0, y0] = pts[i], len = Math.hypot(x - x0, y - y0);
-    const bar = box(steel, len + 0.05, 0.14, 0.14, (x + x0) / 2, 5.7, -(y + y0) / 2);
-    bar.rotation.y = Math.atan2(y - y0, x - x0);
-    g.add(bar);
-  });
-  return g;
-}
-
 /**
  * Press box: a cream box with a long dark window band and a coral lid, hung under the main roof at
  * the back of the upper deck, centred behind home (it lights up at night like the other windows).
@@ -167,9 +147,9 @@ function pressBox(path) {
   return g;
 }
 
-/** Everything behind home: ad boards, fan rail, press box. */
+/** Everything behind home: ad boards, press box. */
 export function buildHome(upperPath) {
   const g = new THREE.Group();
-  g.add(adBoards(), fanRail(), pressBox(upperPath));
+  g.add(adBoards(), pressBox(upperPath));
   return g;
 }
