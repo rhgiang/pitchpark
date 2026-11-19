@@ -12,3 +12,8 @@ clip,reason,note
 822800_23_4.mp4,manual_not_center_field,jersey close-up then a tight shot on batter/catcher; pitcher out of frame; tracker on the catcher
 822805_35_2.mp4,manual_not_center_field,graphic/close-ups until ~140 then a tight shot on catcher/batter; pitcher only at the left edge
 823715_5_1.mp4,manual_camera_cut,umpire close-up until frame 151 (mid-stride): no windup or leg lift in the centre-field view
+823803_13_1.mp4,manual_not_center_field,graphics then a batter close-up; the tracker is on the batter (his swing is the detected release)
+823715_4_1.mp4,manual_not_center_field,tight batter/catcher shot after a short pitcher glimpse; tracker on the catcher at the detected release
+824046_39_2.mp4,manual_not_center_field,tight shot on catcher/batter for the whole delivery; tracker on the catcher
+824046_16_1.mp4,manual_not_center_field,tight shot on catcher/batter for the whole delivery; tracker on the catcher
+824046_8_2.mp4,manual_not_center_field,after the pitch cuts to the catcher; tracker on the catcher throwing back
