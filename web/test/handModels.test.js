@@ -29,6 +29,7 @@ test("mitt.glb loads into handModels parts within budget and in the hand frame",
   assert.ok(tris <= 8000, `${tris} triangles > 8000`);
   assert.ok(hi[0] - lo[0] > 0.85 && hi[0] - lo[0] < 1.05, `heel to tips ${hi[0] - lo[0]} ft`); // ~0.95 ft
   assert.ok(lo[0] > -0.1 && lo[0] < 0.05, "heel near the wrist (x = 0)");
-  assert.ok(hi[1] < 0.15, "back of the glove just behind the hand (+y)");
+  // the forearm (along -x, centred on y = z = 0) enters through the heel opening: glove all round it
+  assert.ok(hi[1] > 0.1 && lo[1] < -0.1, "glove on both sides of the wrist (back +y, palm -y)");
   assert.ok(hi[2] > 0.3, "thumb side is +z");
 });

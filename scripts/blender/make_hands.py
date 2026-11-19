@@ -555,13 +555,13 @@ REF_DIR = os.path.join(ROOT, "ref", "glove")
 REF_DARK_PARTS = (1, 2, 4)        # tripo_part_N painted gloveDark: web, heel binding, wrist lining
 REF_LEN = 0.95                    # heel -> finger tips, ft
 REF_HEEL_X = -0.03                # where the heel sits along the hand (viewer x), ft
-REF_BACK_Y = 0.075                # back of the glove (its highest viewer y), ft: clear of the hand
-REF_MID_Z = 0.05                  # middle of the glove across the hand (viewer z), ft
+REF_OPENING = (-0.03, 0.0)        # (viewer y, z) of the middle of the hand opening at the heel: the
+REF_OPENING_PART = 2              # forearm goes in here (the tripo part ringing it: the heel binding)
 REF_VOXEL = 0.007                 # leather remesh grid, ft (bigger = softer and more cartoon)
 REF_SHELL = 0.022                 # the reference is paper-thin open surfaces: thickened to this first
                                   # (solidify) so the remesh sees closed volumes; keep > 2 voxels
 REF_SMOOTH = 6                    # smoothing passes after the remesh (fewer = more leather texture)
-REF_CUT = dict(z=-0.22, y=-0.38)  # cut away everything past both (viewer axes): a loose lace tail
+REF_CUT = dict(z=-0.15, y=-0.23)  # cut away everything past both (viewer axes): a loose lace tail
 REF_BODY_TRIS, REF_DARK_TRIS = 4550, 1250   # shell / web, binding, lining; laces take the rest
 REF_WEB_PART = 1                  # which tripo part is the web (its top edge gets lace loops)
 REF_DARK_SMOOTH = 2               # light smoothing on the dark parts: the web keeps its creases
@@ -632,14 +632,20 @@ def build_mitt_from_ref(path):
             parts.append(o)
         else:
             bpy.data.objects.remove(o)
-    # scale and place: heel -> tips along +x, back of the glove at REF_BACK_Y, centred across
+    # scale and place: heel -> tips along +x from REF_HEEL_X; across, see the opening below
     pts = [v.co for o in parts for v in o.data.vertices]
     lo = [min(p[i] for p in pts) for i in range(3)]
     hi = [max(p[i] for p in pts) for i in range(3)]
     s = REF_LEN / (hi[0] - lo[0])
-    move = Vector((REF_HEEL_X - lo[0] * s, -REF_MID_Z - (lo[1] + hi[1]) / 2 * s, REF_BACK_Y - hi[2] * s))
+    move = Vector((REF_HEEL_X - lo[0] * s, 0.0, 0.0))
     for o in parts:
         o.data.transform(Matrix.Translation(move) @ Matrix.Scale(s, 4))
+    # centre the hand opening on the wrist, so the forearm runs into the glove through it
+    op = [vw(v.co) for o in parts if part_no(o) == REF_OPENING_PART for v in o.data.vertices]
+    mid = lambda a: (min(getattr(p, a) for p in op) + max(getattr(p, a) for p in op)) / 2
+    shift = bl((0.0, REF_OPENING[0] - mid("y"), REF_OPENING[1] - mid("z")))
+    for o in parts:
+        o.data.transform(Matrix.Translation(shift))
         bm = bmesh.new()  # cut the lace tail hanging off the pinky side, out in front of the pocket
         bm.from_mesh(o.data)
         bmesh.ops.delete(bm, geom=[v for v in bm.verts if -v.co.y < REF_CUT["z"] and v.co.z < REF_CUT["y"]], context="VERTS")
@@ -658,6 +664,10 @@ def build_mitt_from_ref(path):
     paint(body, lambda c, n: "gloveLight" if n.y < -0.35 else "glove")  # facing the palm side: pocket
     tidy_paint(body, passes=6)
     web_pts = [vw(v.co) for o in dark if part_no(o) == REF_WEB_PART for v in o.data.vertices]
+    for o in dark:  # where each dark part sits (viewer axes): the lining marks the hand's opening
+        q = [vw(v.co) for v in o.data.vertices]
+        print("[make_hands] part", part_no(o), "x %.3f..%.3f y %.3f..%.3f z %.3f..%.3f" % tuple(
+            f(getattr(v, a) for v in q) for a in "xyz" for f in (min, max)))
     det = join(dark, "mitt_details")  # many small open pieces: remesh them closed so they can be thinned
     m = det.modifiers.new("thick", "SOLIDIFY")
     m.thickness, m.offset = REF_SHELL * 0.75, 0.0
