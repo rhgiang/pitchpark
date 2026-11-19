@@ -4,6 +4,8 @@ import { PALETTE, makeToonMaterial, lampMaterial, noOutline } from "../look.js";
 import { place } from "./build.js";
 import { palmSites } from "./signature.js";
 import { buildWall } from "./wall.js";
+import { buildGrandWall } from "./grand.js";
+import { isOld } from "./old.js";
 
 /*
  * Oracle-Park-style pieces, in architecture only (no real brands, signs or landmarks):
@@ -94,6 +96,6 @@ function palms() {
 export function buildOracle(flags, poles) {
   const g = new THREE.Group();
   g.name = "oracle";
-  g.add(buildWall(flags, poles), palms());
+  g.add(isOld("oracle") ? buildWall(flags, poles) : buildGrandWall(flags, poles), palms()); // ?old=oracle: the first-built wall
   return g;
 }

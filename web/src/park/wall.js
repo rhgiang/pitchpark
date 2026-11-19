@@ -84,7 +84,7 @@ function trimDark({ bay, h1, h2, thick, deck }) {
 }
 
 /** A clock face texture: cream dial, tick marks, hands at the load-time clock. */
-function clockTexture() {
+export function clockTexture() {
   const c = document.createElement("canvas");
   c.width = c.height = 256;
   const g = c.getContext("2d");
@@ -125,6 +125,34 @@ function tower(brickMat) {
   band.position.set(0, 14.5, cz + D / 2 + 0.25);
   g.add(band);
   return { g, cz, finialY: H + 3.4 + 17 };
+}
+
+/**
+ * Fans on the walkway, standing behind the balustrade and seen through the arches (instanced, as crowd.js's): two rows
+ * of up to four per bay, none in bay `skip` (the clock tower's). deckY: the walkway's top (ft). Returns [bodies, heads].
+ */
+export function walkwayFans(main, skip, deckY) {
+  // Fans on the walkway, standing behind the balustrade and seen through the arches (instanced, as crowd.js's).
+  const R = rng(5);
+  const spots = [];
+  for (const b of main) for (const row of [-WALL.thick / 2 - 2.4, -WALL.thick / 2 - 5.4]) for (const x of [-5, -1.7, 1.7, 5]) {
+    if (b === skip || R() < 0.35) continue;
+    const dx = Math.cos(b.yaw), dy = Math.sin(b.yaw), zx = Math.sin(b.yaw), zy = -Math.cos(b.yaw);
+    spots.push({ p: [b.p[0] + dx * (x + (R() - 0.5) * 0.6) + zx * row, b.p[1] + dy * (x + (R() - 0.5) * 0.6) + zy * row], yaw: b.yaw, k: 0.92 + 0.16 * R() });
+  }
+  const body = new THREE.InstancedMesh(new THREE.BoxGeometry(1.25, 2.9, 0.9).translate(0, 1.45, 0), makeToonMaterial(0xffffff, { surface: "none" }), spots.length);
+  const head = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.42, 1).translate(0, 3.35, 0), makeToonMaterial(0xffffff, { surface: "none" }), spots.length);
+  const skins = [0xf1c7a1, 0xd9a07a, 0xb57a52, 0x8a5a3a, 0x5e3b28];
+  const c = new THREE.Color();
+  spots.forEach((s, i) => {
+    place(body, i, at(s.p, deckY), s.yaw, [1, s.k, 1]);
+    place(head, i, at(s.p, deckY + 3.35 * (s.k - 1)), s.yaw);
+    const u = R(), pool = u < 0.68 ? HOME_SHIRTS : u < 0.76 ? AWAY_SHIRTS : NEUTRAL_SHIRTS;
+    body.setColorAt(i, c.set(pool[Math.floor(R() * pool.length)]));
+    head.setColorAt(i, c.set(skins[Math.floor(R() * skins.length)]));
+  });
+  body.castShadow = head.castShadow = true;
+  return [body, head];
 }
 
 /** The wall: returns a Group. flags/poles are the park's shared pennant lists. */
@@ -177,26 +205,6 @@ export function buildWall(flags, poles) {
   poles.push({ p: fp, y: t.finialY, s: [1, 14, 1] });
   flags.push({ base: [fp[0], t.finialY + 14 - 0.3, -fp[1]], yaw: 0, len: 15, h: 6, color: PALETTE.coral, pennant: true });
 
-  // Fans on the walkway, standing behind the balustrade and seen through the arches (instanced, as crowd.js's).
-  const R = rng(5);
-  const spots = [];
-  for (const b of main) for (const row of [-WALL.thick / 2 - 2.4, -WALL.thick / 2 - 5.4]) for (const x of [-5, -1.7, 1.7, 5]) {
-    if (b === mb || R() < 0.35) continue;
-    const dx = Math.cos(b.yaw), dy = Math.sin(b.yaw), zx = Math.sin(b.yaw), zy = -Math.cos(b.yaw);
-    spots.push({ p: [b.p[0] + dx * (x + (R() - 0.5) * 0.6) + zx * row, b.p[1] + dy * (x + (R() - 0.5) * 0.6) + zy * row], yaw: b.yaw, k: 0.92 + 0.16 * R() });
-  }
-  const body = new THREE.InstancedMesh(new THREE.BoxGeometry(1.25, 2.9, 0.9).translate(0, 1.45, 0), makeToonMaterial(0xffffff, { surface: "none" }), spots.length);
-  const head = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.42, 1).translate(0, 3.35, 0), makeToonMaterial(0xffffff, { surface: "none" }), spots.length);
-  const skins = [0xf1c7a1, 0xd9a07a, 0xb57a52, 0x8a5a3a, 0x5e3b28];
-  const c = new THREE.Color();
-  spots.forEach((s, i) => {
-    place(body, i, at(s.p, WALL.h1 + 1.5), s.yaw, [1, s.k, 1]);
-    place(head, i, at(s.p, WALL.h1 + 1.5 + 3.35 * (s.k - 1)), s.yaw);
-    const u = R(), pool = u < 0.68 ? HOME_SHIRTS : u < 0.76 ? AWAY_SHIRTS : NEUTRAL_SHIRTS;
-    body.setColorAt(i, c.set(pool[Math.floor(R() * pool.length)]));
-    head.setColorAt(i, c.set(skins[Math.floor(R() * skins.length)]));
-  });
-  body.castShadow = head.castShadow = true;
-  g.add(body, head);
+  g.add(...walkwayFans(main, mb, WALL.h1 + 1.5));
   return g;
 }

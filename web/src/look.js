@@ -96,16 +96,27 @@ function addParkShading(shader) {
   shader.uniforms.uPools = pools;
   shader.uniforms.uPoolAmt = poolAmt;
   shader.vertexShader = patch(shader.vertexShader,
-    ["#include <common>", "#include <common>\nvarying vec3 vParkW;"],
+    ["#include <common>", "#include <common>\nvarying vec3 vParkW;\n#if SURFACE == 6\nvarying vec3 vParkN;\n#endif"],
     ["#include <project_vertex>", `#include <project_vertex>
       vec4 parkW = vec4(transformed, 1.0);
       #ifdef USE_INSTANCING
         parkW = instanceMatrix * parkW;
       #endif
-      vParkW = (modelMatrix * parkW).xyz;`]);
+      vParkW = (modelMatrix * parkW).xyz;
+      #if SURFACE == 6
+        // World normal, for the brick's horizontal direction (surface.js): faces here are flat, so this is constant across one.
+        vec3 parkN = objectNormal;
+        #ifdef USE_INSTANCING
+          parkN = mat3(instanceMatrix) * parkN;
+        #endif
+        vParkN = normalize(mat3(modelMatrix) * parkN);
+      #endif`]);
   shader.fragmentShader = patch(shader.fragmentShader,
     ["#include <common>", `#include <common>
       varying vec3 vParkW;
+      #if SURFACE == 6
+        varying vec3 vParkN;
+      #endif
       uniform vec4 uFlood;
       uniform float uFloodMin, uPoolAmt;
       uniform vec3 uPools[${MAX_POOLS}];
@@ -114,6 +125,8 @@ function addParkShading(shader) {
     ["#include <color_fragment>", `#include <color_fragment>
       #if SURFACE == 4
         diffuseColor.rgb = groundSurface(diffuseColor.rgb, vParkW);
+      #elif SURFACE == 6
+        diffuseColor.rgb = brickSurface(diffuseColor.rgb, vParkW, normalize(vParkN));
       #else
         diffuseColor.rgb *= surfaceTone(vParkW);
       #endif`],
@@ -159,7 +172,7 @@ export function setParkLighting(opts = {}) {
  * the night falloff and floodlight pools.
  * @param color hex or THREE.Color (use PALETTE)
  * @param extra other MeshToonMaterial parameters (map, vertexColors, side, ...), plus
- *   `surface`: "plaster" (default), "foliage", "wood", "ground", "rock" or "none" (surface.js).
+ *   `surface`: "plaster" (default), "foliage", "wood", "ground", "rock", "brick" or "none" (surface.js).
  */
 export function makeToonMaterial(color, { surface = "plaster", ...extra } = {}) {
   const m = new THREE.MeshToonMaterial({ color, gradientMap: toonRamp(), ...extra });

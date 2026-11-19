@@ -2,9 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { isOld } from "../src/park/old.js";
 import {
-  rpmLabel, spinAngleRad, wallBays, palmSites, inSector, clearForSignature, FALLS, WALL, TOWER, TOWER_V1, scoreboardDeg,
+  rpmLabel, spinAngleRad, wallBays, palmSites, inSector, clearForSignature, FALLS, WALL, GRAND, WALL_TOP_FT, TOWER, TOWER_V1, scoreboardDeg,
 } from "../src/park/signature.js";
 import { cliffHeight } from "../src/park/falls.js";
+import { voussoirs } from "../src/park/grand.js";
+import { SURFACE_KINDS, SURFACE_GLSL } from "../src/surface.js";
 import { fenceDistFt, polar } from "../src/park/layout.js";
 import { umpireView, UMPIRE_VFOV_DEG } from "../src/cameras.js";
 
@@ -107,4 +109,26 @@ test("clearForSignature: keeps scatter out of the pool, the cliff and the tower,
   assert.equal(plan.tents.length, 0);
   assert.equal(plan.paths.length, 1);
   assert.ok(inSector(inFalls, FALLS.a0, FALLS.a1, 100));
+});
+
+test("grand wall: taller than the first-built one, arch fits inside the arcade with room for the keystone and the frieze", () => {
+  assert.ok(GRAND.h1 + GRAND.h2 > WALL_TOP_FT + 8, "monumental: at least 8 ft above the old wall");
+  assert.ok(GRAND.parapetTop > GRAND.cornice && GRAND.pedestalTop > GRAND.parapetTop && GRAND.lampTop > GRAND.pedestalTop);
+  const crown = GRAND.spring + GRAND.openW / 2; // top of the opening, ft above the arcade's base
+  assert.ok(crown + 2.2 + 1.0 < GRAND.h2 - 2.5, "keystone clears the frieze band");
+  assert.ok(GRAND.openW < WALL.bay - 4, "a pier at least 4 ft wide between openings");
+  assert.ok(GRAND.sill < GRAND.spring);
+});
+
+test("voussoirs: nine stones round the half circle, the middle one (keystone) bigger", () => {
+  const ring = voussoirs(7, 2.2, 4, 0, 9);
+  assert.equal(ring.length, 9);
+  const reach = (geo) => { geo.computeBoundingBox(); return geo.boundingBox.max.y; };
+  assert.ok(reach(ring[4]) > reach(ring[3]) && reach(ring[4]) > reach(ring[5]));
+});
+
+test("brick surface: kind 6 with a running-bond shader that fades by pixel footprint", () => {
+  assert.equal(SURFACE_KINDS.brick, 6);
+  assert.ok(SURFACE_GLSL.includes("brickSurface") && SURFACE_GLSL.includes("mod(row, 2.0)"));
+  assert.ok(SURFACE_GLSL.includes("smoothstep(0.18, 0.5, fp)"));
 });
