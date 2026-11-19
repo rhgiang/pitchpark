@@ -159,8 +159,10 @@ def main():
     # ---- export for the page: the replica camera per clip + its scores (numbers only, no video) ----
     def clip_score(c, method):
         s = df[(df["clip"] == c) & (df["method"] == method)]
-        return {"overall": round(float(s["err"].median()), 4),
-                "phases": {k: round(float(v.median()), 4) for k, v in s.groupby("phase")["err"]}}
+        # None where there is no score: with one train clip its own floor_2d has no other-game reference (NaN)
+        r4 = lambda v: None if pd.isna(v) else round(float(v), 4)  # noqa: E731
+        return {"overall": r4(s["err"].median()),
+                "phases": {k: r4(v.median()) for k, v in s.groupby("phase")["err"]}}
 
     out = {"schema": 1, "slug": slug, "conf_min": CONF_MIN, "torso_in": round(torso_in, 2),
            "phases": [{"name": n, "t0_s": lo, "t1_s": hi} for n, lo, hi in

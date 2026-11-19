@@ -313,8 +313,26 @@ def main():
             avg_ft = refine_arm(avg_ft, ri, fsi, throws, train_tracks, fps=60.0, pin=0.0, hand_w=0.0,
                                 data_w=ARM_DATA_W, jerk_w=ARM_PRE_JERK_W)
     final = correct_to_mean(avg_ft, ri, fsi, throws, target, leg_lift_index=ll, info=cinfo)
+    # A short pitcher with a long Statcast extension (Yamamoto, 70 in, 6.6 ft) asks for a stride his legs cannot
+    # span with both feet planted: the pelvis drop runs away and the fixed point diverges.  Then bisect for the
+    # longest extension the body can reach (to 0.02 ft) and build to that; it is recorded and reported, never hidden.
+    ext_cap = None
+    if not cinfo.get("converged", False):
+        lo, hi = 3.0, target["extension_ft"]   # lo converges (the lift's own is ~3 ft), hi did not
+        while hi - lo > 0.02:
+            mid = 0.5 * (lo + hi)
+            ci: dict = {}
+            correct_to_mean(avg_ft, ri, fsi, throws, {**target, "extension_ft": mid}, leg_lift_index=ll, info=ci)
+            lo, hi = (mid, hi) if ci["converged"] else (lo, mid)
+        ext_cap = {"statcast_ft": target["extension_ft"], "constructed_ft": lo}
+        target_used = {**target, "extension_ft": lo}
+        cinfo = {}
+        final = correct_to_mean(avg_ft, ri, fsi, throws, target_used, leg_lift_index=ll, info=cinfo)
+        print(f"EXTENSION CAPPED: the body cannot reach Statcast's {target['extension_ft']:.2f} ft; built to {lo:.2f} ft")
+    else:
+        target_used = target
     rv_fin = release_values(final, ri, throws)
-    miss = {k: rv_fin[k] - target[k] for k in KEYS}
+    miss = {k: rv_fin[k] - target_used[k] for k in KEYS}
     if (max(abs(miss[k]) for k in KEYS[:3]) > 0.05 or abs(miss["arm_angle_deg"]) > 1.0
             or not cinfo.get("converged", False)):
         raise SystemExit(f"correct_to_mean did not converge to 0.05 ft / 1 deg: misses {miss}, info {cinfo}")
@@ -330,7 +348,7 @@ def main():
         final = refine_arm(final, ri, fsi, throws, train_tracks, fps=60.0, info=refine_info,
                            data_w=ARM_DATA_W, jerk_w=ARM_POST_JERK_W)
         rv_fin = release_values(final, ri, throws)
-        miss = {k: rv_fin[k] - target[k] for k in KEYS}
+        miss = {k: rv_fin[k] - target_used[k] for k in KEYS}
         if max(abs(miss[k]) for k in KEYS[:3]) > 0.05 or abs(miss["arm_angle_deg"]) > 1.0:
             raise SystemExit(f"arm refinement moved the release off target: misses {miss}")
     seg_lock_ft = float(np.abs(segment_lengths(avg_pre_arm) - segment_lengths(avg_raw)).max())
@@ -379,7 +397,7 @@ def main():
     res = Path(a.results) if a.results else ROOT / "results/m5" / slug  # per pitcher: builds don't overwrite
     res.mkdir(parents=True, exist_ok=True)
     metrics.to_csv(res / "metrics.csv", index=False)
-    write_json({"target": target, "before": rv_avg, "after": rv_fin, "applied": cinfo,
+    write_json({"target": target, "target_used": target_used, "extension_cap": ext_cap, "before": rv_avg, "after": rv_fin, "applied": cinfo,
                 "stride_ft": stride_ft, "max_segment_change_correction_ft": seg_corr_ft,
                 "max_segment_change_foot_lock_ft": seg_lock_ft, "planted_feet": feet,
                 "leg_lift_index": ll, "foot_strike_index": fsi, "rocker_index": rki, "release_index": ri,
