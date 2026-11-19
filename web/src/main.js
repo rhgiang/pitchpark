@@ -16,6 +16,7 @@ import { makeBall, makeGhost, updateBall, spinBall } from "./ball.js";
 import { renderHud, buildStrip } from "./hud.js";
 import { boneLengths } from "./pitcher.js";
 import { pitcherApi } from "./signed_off/index.js"; // Ohtani keeps his signed-off pose code
+import { loadHandModels } from "./handModels.js";
 import { buildPark } from "./park/index.js";
 import { initLook, setTimeOfDay, refreshShadows, inkProof, timeOfDay, TIMES } from "./look.js";
 import { showMenu } from "./menu.js";
@@ -230,8 +231,9 @@ function dispatch(action) {
 const randomSeed = () => Math.floor(Math.random() * 2 ** 31);
 
 let api = pitcherApi(null); // pose functions for the current pitcher
+const handModelsReady = loadHandModels(); // sculpted glove/hand if present (?models=0: procedural)
 async function pickPitcher(slug) {
-  const [data, delivery] = await Promise.all([loadPitcher(slug), loadDelivery(slug)]);
+  const [data, delivery] = await Promise.all([loadPitcher(slug), loadDelivery(slug), handModelsReady]);
   if (figure) {
     scene.remove(figure);
     figure.traverse((o) => {

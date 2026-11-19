@@ -16,6 +16,7 @@ import { toScene } from "./coords.js";
 import { buildField } from "./field.js";
 import { tvView } from "./cameras.js";
 import { loadDelivery } from "./data.js";
+import { loadHandModels } from "./handModels.js";
 import { boneLengths } from "./pitcher.js";
 import { pitcherApi } from "./signed_off/index.js"; // Ohtani keeps his signed-off pose code
 
@@ -80,6 +81,7 @@ async function main() {
   const [delivery, cmp] = await Promise.all([
     loadDelivery(slug),
     fetch(`/data/deliveries/${slug}.compare.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    loadHandModels(), // sculpted glove/hand before makePitcher (?models=0: procedural)
   ]);
   if (!delivery || !cmp) {
     $("status").textContent = `No delivery / comparison data for ${slug}: run scripts/m5_build.py and scripts/m5_compare2d.py.`;

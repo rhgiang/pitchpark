@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { JOINTS, J } from "./skeleton.js";
 import { PALETTE, makeToonMaterial } from "../look.js";
+import { handModel } from "../handModels.js";
 
 /**
  * The pitcher's meshes (M5 look): a stylised, toon-shaded ballplayer built from simple shapes on
@@ -215,8 +216,9 @@ function bodyParts(throws) {
     add("skin", taper(P("elbow"), P("wrist"), 0.13, 0.095), () => J[`${sd}_elbow`]);
     // Hand: the mitt on the glove side, the ball grip on the throwing side.
     const wrist = (g) => skin(atWrist(g, sd), () => J[`${sd}_wrist`]);
-    if (sd === G) for (const [m, g] of mitt()) parts.push([m, wrist(g)]);
-    else for (const g of gripHand()) parts.push(["skin", wrist(g)]);
+    // A sculpted model (handModels.js) replaces the procedural hand when it has loaded (looks only: no pose change).
+    const hand = sd === G ? handModel("mitt") ?? mitt() : handModel("grip") ?? gripHand().map((g) => ["skin", g]);
+    for (const [m, g] of hand) parts.push([m in COLORS ? m : "glove", wrist(g)]);
 
     // Thigh: thick at the hip, a sphere at the knee shared with the shin.
     add("pants", taper(P("hip"), P("knee"), 0.28, 0.19, 14), () => J[`${sd}_hip`]);
