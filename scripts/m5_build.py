@@ -253,7 +253,11 @@ def main():
     ll, fsi, rki = (None if v is None else int(round(ri + v * 60.0)) for v in (ll_s, fs_s, rk_s))
     # Extra smoothing before the leg-lift peak only (delivery.phase_smooth): the windup is slow, so the
     # averaged lifts' leftover noise read as a wobble there; the stride and throw keep today's smoothing.
-    avg_raw = phase_smooth(avg_raw, 60.0, slow_until=ll)
+    # With <= 3 contributing clips (King: 2) there is little averaging to remove noise, so the window is wider
+    # (sigma 0.15 s vs 0.05 s). Chosen on King's own scratch sweep (pre-lift jerk 719 -> 400, p99 accel 153 -> 92;
+    # lead knee at -1.4 s rose 149 -> 170), 2 train clips, so it is a judgement call: pitchers with more clips
+    # keep 0.05 s and their builds are unchanged.
+    avg_raw = phase_smooth(avg_raw, 60.0, slow_until=ll, sigma_s=0.15 if len(train_used) <= 3 else 0.05)
     avg_ft = lock_feet(avg_raw, 60.0, v_lo_ftps=1.0, v_hi_ftps=2.5)
     rv_avg = release_values(avg_ft, ri, throws)
 
