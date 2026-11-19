@@ -253,10 +253,28 @@ export function noOutline(obj) {
 // the instance index (no per-object uniforms needed), so a window on a wall, a sign on a fascia or
 // one tree in front of another gets a line even where the depth step is too small to see.
 // transparent + NoBlending: keeps three from forcing alpha to 1 (it does for opaque materials).
+// The crowd's animated fans (park/crowd.js sets this): the pre-pass runs their vertex animation too, so ink
+// follows the swinging arms. Applies only to instanced meshes with an instanceColor and a fan aAnim.
+export const fanHook = { glsl: null, uTime: null, lite: false };
+
 function makeNormalDepthMaterial(far) {
   const m = new THREE.MeshNormalMaterial({ side: THREE.DoubleSide, transparent: true, blending: THREE.NoBlending });
   m.onBeforeCompile = (s) => {
     s.uniforms.uFar = { value: far };
+    if (fanHook.glsl) {
+      s.uniforms.uTime = fanHook.uTime;
+      s.vertexShader = patch(s.vertexShader,
+        ["#include <common>", `#include <common>
+${fanHook.glsl.common}`],
+        ["#include <beginnormal_vertex>", `#include <beginnormal_vertex>
+#ifdef USE_INSTANCING_COLOR
+${fanHook.glsl.normal}
+#endif`],
+        ["#include <begin_vertex>", `#include <begin_vertex>
+#ifdef USE_INSTANCING_COLOR
+${fanHook.glsl.vertex}
+#endif`]);
+    }
     s.vertexShader = patch(s.vertexShader,
       ["#include <common>", "#include <common>\nvarying float vViewZ;\nflat varying float vId;\n// Merged park meshes carry one ID per source object (park/build.js mergeStatic); 0 elsewhere.\nattribute float objId;"],
       ["#include <project_vertex>", `#include <project_vertex>
@@ -719,6 +737,7 @@ export function initLook(renderer, scene, camera) {
      * Both off means the default look is untouched; the caller also drops the pixel ratio to 1.
      */
     setLite(on) {
+      fanHook.lite = on; // park/crowd.js swaps to its simple fans
       look.sun.castShadow = !on;
       look.bloom.enabled = !on;
       if (!on) refreshShadows(); // the shadow map is only redrawn on request: it is stale after being off
