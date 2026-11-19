@@ -53,7 +53,7 @@ test("fan records: one per planned fan, standing hips high, kids smaller, determ
 test("person geometry: within the triangle budget, no NaN, parts and arm sides tagged", () => {
   const tris = (g) => g.index.count / 3;
   const near = personGeometry("near"), far = personGeometry("far"), legs = personGeometry("near", { legs: true });
-  assert.ok(tris(near) <= 180 && tris(far) <= 45 && tris(farArmsGeometry()) <= 40, `${tris(near)} ${tris(far)}`);
+  assert.ok(tris(near) <= 210 /* +26 for the toy-style arms */ && tris(far) <= 45 && tris(farArmsGeometry()) <= 56, `${tris(near)} ${tris(far)}`);
   assert.ok(tris(legs) > tris(near));
   for (const g of [near, far, legs, farArmsGeometry()]) {
     assert.ok([...g.attributes.position.array, ...g.attributes.normal.array].every(Number.isFinite));

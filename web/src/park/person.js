@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { isOld } from "./old.js";
 
 /*
  * One fan as a low-poly person, and the vertex-shader code that animates it (crowd.js instances it).
@@ -121,7 +122,7 @@ export function personGeometry(detail, { legs = false } = {}) {
     }
     b.tube([[0, 2.2, 0.27], [0, 1.45, 0.31]], [1, 0.9], 4, PART.LONG, 0, { ex: 0.38, ez: 0.12 });
     b.tube([[0, 2.33, -0.34], [0, 2.3, -0.66]], [1, 0.8], 4, PART.BRIM, 0, { ex: 0.3, ey: 0.03 });
-    for (const s of [-1, 1]) arm(b, s);
+    for (const s of [-1, 1]) arm(b, s, OLD_ARMS ? 5 : 4); // 4 sides: a square-ish toy limb
   }
   if (legs) for (const sx of [-1, 1]) {
     b.tube([[sx * 0.24, 0, -0.05], [sx * 0.26, -STAND_HIP_FT, 0]], [0.24, 0.2], 5, PART.PANTS, 0, { capEnd: true });
@@ -129,22 +130,32 @@ export function personGeometry(detail, { legs = false } = {}) {
   return b.geometry();
 }
 
-// Rest pose of an arm (right side s = 1): upper arm hangs from the shoulder, forearm lies forward on
-// the lap. The shader swings it rigidly about the shoulder (raise, clap), so it only has to look right at rest.
-function arm(b, s) {
-  const S = [s * SHOULDER.x, SHOULDER.y, 0], E = [s * 0.72, 0.66, -0.1], H = [s * 0.5, 0.64, -0.92];
-  b.tube([S, E], [0.2, 0.17], 4, PART.SHIRT, s);
-  b.tube([E, H], [0.16, 0.13], 5, PART.SKIN, s, { capEnd: true });
+const OLD_ARMS = isOld("arms");
+
+/**
+ * One arm (right side s = 1). Toy-figure style (Roblox-like): a single straight, thick limb from the
+ * shoulder down-forward to the lap, a shirt sleeve on the top half and a rounded skin stub for the hand.
+ * Why straight: the shader swings the arm rigidly about the shoulder (raise, clap); a bent elbow
+ * looked like a broken stick once raised, a straight limb reads right in every pose.
+ * ?old=arms restores the bent two-segment arm.
+ */
+function arm(b, s, sides) {
+  const S = [s * SHOULDER.x, SHOULDER.y, 0];
+  if (OLD_ARMS) {
+    const E = [s * 0.72, 0.66, -0.1], H = [s * 0.5, 0.64, -0.92];
+    b.tube([S, E], [0.2, 0.17], 4, PART.SHIRT, s);
+    b.tube([E, H], [0.16, 0.13], sides, PART.SKIN, s, { capEnd: true });
+    return;
+  }
+  const H = [s * 0.62, 0.62, -0.78], at = (t) => S.map((v, i) => v + (H[i] - v) * t);
+  b.tube([at(-0.05), at(0.55)], [0.2, 0.2], sides, PART.SHIRT, s, { capStart: true, capEnd: true }); // sleeve, cuffed
+  b.tube([at(0.5), at(0.9), at(1.02)], [0.17, 0.16, 0.09], sides, PART.SKIN, s, { capEnd: true }); // hand stub
 }
 
-/** Far arms: just the two limbs (a 3-sided tube each, shirt then skin) for far fans whose arms move. */
+/** Far arms: just the two limbs, fewer sides, for far fans whose arms move. */
 export function farArmsGeometry() {
   const b = new Builder();
-  for (const s of [-1, 1]) {
-    const S = [s * SHOULDER.x, SHOULDER.y, 0], E = [s * 0.72, 0.66, -0.1], H = [s * 0.5, 0.64, -0.92];
-    b.tube([S, E], [0.2, 0.17], 4, PART.SHIRT, s);
-    b.tube([E, H], [0.16, 0.13], 4, PART.SKIN, s, { capEnd: true });
-  }
+  for (const s of [-1, 1]) arm(b, s, OLD_ARMS ? 4 : 3);
   return b.geometry();
 }
 
