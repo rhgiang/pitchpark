@@ -25,8 +25,9 @@ const UP = V(0, 1, 0);
 // Leather tones for the mitt (darker lacing/binding, lighter oiled pocket), around PALETTE.glove.
 const GLOVE_DARK = 0x5b3a1c;
 const GLOVE_LIGHT = 0xb27a43;
+const HAIR = 0x2b1d14; // dark brown, showing under the cap at the back and sides
 const COLORS = {
-  jersey: PALETTE.jersey, navy: PALETTE.navy, pants: PALETTE.pants, skin: PALETTE.skin,
+  jersey: PALETTE.jersey, navy: PALETTE.navy, pants: PALETTE.pants, skin: PALETTE.skin, hair: HAIR,
   glove: PALETTE.glove, gloveDark: GLOVE_DARK, gloveLight: GLOVE_LIGHT, shoe: PALETTE.shoe,
 };
 
@@ -192,6 +193,7 @@ function bodyParts(throws) {
   add("skin", blob(H, 0.32, 0.37, 0.35, 22, 14), () => J.head);
   for (const x of [-0.31, 0.31]) add("skin", blob(V(x, 5.84, 0.02), 0.04, 0.08, 0.06, 8, 6), () => J.head);
   add("skin", blob(V(0, 5.8, 0.39), 0.045, 0.06, 0.05, 8, 6), () => J.head);
+  add("hair", blob(V(0, 5.88, -0.08), 0.335, 0.26, 0.31), () => J.head); // back and sides, under the cap
   // Cap: crown dome, a button on top, and a brim curving down a little at the front edge.
   add("navy", new THREE.SphereGeometry(0.37, 22, 8, 0, 2 * Math.PI, 0, Math.PI / 2)
     .scale(1, 0.85, 1.02).translate(0, 5.92, 0.03), () => J.head);
