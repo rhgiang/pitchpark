@@ -19,7 +19,9 @@ import { pitcherApi } from "./signed_off/index.js"; // Ohtani keeps his signed-o
 import { loadHandModels } from "./handModels.js";
 import { buildPark } from "./park/index.js";
 import { initLook, setTimeOfDay, refreshShadows, inkProof, timeOfDay, TIMES } from "./look.js";
-import { showMenu } from "./menu.js";
+import { showMenu, displayName } from "./menu.js";
+import { loadOrAsk, openHow, startTour } from "./guide-ui.js";
+import { shouldAutoTour, tourSeen } from "./guide.js";
 import { menuPick } from "./menu-ui.js";
 import { frameSlot, shouldDraw, pixelRatio } from "./pacing.js";
 
@@ -137,6 +139,7 @@ function endIntro() {
   look.setFocus(null);
   appliedView = null; // re-apply the view's FOV and controls
   document.body.classList.remove("intro");
+  maybeTour();
 }
 /** Advance the intro by dt s and pose the camera; ends it after INTRO_S. */
 function updateIntro(dt) {
@@ -177,8 +180,21 @@ function closeMenu() {
 /** Menu -> chosen pitcher loaded -> menu closed. */
 async function chooseFromMenu(index, preselect) {
   openMenu();
-  await pickPitcher(await menuPick(index, preselect));
+  for (let slug = preselect; ; ) {
+    slug = await menuPick(index, slug);
+    const name = displayName(index.find((p) => p.slug === slug)?.name ?? slug);
+    if (await loadOrAsk(slug, name, () => pickPitcher(slug)) !== null) break; // null: "Back to menu"
+  }
   closeMenu();
+}
+
+// First-visit tour: armed in start() (menu path, not seen), shown once the intro sweep has ended.
+let tourPending = false;
+function maybeTour() {
+  if (!tourPending || intro || menuOpen) return;
+  tourPending = false;
+  $("help").open = false;
+  setTimeout(startTour, 400); // let the panels fade back in first
 }
 
 function resize() {
@@ -242,6 +258,7 @@ async function pickPitcher(slug) {
       o.skeleton?.dispose(); // bone texture
     });
   }
+  if (delivery) $("compare-link").href = `/compare.html?slug=${slug}`;
   api = pitcherApi(slug);
   figure = api.makePitcher(data.pitcher.throws, data.pitcher.height_in ?? 75, delivery && boneLengths(delivery)); // his height and bone lengths
   posedAt = null; // new figure is in makePitcher's static pose: the poseFigure memo must not skip it (same t|ab|pitch after a round trip)
@@ -317,6 +334,9 @@ for (const m of MODES) $(`mode-${m}`).onclick = () => dispatch({ type: "setMode"
 for (const v of VIEWS) $(`view-${v}`).onclick = () => dispatch({ type: "setView", view: v });
 for (const v of SPEEDS) $(`speed-${v}`).onclick = () => dispatch({ type: "setSpeed", speed: v });
 $("tod").onclick = cycleTimeOfDay;
+$("how-btn").onclick = openHow;
+$("how-link").onclick = openHow;
+$("tour-btn").onclick = () => { $("help").open = false; startTour(); };
 let pitcherIndex = [];
 $("change").onclick = async () => { await chooseFromMenu(pitcherIndex, state.slug); startIntro(); };
 
@@ -333,12 +353,13 @@ async function start() {
     const b = document.createElement("button");
     b.dataset.slug = p.slug;
     b.innerHTML = `${p.name} <span class="sub">${p.throws}HP · ${p.n_at_bats} AB</span>`;
-    b.onclick = () => pickPitcher(p.slug);
+    b.onclick = () => loadOrAsk(p.slug, displayName(p.name), () => pickPitcher(p.slug));
     return b;
   }));
   pitcherIndex = index;
+  tourPending = shouldAutoTour(location.search, tourSeen());
   if (showMenu(location.search)) await chooseFromMenu(index, index[0].slug);
-  else await pickPitcher(q.get("pitcher"));
+  else if (await loadOrAsk(q.get("pitcher"), q.get("pitcher"), () => pickPitcher(q.get("pitcher"))) === null) await chooseFromMenu(index, index[0].slug);
   if (q.has("ab")) {
     const ab = q.get("ab");
     dispatch(ab === "random"
@@ -367,6 +388,7 @@ async function start() {
   if (q.get("panel") === "nolook") $("look").open = false;
   // Freeze at t (no playback) so a headless screenshot catches the ball mid-flight.
   dispatch({ type: "seek", t: q.has("t") ? Number(q.get("t")) : 0 - preroll(state) }); // no ?t=: from the start of the delivery
+  maybeTour(); // no intro ran (e.g. ?view=): the tour can open now
   if (fpsBox) benchmark();
 }
 start();

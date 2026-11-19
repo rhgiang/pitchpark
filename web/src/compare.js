@@ -75,8 +75,25 @@ const PHASE_LABEL = {
   follow_through: "Follow-through",
 };
 
+/** Loading feedback: a spinner in the status line; a failure shows the message with Retry. */
 async function main() {
   const slug = new URLSearchParams(location.search).get("slug") ?? "ohtani-shohei";
+  const status = document.getElementById("status");
+  const initial = (main.prompt ??= status.textContent); // the page's own prompt, kept across Retry
+  status.replaceChildren(Object.assign(document.createElement("span"), { className: "spin" }), `Loading ${slug}'s delivery…`);
+  try {
+    await run(slug);
+  } catch (err) {
+    console.error("compare page failed to load:", err);
+    const retry = Object.assign(document.createElement("button"), { textContent: "Retry", onclick: () => main() });
+    const back = Object.assign(document.createElement("a"), { textContent: "Back to the park", href: "/" });
+    status.replaceChildren(`Couldn't load ${slug}'s delivery. `, retry, " ", back);
+    return;
+  }
+  if (status.querySelector(".spin")) status.textContent = initial; // loaded: back to the prompt
+}
+
+async function run(slug) {
   const $ = (id) => document.getElementById(id);
   const [delivery, cmp] = await Promise.all([
     loadDelivery(slug),

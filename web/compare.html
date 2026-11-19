@@ -31,6 +31,10 @@
       tr.now { background: #3a3320; }
       small { color: var(--dim); }
       p.help { color: var(--dim); margin: 4px 16px 16px; max-width: 70em; }
+      .spin { display: inline-block; width: 12px; height: 12px; margin-right: 8px; vertical-align: -2px; border-radius: 50%;
+        border: 2px solid #3c4654; border-top-color: var(--hi); animation: sp 0.8s linear infinite; }
+      @keyframes sp { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
       @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
     </style>
   </head>
