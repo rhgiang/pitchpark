@@ -132,14 +132,18 @@ export function personGeometry(detail, { legs = false } = {}) {
 
 const OLD_ARMS = isOld("arms");
 
+/** Elbow pivot (right side; x mirrors). The upper arm hangs from SHOULDER to here, beside the torso. */
+export const ELBOW = { x: 0.66, y: 0.78, z: -0.06 };
+
 /**
- * One arm (right side s = 1). Toy-figure style (Roblox-like): a single straight, thick limb from the
- * shoulder down-forward to the lap, a shirt sleeve on the top half and a rounded skin stub for the hand.
- * Why straight: the shader swings the arm rigidly about the shoulder (raise, clap); a bent elbow
- * looked like a broken stick once raised, a straight limb reads right in every pose.
- * ?old=arms restores the bent two-segment arm.
+ * One arm (right side s = 1), seated rest pose: the upper arm hangs beside the torso, the elbow bends
+ * and the forearm lies forward on the lap, ending in a rounded hand stub (toy-figure style, no fingers).
+ * Vertices are tagged side = s on the upper arm and 2s on the forearm, so the shader can bend the
+ * elbow (FAN_GLSL): a real arm raised to cheer straightens, and a clap brings the forearms together.
+ * Before, the arm was one rigid piece; raised, the lap-bent forearm stuck out sideways like a broken stick.
+ * ?old=arms restores that rigid arm.
  */
-function arm(b, s, sides) {
+function arm(b, s, sides, far = false) {
   const S = [s * SHOULDER.x, SHOULDER.y, 0];
   if (OLD_ARMS) {
     const E = [s * 0.72, 0.66, -0.1], H = [s * 0.5, 0.64, -0.92];
@@ -147,15 +151,24 @@ function arm(b, s, sides) {
     b.tube([E, H], [0.16, 0.13], sides, PART.SKIN, s, { capEnd: true });
     return;
   }
-  const H = [s * 0.62, 0.62, -0.78], at = (t) => S.map((v, i) => v + (H[i] - v) * t);
-  b.tube([at(-0.05), at(0.55)], [0.2, 0.2], sides, PART.SHIRT, s, { capStart: true, capEnd: true }); // sleeve, cuffed
-  b.tube([at(0.5), at(0.9), at(1.02)], [0.17, 0.16, 0.09], sides, PART.SKIN, s, { capEnd: true }); // hand stub
+  const E = [s * ELBOW.x, ELBOW.y, ELBOW.z], H = [s * 0.5, 0.66, -0.74];
+  const lerp = (a, c, t) => a.map((v, i) => v + (c[i] - v) * t);
+  if (far) {
+    b.tube([S, E], [0.17, 0.15], sides, PART.SHIRT, s);
+    b.tube([lerp(E, H, -0.15), H], [0.15, 0.12], sides, PART.SKIN, 2 * s, { capEnd: true });
+    return;
+  }
+  const M = lerp(S, E, 0.45); // short sleeve ends here
+  b.tube([lerp(S, E, -0.08), M], [0.18, 0.18], sides, PART.SHIRT, s, { capStart: true });
+  b.tube([M, E], [0.15, 0.15], sides, PART.SKIN, s);
+  // Forearm starts a little behind the elbow (rounded, so the joint has no gap when it bends).
+  b.tube([lerp(E, H, -0.2), lerp(E, H, -0.05), lerp(E, H, 0.85), H], [0.1, 0.15, 0.14, 0.09], sides, PART.SKIN, 2 * s, { capEnd: true });
 }
 
 /** Far arms: just the two limbs, fewer sides, for far fans whose arms move. */
 export function farArmsGeometry() {
   const b = new Builder();
-  for (const s of [-1, 1]) arm(b, s, OLD_ARMS ? 4 : 3);
+  for (const s of [-1, 1]) arm(b, s, OLD_ARMS ? 4 : 3, true);
   return b.geometry();
 }
 
@@ -173,34 +186,43 @@ export const FAN_GLSL = {
     uniform float uTime;
     attribute vec4 aAnim;
     attribute vec2 aPart;
-    mat3 gR; vec3 gPv; float gBob; float gHide;
+    mat3 gR; vec3 gPv; mat3 gRf; vec3 gE; float gBob; float gHide;
     mat3 fxRx(float a) { float c = cos(a), s = sin(a); return mat3(1.0, 0.0, 0.0, 0.0, c, s, 0.0, -s, c); }
     mat3 fxRy(float a) { float c = cos(a), s = sin(a); return mat3(c, 0.0, -s, 0.0, 1.0, 0.0, s, 0.0, c); }
     mat3 fxRz(float a) { float c = cos(a), s = sin(a); return mat3(c, s, 0.0, -s, c, 0.0, 0.0, 0.0, 1.0); }
     void fanPose(vec3 p) {
-      gR = mat3(1.0); gPv = vec3(0.0); gBob = 0.0; gHide = 0.0;
+      gR = mat3(1.0); gPv = vec3(0.0); gRf = mat3(1.0); gE = vec3(0.0); gBob = 0.0; gHide = 0.0;
       if (aAnim.w < 1.5) return; // not a fan (a seat, a tree): attributes absent
-      float style = aAnim.w - 2.0, ph = aAnim.y, mode = aAnim.z, part = aPart.x, side = aPart.y;
+      float style = aAnim.w - 2.0, ph = aAnim.y, mode = aAnim.z, part = aPart.x;
+      float side = sign(aPart.y), fore = step(1.5, abs(aPart.y)); // forearm vertices carry side 2s
       gHide = (part > 2.5 && part < 3.5 && abs(style - 1.0) > 0.5) || (part > 3.5 && part < 4.5 && abs(style - 2.0) > 0.5) ? 1.0 : 0.0;
       float w = side != 0.0 ? 1.0 : 0.5 + 0.5 * clamp(p.y / 2.2, 0.0, 1.0);
       gBob = aAnim.x * w * pow(0.5 + 0.5 * sin(uTime * (2.6 + ph * 1.4) + ph * 43.0), 2.0);
       if (side != 0.0 && mode > 0.5) {
+        // Two rotations: the forearm bends about the elbow (gRf, forearm only), then the whole arm
+        // swings about the shoulder (gR). Signs: fxRx(+) lifts a forward-pointing forearm; fxRy(side*+)
+        // turns it toward the body's midline; fxRz(side*+) raises a hanging arm out and up.
         gPv = vec3(side * ${SHOULDER.x.toFixed(2)}, ${SHOULDER.y.toFixed(2)}, 0.0);
-        if (mode < 1.5) { // clap: a burst gates a 5 Hz open/close
+        gE = vec3(side * ${ELBOW.x.toFixed(2)}, ${ELBOW.y.toFixed(2)}, ${ELBOW.z.toFixed(2)});
+        if (mode < 1.5) { // clap: in bursts, upper arms come forward, forearms rise and meet (5 Hz)
           float burst = smoothstep(0.35, 0.5, sin(uTime * 0.27 + ph * 40.0));
           float beat = 0.5 + 0.5 * sin(uTime * (9.0 + ph * 3.0) + ph * 20.0);
-          gR = fxRx(burst * 0.6) * fxRy(side * burst * (0.25 + 0.55 * beat));
-        } else { // cheer: arms up, pumping; some fans only raise one arm
+          gR = fxRx(burst * 0.35);
+          gRf = fxRy(side * burst * (0.45 + 0.4 * beat)) * fxRx(burst * 0.55);
+        } else { // cheer: arm straightens and goes up, pumping at the elbow; some fans raise only one
           float one = step(0.7, fract(ph * 7.0)) * step(0.0, side * (fract(ph * 13.0) - 0.5));
-          float up = (2.65 + 0.35 * sin(uTime * (4.0 + ph) + ph * 30.0 + side)) * (1.0 - 0.9 * one);
-          gR = fxRz(side * up);
+          float pump = 0.5 + 0.5 * sin(uTime * (4.0 + ph) + ph * 30.0 + side);
+          gR = fxRz(side * (2.55 + 0.25 * pump) * (1.0 - one));
+          gRf = fxRx((-1.35 + 0.45 * pump) * (1.0 - one));
         }
+        if (fore < 0.5) gRf = mat3(1.0);
       }
     }`,
   normal: /* glsl */`
     fanPose(position);
-    objectNormal = gR * objectNormal;`,
+    objectNormal = gR * gRf * objectNormal;`,
   vertex: /* glsl */`
+    transformed = gE + gRf * (transformed - gE);
     transformed = gPv + gR * (transformed - gPv);
     transformed.y += gBob;
     if (gHide > 0.5) transformed = vec3(0.0);`,

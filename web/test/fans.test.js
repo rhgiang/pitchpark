@@ -53,7 +53,7 @@ test("fan records: one per planned fan, standing hips high, kids smaller, determ
 test("person geometry: within the triangle budget, no NaN, parts and arm sides tagged", () => {
   const tris = (g) => g.index.count / 3;
   const near = personGeometry("near"), far = personGeometry("far"), legs = personGeometry("near", { legs: true });
-  assert.ok(tris(near) <= 210 /* +26 for the toy-style arms */ && tris(far) <= 45 && tris(farArmsGeometry()) <= 56, `${tris(near)} ${tris(far)}`);
+  assert.ok(tris(near) <= 235 /* +50 for jointed arms with a rounded elbow */ && tris(far) <= 45 && tris(farArmsGeometry()) <= 56, `${tris(near)} ${tris(far)}`);
   assert.ok(tris(legs) > tris(near));
   for (const g of [near, far, legs, farArmsGeometry()]) {
     assert.ok([...g.attributes.position.array, ...g.attributes.normal.array].every(Number.isFinite));
@@ -62,7 +62,7 @@ test("person geometry: within the triangle budget, no NaN, parts and arm sides t
   const parts = new Set(near.attributes.aPart.array.filter((_, i) => i % 2 === 0));
   for (const p of [PART.SKIN, PART.SHIRT, PART.HAIR, PART.LONG, PART.BRIM, PART.EYE]) assert.ok(parts.has(p), `part ${p}`);
   const sides = new Set(near.attributes.aPart.array.filter((_, i) => i % 2 === 1));
-  assert.deepEqual([...sides].sort(), [-1, 0, 1]);
+  assert.deepEqual([...sides].sort(), [-1, -2, 0, 1, 2]); // +-2: forearm (bends at the elbow)
   // The face looks toward -z: eyes sit in front of the head's centre (z < 0), long hair behind it.
   const pos = near.attributes.position.array, ap = near.attributes.aPart.array;
   const zs = (part) => [...Array(ap.length / 2).keys()].filter((i) => ap[2 * i] === part).map((i) => pos[3 * i + 2]);
