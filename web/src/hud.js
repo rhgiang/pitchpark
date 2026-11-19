@@ -1,5 +1,5 @@
 import { currentAtBat, shownPaths, landed, spinFactor, revealed, MODES, SPEEDS, VIEWS } from "./state.js";
-import { inDirt } from "./ball.js";
+import { inDirt, seamStyle } from "./ball.js";
 
 // The broadcast interface's text: scorebug, status line, pitch strip, "the look" card, and which
 // buttons are lit. Spoiler rule: results (result text, at-bat event, "in the dirt", strip colours,
@@ -47,7 +47,8 @@ function spinNote(state, pitch) {
   const shown = state.speed >= 1
     ? `slowed to 1/${Math.round(1 / f)} of true (${(rps * f).toFixed(1)} rev/s shown)`
     : `at the true rate in flight time (${state.speed}× playback)`;
-  return `Ball rotation ${shown}; the blue rod is the spin axis.`;
+  const seams = seamStyle(pitch.pitch_type) === 2 ? "two-seam" : "four-seam";
+  return `Ball rotation ${shown}; the blue rod is the spin axis. Seams: ${seams}, assumed from the pitch type (Statcast does not measure seam orientation).`;
 }
 
 /** Break vs no spin as "12.3 in ↓ · 4.1 in ←" (from the catcher's side: + x is right, + z up). */

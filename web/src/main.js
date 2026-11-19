@@ -12,7 +12,7 @@ import {
   initialState, reduce, preroll, currentAtBat, currentPitch, shownPaths, MODES, SPEEDS, VIEWS, spinFactor,
 } from "./state.js";
 import { makeTube, updateTube } from "./trail.js";
-import { makeBall, makeGhost, updateBall, spinBall } from "./ball.js";
+import { makeBall, makeGhost, updateBall, spinBall, setSeams, seamStyle } from "./ball.js";
 import { renderHud, buildStrip } from "./hud.js";
 import { boneLengths } from "./pitcher.js";
 import { pitcherApi } from "./signed_off/index.js"; // Ohtani keeps his signed-off pose code
@@ -572,6 +572,7 @@ renderer.setAnimationLoop((now) => {
       ball.visible = true;
       ball.position.copy(api.handPosition(figure));
     }
+    setSeams(ball, seamStyle(p.pitch_type)); // assumed from the pitch type (Statcast has no seam data)
     spinBall(ball, p.spin_rpm == null ? null : p.spin_axis_deg, 2 * Math.PI * (p.spin_rpm / 60) * ft * spinFactor(state.speed));
     updateBall(ghost, flying && state.mode === "ghost" ? p.sim : null, ft);
     updateTube(trail, flying ? (state.mode === "sim" ? p.sim : p.real) : null, ft);
