@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from pitchsim.pose.clips import clip_name, interleave, listed_clip_names, round_robin
+from pitchsim.pose.clips import clip_name, home_team_map, interleave, listed_clip_names, pick_by_yield, round_robin
 
 LINK = "https://baseballsavant.mlb.com/sporty-videos?playId={}"
 PAGE = """<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
@@ -52,13 +52,17 @@ addEventListener("keydown",e=>{if(e.key==="n"&&!e.ctrlKey&&!e.metaKey)next()});c
 </script>"""
 
 
-def choose(clips_dir: Path, n_train: int, n_test: int, seed: int = 0) -> pd.DataFrame:
-    """Rows to save: round-robin over games per split, train/test alternating; skips clips already on disk."""
+def choose(clips_dir: Path, n_train: int, n_test: int, seed: int = 0, venue: pd.DataFrame | None = None,
+           home: pd.Series | None = None) -> pd.DataFrame:
+    """Rows to save: round-robin over games per split, train/test alternating; skips clips already on disk.
+    With `venue` (venue_yield.csv) each split's games are picked best expected-yield first; the split column
+    itself (split_by_game, seed 0) is untouched."""
     df = pd.read_csv(clips_dir / "clips.csv")
     df = df[df["play_id"].notna()].reset_index(drop=True)
     listed = listed_clip_names(clips_dir)
     df = df[[not ((clips_dir / clip_name(r)).exists() or clip_name(r) in listed) for _, r in df.iterrows()]]
-    tr, te = (round_robin(df[df["split"] == s].reset_index(drop=True), n, seed)
+    pick = round_robin if venue is None else (lambda d, n, sd: pick_by_yield(d, n, home, venue, seed=sd))
+    tr, te = (pick(df[df["split"] == s].reset_index(drop=True), n, seed)
               for s, n in (("train", n_train), ("test", n_test)))
     return interleave(tr, te)
 
@@ -70,16 +74,23 @@ def main() -> None:
     ap.add_argument("--n-test", type=int, default=15)
     ap.add_argument("--out", default="data/video/download.html")
     ap.add_argument("--list-name", default="download_list.csv", help="per-pitcher list file written in the clips dir")
+    ap.add_argument("--venue-yield", help="venue_yield.csv from m5_venue_yield.py: pick games by expected usable rate")
     a = ap.parse_args()
+    venue = pd.read_csv(a.venue_yield) if a.venue_yield else None
+    home = home_team_map() if venue is not None else None
     sections = []
     for d in map(Path, a.clips_dirs):
-        sel = choose(d, a.n_train, a.n_test)
+        sel = choose(d, a.n_train, a.n_test, venue=venue, home=home)
         sel.to_csv(d / a.list_name, index=False)
         rows = [{"split": r["split"], "pitch_type": r["pitch_type"], "name": clip_name(r),
                  "url": LINK.format(r["play_id"])} for _, r in sel.iterrows()]
         sections.append({"name": d.name, "folder": str(d.resolve()), "rows": rows})
         print(d.name, len(sel), sel["split"].value_counts().to_dict(), "games", sel["game_pk"].nunique(),
               sel["pitch_type"].value_counts().to_dict())
+        if venue is not None:
+            prior = venue["smoothed"].mean()
+            exp = sel["game_pk"].map(home).map(venue.set_index("home_team")["smoothed"]).fillna(prior).sum()
+            print(f"  expected usable {exp:.1f} of {len(sel)}")
     data = json.dumps(sections).replace("</", "<\\/")
     Path(a.out).write_text(PAGE.replace("__DATA__", data), encoding="utf-8")
     print("wrote", a.out)

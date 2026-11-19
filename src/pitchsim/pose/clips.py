@@ -145,12 +145,55 @@ def fetch_clips(df: pd.DataFrame, out_dir: Path, download: bool = True) -> pd.Da
     return pd.DataFrame(rows)
 
 
-def round_robin(df: pd.DataFrame, n: int, seed: int = 0) -> pd.DataFrame:
+def smoothed_yield(n_ok, n_clips, prior: float, k: float = 4.0):
+    """Usable fraction shrunk toward the overall rate `prior`: (ok + k*prior) / (n + k).
+    A beta prior worth k clips: a venue seen on 4 clips is half data, half prior, so one lucky or
+    unlucky game cannot rank a venue alone, and an unseen venue (n=0) gets exactly the prior."""
+    return (n_ok + k * prior) / (n_clips + k)
+
+
+def venue_yield_table(df: pd.DataFrame, k: float = 4.0) -> pd.DataFrame:
+    """df has home_team, game_pk, ok (bool: the clip's 2D pose passed screening).  One row per home_team:
+    n_clips, n_games, usable_frac, smoothed.  Usability is decided by the home broadcast, hence by venue."""
+    prior = float(df["ok"].mean())
+    t = df.groupby("home_team").agg(n_clips=("ok", "size"), n_games=("game_pk", "nunique"), n_ok=("ok", "sum"))
+    t["usable_frac"] = t["n_ok"] / t["n_clips"]
+    t["smoothed"] = smoothed_yield(t["n_ok"], t["n_clips"], prior, k)
+    return t.drop(columns="n_ok").reset_index().sort_values("smoothed", ascending=False)
+
+
+def home_team_map(raw_dir: Path = RAW_DIR) -> pd.Series:
+    """game_pk -> home_team from every cached Statcast CSV (files without those columns are skipped)."""
+    cols = ["game_pk", "home_team"]
+    parts = [pd.read_csv(f, usecols=cols) for f in Path(raw_dir).glob("*.csv")
+             if set(cols) <= set(pd.read_csv(f, nrows=0).columns)]
+    return pd.concat(parts).drop_duplicates("game_pk").set_index("game_pk")["home_team"]
+
+
+def pick_by_yield(df: pd.DataFrame, n: int, home: pd.Series, venue: pd.DataFrame,
+                  min_yield: float = 0.15, seed: int = 0) -> pd.DataFrame:
+    """Like round_robin, but best expected-yield venues first.  `venue` has home_team + smoothed
+    (venue_yield_table); unseen venues get the mean smoothed value as prior.  Home teams under `min_yield`
+    are dropped only if the rest still holds n clips; otherwise they stay (ranked last) so the list is not short."""
+    score = venue.set_index("home_team")["smoothed"]
+    prior = float(score.mean())
+    s = df["game_pk"].map(home).map(score).fillna(prior)
+    keep = s >= min_yield
+    if keep.sum() >= n:
+        df, s = df[keep], s[keep]
+    return round_robin(df, n, seed, game_score=s.groupby(df["game_pk"]).first().to_dict())
+
+
+def round_robin(df: pd.DataFrame, n: int, seed: int = 0, game_score: dict | None = None) -> pd.DataFrame:
     """n rows, one game at a time in a random game order (then a second pass, ...), so clips
-    spread across as many games as possible.  Rows inside a game are shuffled too."""
+    spread across as many games as possible.  Rows inside a game are shuffled too.
+    With `game_score` {game_pk: expected yield} the game order is best-first (random among ties)."""
     rng = np.random.default_rng(seed)
     by_game = df.groupby("game_pk").indices
-    queues = [list(rng.permutation(by_game[g])) for g in rng.permutation(list(by_game))]
+    order = list(rng.permutation(list(by_game)))
+    if game_score:
+        order.sort(key=lambda g: -game_score[g])  # stable: keeps the random order within equal scores
+    queues = [list(rng.permutation(by_game[g])) for g in order]
     pos = []
     while len(pos) < n and any(queues):
         for q in queues:

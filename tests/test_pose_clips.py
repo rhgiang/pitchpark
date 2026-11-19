@@ -106,3 +106,25 @@ def test_listed_clip_names_reads_every_download_list(tmp_path):
     (tmp_path / "clips.csv").write_text(cols + "9,9,9,z\n")        # not a download list
     assert clips.listed_clip_names(tmp_path) == {"1_2_3.mp4", "4_5_6.mp4", "7_8_9.mp4"}
     assert clips.listed_clip_names(tmp_path / "nope") == set()
+
+
+def test_venue_yield_table_and_smoothing_synthetic():
+    # SYNTHETIC: venue A 4/4 ok, B 0/4, overall prior 0.5
+    df = pd.DataFrame({"home_team": list("AAAABBBB"), "game_pk": [1, 1, 2, 2, 3, 3, 4, 4],
+                       "ok": [True] * 4 + [False] * 4})
+    t = clips.venue_yield_table(df).set_index("home_team")
+    assert t.loc["A", "usable_frac"] == 1.0 and t.loc["A", "n_games"] == 2
+    assert t.loc["A", "smoothed"] == (4 + 4 * 0.5) / 8 and t.loc["B", "smoothed"] == 0.25
+    assert clips.smoothed_yield(0, 0, 0.3) == 0.3  # unseen venue = prior
+
+
+def test_pick_by_yield_prefers_good_venues_synthetic():
+    # SYNTHETIC: games 1-4 at GOOD (0.6), 5-8 at BAD (0.02), 9-10 at UNSEEN
+    rows = pd.DataFrame({"game_pk": np.repeat(range(1, 11), 3), "x": range(30)})
+    home = pd.Series(["GOOD"] * 4 + ["BAD"] * 4 + ["NEW"] * 2, index=range(1, 11))
+    venue = pd.DataFrame({"home_team": ["GOOD", "BAD"], "smoothed": [0.6, 0.02]})
+    out = clips.pick_by_yield(rows, 6, home, venue)
+    assert set(out["game_pk"].map(home)) <= {"GOOD", "NEW"} and out["game_pk"].nunique() == 6
+    assert set(out["game_pk"]) >= {1, 2, 3, 4}  # best-scored games come first (UNSEEN gets mean 0.31)
+    short = clips.pick_by_yield(rows, 28, home, venue)  # not enough good games: BAD stays, ranked last
+    assert len(short) == 28
