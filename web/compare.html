@@ -31,6 +31,10 @@
       tr.now { background: #3a3320; }
       small { color: var(--dim); }
       p.help { color: var(--dim); margin: 4px 16px 16px; max-width: 70em; }
+      .spin { display: inline-block; width: 12px; height: 12px; margin-right: 8px; vertical-align: -2px; border-radius: 50%;
+        border: 2px solid #3c4654; border-top-color: var(--hi); animation: sp 0.8s linear infinite; }
+      @keyframes sp { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
       @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
     </style>
   </head>
@@ -68,6 +72,14 @@
       "Static pose" is one pose held throughout. Keys: ← → step a frame, space play/pause, o overlay, z zoom,
       [ ] shift the overlay a frame if a file's timing is off.
     </p>
-    <script type="module" src="/src/compare.js"></script>
+    <noscript>
+      <div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#0b0f14;font:14px/1.4 system-ui,'Segoe UI',sans-serif;color:#fff">
+        <div style="width:min(380px,86%);box-sizing:border-box;padding:16px 18px;text-align:center;background:rgba(14,22,30,.72);border:1px solid rgba(255,255,255,.12);border-radius:10px">
+          <b style="display:block;font-size:15px;margin-bottom:4px">Pitch Park needs JavaScript</b>
+          <p style="margin:0;opacity:.8">It runs a 3D scene in your browser. Turn JavaScript on and reload.</p>
+        </div>
+      </div>
+    </noscript>
+    <script type="module" src="/src/boot-compare.js"></script>
   </body>
 </html>

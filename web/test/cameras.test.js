@@ -8,7 +8,7 @@ import {
 import {
   fenceDistFt, FENCE_HEIGHT_FT, BATTERS_EYE_GAP_FT, BATTERS_EYE_THICK_FT, BATTERS_EYE_HEIGHT_FT, BATTERS_EYE_HALF_DEG,
 } from "../src/park/layout.js";
-import { stateAt, visibleEnd } from "../src/trajectory.js";
+import { stateAt, visibleEnd, expandPitcher } from "../src/trajectory.js";
 import { BALL_RADIUS_FT } from "../src/ball.js";
 import { toScene } from "../src/coords.js";
 
@@ -68,7 +68,7 @@ function checkFraming(cams, noSpin, wildX) {
   let wild = 0; // path-end points exempted as wild
   let tightest = Infinity; // smallest distance to the 95% border, in NDC
   for (const file of files) {
-    for (const ab of JSON.parse(readFileSync(file, "utf8")).at_bats) {
+    for (const ab of expandPitcher(JSON.parse(readFileSync(file, "utf8"))).at_bats) {
       for (const p of ab.pitches) {
         if (!p.real) continue; // no_tracking: nothing is drawn
         // The cameras are fixed presets, not fitted to the worst pitch. A path end wider than wildX (batter view 2 ft,

@@ -149,3 +149,13 @@ def shot_start(x: np.ndarray, w: np.ndarray, release_frame: int, fps: float) -> 
         if run == CUT_RUN:
             return first + 1
     return 0
+
+
+def image_arm_angle_deg(shoulder_xy: np.ndarray, point_xy: np.ndarray, side: int) -> np.ndarray:
+    """Image-plane angle (deg) of shoulder -> elbow/wrist, 0 = horizontal toward the throwing side, +90 = up.
+
+    x, y in px (y DOWN).  side = +1 if the throwing side is image-right, -1 if image-left (the x axis is
+    mirrored so every pitcher's arm reads in the same convention, the catcher's-view arm angle of Statcast's
+    `arm_angle`).  Range (-180, 180]."""
+    d = np.asarray(point_xy, float) - np.asarray(shoulder_xy, float)
+    return np.degrees(np.arctan2(-d[..., 1], side * d[..., 0]))

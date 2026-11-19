@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-from pitchsim.pose.anchor import anchor, correct_to_mean, mound_z_ft, release_values, segment_lengths
+from pitchsim.pose.anchor import anchor, correct_to_mean, mound_z_ft, release_values, segment_lengths, smooth_extra, smooth_knee
 
 RUBBER_Y, MOUND_Z = 60.5, 10 / 12
 
@@ -220,3 +220,153 @@ def test_lock_feet_holds_the_toe_when_the_heel_moves():
     p[:, 7, 0] += 0.2 * np.sin(np.linspace(0, np.pi, n))
     out = lock_feet(p, 60.0)
     assert np.ptp(out[:, 10, :2], axis=0).max() < 0.002
+
+
+# SMPL left/right joint pairs (hip, knee, ankle, toe, collar, shoulder, elbow, wrist, hand)
+_PAIRS = [(1, 2), (4, 5), (7, 8), (10, 11), (13, 14), (16, 17), (18, 19), (20, 21), (22, 23)]
+
+
+def _mirror(j):
+    """Left-right mirror in Statcast ft: x -> -x and every left joint swapped with its right one, so a
+    right-hander's delivery becomes the same delivery thrown left-handed (a real body, not inside-out)."""
+    m = np.array(j, float)
+    m[..., 0] *= -1
+    for a, b in _PAIRS:
+        m[:, [a, b]] = m[:, [b, a]]
+    return m
+
+
+@pytest.mark.parametrize("kind", GAPS)
+def test_correct_to_mean_lefty_is_the_mirror_of_the_righty(kind):
+    """SYNTHETIC: a LHP (Sale, the first on real data) mirrored from the RHP case must come out as the
+    mirror of the RHP result: same release values with x negated, same body.  Catches any step that
+    assumes the throwing arm or the pivot foot is on the right."""
+    j, out_r, target_r = _corrected(kind)
+    target_l = dict(target_r, release_x_ft=-target_r["release_x_ft"])
+    out_l = correct_to_mean(_mirror(j), RI, FS, "L", target_l, leg_lift_index=LL)
+    got = release_values(out_l, RI, "L")
+    assert abs(got["release_x_ft"] - target_l["release_x_ft"]) < 0.05
+    assert abs(got["arm_angle_deg"] - target_l["arm_angle_deg"]) < 1.0
+    assert np.allclose(out_l, _mirror(out_r), atol=1e-6)
+
+
+def test_anchor_lefty_puts_the_left_toe_on_the_rubber():
+    """SYNTHETIC: a LHP's pivot foot is his LEFT foot (SMPL toe 10)."""
+    j, up = _rotated(_figure())
+    out = anchor(j, up, 6.25, "L", release_index=15)
+    assert np.allclose(out[0, 10], [0, RUBBER_Y, MOUND_Z], atol=0.01)
+
+
+def test_correct_to_mean_removes_a_backward_pelvis_bump_in_the_stride():
+    """SYNTHETIC: the averaged lift's pelvis drifts ~0.9 ft BACK (away from the plate) in the last ~10 frames
+    before a late foot strike (the pinned pivot toe drags the depth-compressed body back; seen in the real
+    Misiorowski and Sale averages), then rushes forward.  Corrected, the pelvis must travel toward the plate
+    without turning back between leg lift and release, and the back knee must not snap straight (it went
+    ~110 -> 164 deg in 2 frames on the real builds)."""
+    fs = RI - 9
+    j = _delivery(fs=fs)
+    t = np.arange(len(j))
+    from pitchsim.pose.anchor import _UPPER
+    j[:, _UPPER, 1] += (0.9 * np.exp(-0.5 * ((t - (fs - 4)) / 3.0) ** 2))[:, None]   # the bump
+    rv = release_values(j, RI, "R")
+    dx, dz, de, da = GAPS["moderate"]
+    target = dict(rv, release_x_ft=rv["release_x_ft"] + dx, release_z_ft=rv["release_z_ft"] + dz,
+                  extension_ft=rv["extension_ft"] + de, arm_angle_deg=rv["arm_angle_deg"] + da)
+    out = correct_to_mean(j, RI, fs, "R", target, leg_lift_index=LL)
+    assert np.diff(out[LL:RI + 1, 0, 1]).max() < 0.01          # never back toward the rubber
+    for hip, knee, ank in ((1, 4, 7), (2, 5, 8)):
+        assert np.abs(np.diff(_knee_deg(out, hip, knee, ank))).max() < 8.0, knee
+    got = release_values(out, RI, "R")
+    assert abs(got["extension_ft"] - target["extension_ft"]) < 0.05
+
+
+@pytest.mark.parametrize("kind", GAPS)
+def test_correct_to_mean_keeps_arms_and_pelvis_off_the_mound(kind):
+    """SYNTHETIC: with a long constructed extension (long_stride: +3 ft) no arm or glove joint, nor the
+    ball (throwing hand), goes within 0.25 ft of the mound surface anywhere in the delivery, and the pelvis
+    stays above 55% of its standing height over the mound, while the release targets are still met.
+    Why: Misiorowski's built 7.5 ft extension read as "the arm going into the dirt" (a viewer pelvis drop,
+    since fixed in web/src/pitcher.js); this guards the Python side of the same lunge.  0.25 ft (3 in) is
+    about a fist's thickness: a hand that close looks like it brushes the dirt."""
+    j, out, target = _corrected(kind)
+    arms = list(range(16, 24))
+    clear = out[:, arms, 2] - mound_z_ft(out[:, arms, 0], out[:, arms, 1])
+    assert clear.min() > 0.25, f"arm joint {clear.min():.2f} ft above the mound"
+    pel = out[:, 0, 2] - mound_z_ft(out[:, 0, 0], out[:, 0, 1])
+    standing = j[0, 0, 2] - mound_z_ft(j[0, 0, 0], j[0, 0, 1])
+    assert pel.min() > 0.55 * standing, f"pelvis {pel.min():.2f} of standing {standing:.2f} ft"
+    got = release_values(out, RI, "R")
+    assert max(abs(got[k] - target[k]) for k in ("release_x_ft", "release_z_ft", "extension_ft")) < 0.05
+
+
+def test_smooth_extra_damps_spike_keeps_anchors():
+    """SYNTHETIC: a slow sway of the left ankle plus a one-frame spike before `until`; nothing from `until` on moves."""
+    j = _figure(120)
+    j[:, 4] = [0.1, 0.5, 0]; j[:, 5] = [-0.1, 0.5, 0.1]  # bent knee (a straight leg would hit the IK reach clip)
+    k, until = 7, 90
+    f = np.arange(120)
+    j[:, k, 0] += 0.1 * np.sin(2 * np.pi * f / 120)
+    j[40, k, 0] += 0.1  # the spike
+    clean = j.copy(); clean[40, k, 0] -= 0.1
+    o = smooth_extra(j, 60.0, until, "R", sigma_s=0.1, blend_s=0.4)
+    assert abs(o[40, k, 0] - clean[40, k, 0]) < 0.1 * 0.5      # spike mostly gone
+    assert np.array_equal(o[until:], j[until:])                  # exactly untouched from the peak on
+    assert np.allclose(o[:, 8], j[:, 8]) and np.allclose(o[:, 11], j[:, 11])  # planted pivot ankle/toe fixed
+    assert np.allclose(segment_lengths(o), segment_lengths(j), atol=1e-9)
+
+
+def test_smooth_knee_removes_rate_jump_keeps_bones_and_tail():
+    """SYNTHETIC: lead knee flexes slowly then jumps to a fast rate just before `until`; the jump is spread out."""
+    n, until, start = 140, 100, 70
+    j = _figure(n)
+    f = np.arange(n)
+    # flexion angle (deg): 1 deg/frame, then 3 deg/frame from frame 94 (a buckle); thigh fixed, shank rotated in the x-z plane
+    ang = np.radians(120 - np.minimum(f, 94) - 3 * np.maximum(f - 94, 0))
+    hip, knee = np.array([0.0, 0.0, 2.0]), np.array([0.0, 0.0, 1.0])
+    j[:, 1], j[:, 4] = hip, knee
+    for i in range(n):  # shank of length 1 at `ang` from the thigh direction (0, 0, 1)
+        j[i, 7] = knee + [np.sin(ang[i]), 0.0, np.cos(ang[i])]
+        j[i, 10] = j[i, 7] + [0.3 * np.sin(ang[i]), 0.0, 0.3 * np.cos(ang[i])]
+    o = smooth_knee(j, 60.0, start, until, "R")
+    def knee_ang(x):
+        u, v = x[:, 1] - x[:, 4], x[:, 7] - x[:, 4]
+        return np.arccos((u * v).sum(1) / np.linalg.norm(u, axis=1) / np.linalg.norm(v, axis=1))
+    peak = lambda x: np.abs(np.diff(knee_ang(x), 2)[start - 2:until]).max()
+    assert peak(o) < 0.5 * peak(j)                                   # accel spike at the rate jump halved at least
+    assert np.array_equal(o[until:], j[until:]) and np.array_equal(o[:start], j[:start])
+    assert np.allclose(segment_lengths(o), segment_lengths(j), atol=1e-9)
+    assert np.array_equal(o[:, [1, 4]], j[:, [1, 4]])               # hip and knee never move
+
+
+def test_retime_windup_shortens_keeps_tail_bones_and_seam():
+    """SYNTHETIC: a smooth sinusoidal sway of the lead ankle; the windup is replayed in fewer frames, the tail is untouched."""
+    from pitchsim.pose.anchor import retime_windup
+    n, until, new = 140, 100, 90
+    j = _figure(n)
+    j[:, 4] = [0.1, 0.5, 0]; j[:, 5] = [-0.1, 0.5, 0.1]
+    f = np.arange(n)
+    j[:, 7, 0] += 0.3 * np.sin(2 * np.pi * f / 200)  # lead ankle; period 200 frames, smooth
+    o = retime_windup(j, 60.0, until, new, "R")
+    assert len(o) == n - (until - new)
+    assert np.array_equal(o[new:], j[until:])                                  # tail bit-identical, shifted
+    assert np.abs(segment_lengths(o)[new:] - segment_lengths(j)[until:]).max() < 1e-9
+    # the windup motion now runs ~11% faster on average: ankle reaches old frame-`until` value at `new`
+    assert np.allclose(o[new, 7], j[until, 7])
+    v = np.linalg.norm(np.diff(o[:, 7], axis=0), axis=1)
+    assert v[:new].mean() > 1.05 * np.linalg.norm(np.diff(j[:until, 7], axis=0), axis=1).mean()
+    assert abs(v[new - 1] - v[new]) < 0.2 * v[new] + 1e-4                       # seam: no velocity step (C1 join)
+
+
+def test_fix_lead_stance_flips_backward_knee_keeps_bones_and_tail():
+    """SYNTHETIC: a lead knee that starts bent backwards (behind the hip-ankle line) ends up bent forwards; the tail is untouched."""
+    from pitchsim.pose.anchor import fix_lead_stance
+    n, until = 80, 40
+    j = _figure(n)
+    j[:, 2] = [0.0, 0.2, 2.0]; j[:, 1] = [0.0, -0.2, 2.0]; j[:, 5] = [0.0, 0.2, 1.0]; j[:, 8] = [0.0, 0.2, 0.0]
+    j[:, 11] = [-0.3, 0.2, 0.0]                                    # pivot (right) toe points to -x = forward
+    j[:, 4] = [0.4, -0.2, 1.0]; j[:, 7] = [-0.0, -0.2, 0.2]       # lead (left) knee behind (+x), ankle below the hip
+    j[:, 10] = [-0.3, -0.2, 0.2]
+    o = fix_lead_stance(j, until, "R")
+    assert o[0, 4, 0] < j[0, 1, 0] - 0.1                           # knee now forward (-x) of the hip
+    assert np.array_equal(o[until:], j[until:]) and np.array_equal(o[:, [1, 7, 10]], j[:, [1, 7, 10]])
+    assert np.allclose(segment_lengths(o), segment_lengths(j), atol=1e-9)

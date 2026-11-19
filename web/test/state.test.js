@@ -4,10 +4,10 @@ import { readFileSync } from "node:fs";
 import {
   initialState, reduce, currentPitch, landed, flightEnd, spinFactor, revealed,
 } from "../src/state.js";
-import { duration } from "../src/trajectory.js";
+import { duration, expandPitcher } from "../src/trajectory.js";
 
 // Synthetic fixture (labelled synthetic in its meta); at-bat 0 = "6-1", at-bat 1 = "28-1".
-const data = JSON.parse(readFileSync(new URL("fixtures/synthetic.json", import.meta.url)));
+const data = expandPitcher(JSON.parse(readFileSync(new URL("fixtures/synthetic.json", import.meta.url))));
 const run = (s, ...actions) => actions.reduce(reduce, s);
 const loaded = () => run(initialState(), { type: "pickPitcher", slug: "synthetic", data });
 

@@ -8,15 +8,28 @@
  * Kinds (the SURFACE define, set by look.js makeToonMaterial):
  *   0 none; 1 plaster/concrete (mottling, grime at the foot, drip streaks, hairline cracks);
  *   2 foliage (big light/dark masses and ~2 ft leaf clusters); 3 wood (grain);
- *   4 ground (grass, clay, chalk: see groundSurface); 5 rock (strata, cracks).
+ *   4 ground (grass, clay, chalk: see groundSurface); 5 rock (strata, cracks);
+ *   6 brick (running bond with mortar lines, per-brick tone: see brickSurface).
  *
  * Inputs from look.js: vParkW (world position, ft; scene axes, so Statcast y = -z) and uSunDir
  * (unit vector toward the key light, world). CHALK_CLEAN (define): chalk never scuffed toward
  * clay (home plate, the rubber).
  */
 import { chalkSegments, CHALK_WIDTH_FT } from "./park/layout.js";
+import { isOld } from "./park/old.js";
 
-export const SURFACE_KINDS = { none: 0, plaster: 1, foliage: 2, wood: 3, ground: 4, rock: 5 };
+/*
+ * Turf v2 (?old=grass restores v1), added after the grass read as flat lime:
+ * - colour: the painted lime pulled toward a deeper broadcast green (less red, a touch of blue);
+ * - stripes: a fixed light/dark step on top of the view-dependent sheen, so the mowing pattern
+ *   reads from every camera (the painted stripes alone differ by ~10%, near-invisible from TV);
+ * - blades: up close, fine streaks stretched along the mower's direction (~0.1 ft wide, ~0.7 ft
+ *   long), posterised into lit blades and darker gaps, plus a matching bump; faded by pixel
+ *   footprint so it never shimmers far away.
+ */
+const TURF_V2 = !isOld("grass");
+
+export const SURFACE_KINDS = { none: 0, plaster: 1, foliage: 2, wood: 3, ground: 4, rock: 5, brick: 6 };
 
 // The chalk lines as GLSL constants: segment ends (xy, zw, Statcast ft) and kind.
 const SEGS = chalkSegments();
@@ -71,6 +84,43 @@ export const SURFACE_GLSL = /* glsl */`
       return 1.0;
     #endif
   }
+
+  #if SURFACE == 6
+  /*
+   * Brick, in world space (no UVs: instanced bays and stretched slabs all get the same coursing): running bond, each
+   * course half a brick out from the last, bricks BL x CH ft with MW-ft mortar joints, each brick its own tone. Stylised:
+   * bricks are ~3x real size so they read from the grandstand; they fade to their average colour by pixel footprint
+   * (fp, ft per pixel) so nothing shimmers far away, leaving a broad light/dark mottle and a darker base (street grime).
+   * The horizontal direction along a vertical face is the tangent to its world normal N (flat faces only: the wall is all
+   * slabs and boxes; screen derivatives were too noisy for it). Faces that look up are plain brick.
+   */
+  vec3 brickSurface(vec3 col, vec3 w, vec3 N) {
+    const float CH = 0.75, BL = 2.0, MW = 0.1;
+    float fp = max(length(dFdx(w)), length(dFdy(w)));
+    float up = smoothstep(0.55, 0.85, abs(N.y));
+    vec2 tan2 = normalize(vec2(-N.z, N.x) + vec2(1e-4, 0.0));
+    float u = dot(w.xz, tan2);
+    float row = floor(w.y / CH);
+    float uu = u + mod(row, 2.0) * BL * 0.5;
+    float cu = floor(uu / BL);
+    float fx = uu - cu * BL, fy = w.y - row * CH;
+    float aa = max(0.6 * fp, 0.004);
+    float dx = min(fx, BL - fx), dy = min(fy, CH - fy);
+    float mortar = max(1.0 - smoothstep(MW - aa, MW + aa, dx), 1.0 - smoothstep(0.8 * MW - aa, 0.8 * MW + aa, dy));
+    float h1 = sHash2(vec2(cu, row)), h2 = sHash2(vec2(cu + 17.0, row + 5.0));
+    vec3 brick = col * (0.76 + 0.42 * h1) * vec3(1.0, 0.9 + 0.16 * h2, 0.88 + 0.22 * h2);
+    vec3 mortarCol = vec3(0.5, 0.4, 0.31);
+    vec3 detail = mix(brick, mortarCol, 0.9 * mortar);
+    float vis = 1.0 - smoothstep(0.18, 0.5, fp);
+    // Far away: the average colour, with a broad mottle and faint horizontal banding every ~6 ft so the wall is never flat.
+    float mottle = sNoise(vec3(u * 0.35, w.y * 0.25, 3.0));
+    vec3 avg = mix(col, mortarCol, 0.12) * (0.88 + 0.22 * mottle) * (0.96 + 0.06 * step(0.5, fract(w.y / 6.0)));
+    vec3 o = mix(avg, detail * (0.93 + 0.14 * mottle), vis);
+    o *= mix(0.66, 1.0, smoothstep(0.0, 7.0, w.y)); // darker at the foot: splash and grime
+    o *= 1.0 - 0.08 * smoothstep(0.55, 0.85, sNoise(vec3(u * 0.6, w.y * 0.03, 1.0))); // rain streaks from the cornice
+    return mix(o, col * 0.95, up);
+  }
+  #endif
 
   #if SURFACE == 4
   ${CHALK_GLSL}
@@ -196,7 +246,21 @@ export const SURFACE_GLSL = /* glsl */`
     float striped = infield || abs(S.x) < S.y ? 1.0 : 0.0;
     vec3 V = normalize(w - cameraPosition);
     float along = -V.z / max(length(V.xz), 1e-3); // view direction along Statcast +y
-    g *= 1.0 + 0.09 * sgn * along * striped * (1.0 - 0.6 * abs(V.y));
+    // v2: abs(along). The true reversal cancelled the painted stripes from centre field (TV view);
+    // here every camera sees them strengthened (a stylised choice, not the physical sheen).
+    g *= 1.0 + 0.09 * sgn * ${TURF_V2 ? "abs(along)" : "along"} * striped * (1.0 - 0.6 * abs(V.y));
+    ${TURF_V2 ? `
+    // Broadcast turf: deeper and a touch blue. Tuned on screen (after tone mapping) toward
+    // ~rgb(75,130,48) from the old lime ~rgb(123,181,60).
+    g *= vec3(0.5, 0.68, 0.56);
+    g *= 1.0 + 0.05 * sgn * striped;
+    // Mower direction: across the centre-field line (along x) in the outfield; along the
+    // checkerboard's diagonals on the infield. Streaks are stretched along it.
+    vec2 mw = infield ? ab : S;
+    float bladeVis = 1.0 - smoothstep(0.02, 0.12, fp);
+    float blade = band(sNoise(vec3(mw.x * 1.4, 3.0, mw.y * 10.0)), 0.52);
+    g *= 1.0 + 0.11 * (blade - 0.5) * bladeVis;
+    hg += 0.006 * (blade - 0.5) * bladeVis;` : ""}
 
     // --- chalk: a little rough, and scuffed through to the clay where feet go; never on the
     // plate or the rubber (CHALK_CLEAN) ---

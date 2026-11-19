@@ -34,5 +34,5 @@ export function shouldDraw(changed, now, lastDraw, idleFps = IDLE_FPS) {
   return changed || now - lastDraw >= 1000 / idleFps - SLACK_MS;
 }
 
-/** Renderer pixel ratio for a display's devicePixelRatio. */
-export const pixelRatio = (dpr) => Math.min(dpr, MAX_DPR);
+/** Renderer pixel ratio for a display's devicePixelRatio; the lighter-graphics mode draws at 1. */
+export const pixelRatio = (dpr, lite = false) => (lite ? 1 : Math.min(dpr, MAX_DPR));

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { isOld } from "./park/old.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
@@ -95,16 +96,27 @@ function addParkShading(shader) {
   shader.uniforms.uPools = pools;
   shader.uniforms.uPoolAmt = poolAmt;
   shader.vertexShader = patch(shader.vertexShader,
-    ["#include <common>", "#include <common>\nvarying vec3 vParkW;"],
+    ["#include <common>", "#include <common>\nvarying vec3 vParkW;\n#if SURFACE == 6\nvarying vec3 vParkN;\n#endif"],
     ["#include <project_vertex>", `#include <project_vertex>
       vec4 parkW = vec4(transformed, 1.0);
       #ifdef USE_INSTANCING
         parkW = instanceMatrix * parkW;
       #endif
-      vParkW = (modelMatrix * parkW).xyz;`]);
+      vParkW = (modelMatrix * parkW).xyz;
+      #if SURFACE == 6
+        // World normal, for the brick's horizontal direction (surface.js): faces here are flat, so this is constant across one.
+        vec3 parkN = objectNormal;
+        #ifdef USE_INSTANCING
+          parkN = mat3(instanceMatrix) * parkN;
+        #endif
+        vParkN = normalize(mat3(modelMatrix) * parkN);
+      #endif`]);
   shader.fragmentShader = patch(shader.fragmentShader,
     ["#include <common>", `#include <common>
       varying vec3 vParkW;
+      #if SURFACE == 6
+        varying vec3 vParkN;
+      #endif
       uniform vec4 uFlood;
       uniform float uFloodMin, uPoolAmt;
       uniform vec3 uPools[${MAX_POOLS}];
@@ -113,6 +125,8 @@ function addParkShading(shader) {
     ["#include <color_fragment>", `#include <color_fragment>
       #if SURFACE == 4
         diffuseColor.rgb = groundSurface(diffuseColor.rgb, vParkW);
+      #elif SURFACE == 6
+        diffuseColor.rgb = brickSurface(diffuseColor.rgb, vParkW, normalize(vParkN));
       #else
         diffuseColor.rgb *= surfaceTone(vParkW);
       #endif`],
@@ -138,7 +152,7 @@ function addParkShading(shader) {
 export function setParkLighting(opts = {}) {
   for (const k of ["centreFt", "floodRadiiFt", "shadowHalfFt"]) if (opts[k] !== undefined) parkLight[k] = opts[k];
   const [x, y] = parkLight.centreFt;
-  flood.value.set(x, -y, ...parkLight.floodRadiiFt);
+  flood.value.set(x, -y, ...(look.flood ?? parkLight.floodRadiiFt));
   if (opts.poolsFt) {
     pools.value.forEach((v, i) => {
       const p = opts.poolsFt[i];
@@ -158,7 +172,7 @@ export function setParkLighting(opts = {}) {
  * the night falloff and floodlight pools.
  * @param color hex or THREE.Color (use PALETTE)
  * @param extra other MeshToonMaterial parameters (map, vertexColors, side, ...), plus
- *   `surface`: "plaster" (default), "foliage", "wood", "ground", "rock" or "none" (surface.js).
+ *   `surface`: "plaster" (default), "foliage", "wood", "ground", "rock", "brick" or "none" (surface.js).
  */
 export function makeToonMaterial(color, { surface = "plaster", ...extra } = {}) {
   const m = new THREE.MeshToonMaterial({ color, gradientMap: toonRamp(), ...extra });
@@ -180,6 +194,8 @@ export const glowMaterial = new THREE.SpriteMaterial({
   opacity: 0, fog: false,
 });
 
+const glowSprites = []; // setTimeOfDay rescales them (the night halo is bigger)
+
 /** A soft additive glow (for lamps), visible at sunset and night only. Browser only (canvas). */
 export function makeGlowSprite(sizeFt) {
   if (!glowMaterial.map) {
@@ -196,6 +212,8 @@ export function makeGlowSprite(sizeFt) {
   }
   const s = new THREE.Sprite(glowMaterial);
   s.scale.set(sizeFt, sizeFt, 1);
+  s.userData.baseFt = sizeFt;
+  glowSprites.push(s);
   return noOutline(s);
 }
 
@@ -248,10 +266,28 @@ export function noOutline(obj) {
 // the instance index (no per-object uniforms needed), so a window on a wall, a sign on a fascia or
 // one tree in front of another gets a line even where the depth step is too small to see.
 // transparent + NoBlending: keeps three from forcing alpha to 1 (it does for opaque materials).
+// The crowd's animated fans (park/crowd.js sets this): the pre-pass runs their vertex animation too, so ink
+// follows the swinging arms. Applies only to instanced meshes with an instanceColor and a fan aAnim.
+export const fanHook = { glsl: null, uTime: null, lite: false };
+
 function makeNormalDepthMaterial(far) {
   const m = new THREE.MeshNormalMaterial({ side: THREE.DoubleSide, transparent: true, blending: THREE.NoBlending });
   m.onBeforeCompile = (s) => {
     s.uniforms.uFar = { value: far };
+    if (fanHook.glsl) {
+      s.uniforms.uTime = fanHook.uTime;
+      s.vertexShader = patch(s.vertexShader,
+        ["#include <common>", `#include <common>
+${fanHook.glsl.common}`],
+        ["#include <beginnormal_vertex>", `#include <beginnormal_vertex>
+#ifdef USE_INSTANCING_COLOR
+${fanHook.glsl.normal}
+#endif`],
+        ["#include <begin_vertex>", `#include <begin_vertex>
+#ifdef USE_INSTANCING_COLOR
+${fanHook.glsl.vertex}
+#endif`]);
+    }
     s.vertexShader = patch(s.vertexShader,
       ["#include <common>", "#include <common>\nvarying float vViewZ;\nflat varying float vId;\n// Merged park meshes carry one ID per source object (park/build.js mergeStatic); 0 elsewhere.\nattribute float objId;"],
       ["#include <project_vertex>", `#include <project_vertex>
@@ -445,7 +481,7 @@ const SKY_SHADER = {
     uSunDir: { value: new THREE.Vector3(0, 1, 0) }, uSunColor: { value: new THREE.Color() },
     uSunSize: { value: 0.03 },
     uCloud: { value: new THREE.Color() }, uCloudShade: { value: new THREE.Color() },
-    uCloudCover: { value: 0.55 }, uStars: { value: 0 },
+    uCloudCover: { value: 0.55 }, uStars: { value: 0 }, uStarCut: { value: 0.985 },
   },
   vertexShader: /* glsl */`
     varying vec3 vDir;
@@ -456,7 +492,7 @@ const SKY_SHADER = {
     }`,
   fragmentShader: /* glsl */`
     uniform vec3 uTop, uMid, uHorizon, uBelow, uSunDir, uSunColor, uCloud, uCloudShade;
-    uniform float uSunSize, uCloudCover, uStars;
+    uniform float uSunSize, uCloudCover, uStars, uStarCut;
     varying vec3 vDir;
     float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
     float noise(vec2 p) {
@@ -493,9 +529,13 @@ const SKY_SHADER = {
       // Stars: one hash per grid cell of direction, a few per cent lit.
       vec2 sp = vec2(atan(d.z, d.x), asin(clamp(h, -1.0, 1.0))) * 300.0;
       vec2 sg = floor(sp);
-      float star = step(0.985, hash(sg)) * step(length(fract(sp) - 0.5), 0.22) // a round dot per lit cell
+      float hs = hash(sg);
+      float star = step(uStarCut, hs) * step(length(fract(sp) - 0.5), 0.22) // a round dot per lit cell
         * smoothstep(0.05, 0.3, h) * (1.0 - cloud);
-      col += uStars * star * 0.9;
+      // New night: stars warmer or bluer (the hash's fraction picks), a few brighter. ?old=night: flat white.
+      bool newSky = uStarCut < 0.98;
+      vec3 starCol = newSky ? mix(vec3(0.75, 0.85, 1.0), vec3(1.0, 0.92, 0.75), fract(hs * 97.0)) : vec3(1.0);
+      col += uStars * star * starCol * (newSky ? (hs > 0.995 ? 1.1 : 0.7) : 0.9);
       gl_FragColor = vec4(col, 1.0);
       #include <colorspace_fragment>
     }`,
@@ -531,7 +571,22 @@ export const TIMES = {
     fog: 0xf0a47e, fogDensity: 0.0003, ink: 0x3a2433, floodMin: 1, lamps: true,
     shadowTint: [0.92, 0.9, 1.08], lightTint: [1.08, 1.0, 0.9], sat: 1.05, bloom: 0.6,
   },
+  // Night game: deep blue sky with stars, the field warm and bright under the towers, the
+  // bowl and everything outside it falling away into blue-black (flood: fully lit out to 200 ft
+  // of the field centre, gone by 380, so the front rows catch the light and the upper decks do not).
   night: {
+    top: 0x03081a, mid: 0x0b1840, horizon: 0x2a4278, below: 0x0c1430,
+    cloud: 0x1a2a55, cloudShade: 0x0f1a38, cover: 0.66, stars: 1, starCut: 0.972,
+    sun: [-90, 62], sunColor: 0xfff0d6, sunIntensity: 2.3, sunSize: 0.0009, // key: warm floodlight, from centre field, high
+    sky: 0x3b52a0, ground: 0x0e1426, ambient: 0.3,
+    fog: 0x0f1a3a, fogDensity: 0.00034, ink: 0x03050b, floodMin: 0.03, lamps: true,
+    flood: [200, 380], lampGain: 6, glowOpacity: 0.55, glowScale: 2.2,
+    fill: [90, 45], fillIntensity: 1.2, // floodlights from behind home too, so faces toward the plate aren't black
+    shadowTint: [0.85, 0.94, 1.14], lightTint: [1.06, 1.02, 0.92], sat: 1.06, bloom: 0.85, pools: true,
+  },
+};
+/** The night as it was before the 2026-11 scene pass: ?old=night restores it (A/B comparison). */
+const OLD_NIGHT = {
     top: 0x070d22, mid: 0x14204a, horizon: 0x2b3f6e, below: 0x1a2648,
     cloud: 0x2c3c66, cloudShade: 0x1b264a, cover: 0.62, stars: 1,
     sun: [-90, 62], sunColor: 0xf0f4ff, sunIntensity: 1.9, sunSize: 0.0009, // key: from centre field, high
@@ -539,7 +594,7 @@ export const TIMES = {
     fog: 0x1f2d55, fogDensity: 0.0003, ink: 0x05070d, floodMin: 0.05, lamps: true,
     fill: [90, 45], fillIntensity: 1.1, // floodlights from behind home too, so faces toward the plate aren't black
     shadowTint: [0.88, 0.95, 1.12], lightTint: [1.06, 1.02, 0.94], sat: 1.08, bloom: 0.75, pools: true,
-  },
+  
 };
 // At night the "sun" uniform draws the moon; the key light is the floodlights, from high above
 // the field (the direction in `sun` above), so the moon is placed separately.
@@ -558,12 +613,12 @@ const dirFrom = ([az, el]) => {
  */
 export function setTimeOfDay(name) {
   if (!Object.hasOwn(TIMES, name)) name = "day"; // ?tod= is user input: own keys only
-  const T = TIMES[name];
+  const T = name === "night" && isOld("night") ? OLD_NIGHT : TIMES[name];
   const u = look.sky.material.uniforms;
   u.uTop.value.set(T.top); u.uMid.value.set(T.mid);
   u.uHorizon.value.set(T.horizon); u.uBelow.value.set(T.below);
   u.uCloud.value.set(T.cloud); u.uCloudShade.value.set(T.cloudShade);
-  u.uCloudCover.value = T.cover; u.uStars.value = T.stars;
+  u.uCloudCover.value = T.cover; u.uStars.value = T.stars; u.uStarCut.value = T.starCut ?? 0.985;
   u.uSunDir.value.copy(dirFrom(name === "night" ? MOON : T.sun));
   u.uSunColor.value.set(name === "night" ? 0xeef2ff : T.sunColor);
   u.uSunSize.value = T.sunSize;
@@ -580,8 +635,11 @@ export function setTimeOfDay(name) {
   look.renderer.setClearColor(T.fog, 1);
   look.edge.uniforms.uInk.value.set(T.ink);
   floodMin.value = T.floodMin;
+  // Where the floodlights fade out: the park's radii, or this time of day's own (night draws it in).
+  flood.value.z = (T.flood ?? parkLight.floodRadiiFt)[0]; flood.value.w = (T.flood ?? parkLight.floodRadiiFt)[1];
+  look.flood = T.flood;
   // Lit lamps and windows are brighter than white, which is what the bloom pass picks up.
-  lampMaterial.color.set(T.lamps ? PALETTE.lampOn : PALETTE.lampOff).multiplyScalar(T.lamps ? 3 : 1);
+  lampMaterial.color.set(T.lamps ? PALETTE.lampOn : PALETTE.lampOff).multiplyScalar(T.lamps ? (T.lampGain ?? 3) : 1);
   windowLitMaterial.emissive.set(name === "night" ? 0xffb85c : T.lamps ? 0x8a5a30 : 0x000000);
   windowLitMaterial.emissiveIntensity = name === "night" ? 1.6 : 1;
   poolAmt.value = T.pools ? 1 : 0;
@@ -589,7 +647,8 @@ export function setTimeOfDay(name) {
   e.uShadowTint.value.setRGB(...T.shadowTint); e.uLightTint.value.setRGB(...T.lightTint);
   e.uSat.value = T.sat;
   look.bloom.strength = T.bloom;
-  glowMaterial.opacity = name === "night" ? 0.15 : T.lamps ? 0.12 : 0; // bloom does most of the glow
+  glowMaterial.opacity = T.glowOpacity ?? (name === "night" ? 0.15 : T.lamps ? 0.12 : 0); // bloom does most of the glow
+  for (const sp of glowSprites) sp.scale.setScalar(sp.userData.baseFt * (T.glowScale ?? 1));
   look.timeOfDay = name;
   refreshShadows();
 }
@@ -605,7 +664,8 @@ export const timeOfDay = () => look.timeOfDay;
 /**
  * Set up lights, fog, sky and the post-processing chain for `scene` seen by `camera`.
  * @returns {{render: () => void, setSize: (w: number, h: number) => void,
- *   setFocus: (focusFt: number | null, maxPx?: number) => void}} setFocus: depth of field (intro only)
+ *   setFocus: (focusFt: number | null, maxPx?: number) => void, setLite: (on: boolean) => void}}
+ *   setFocus: depth of field (intro only); setLite: the lighter-graphics mode
  */
 export function initLook(renderer, scene, camera) {
   Object.assign(look, { renderer, scene, camera });
@@ -684,6 +744,16 @@ export function initLook(renderer, scene, camera) {
       look.edge.uniforms.uTexel.value.set(1 / s.x, 1 / s.y);
       look.edge.uniforms.uScale.value = Math.max(1, s.y / 900);
       look.dof.uniforms.uTexel.value.set(1 / s.x, 1 / s.y);
+    },
+    /**
+     * Lighter graphics: no shadow map (the sun stops casting; three recompiles the receivers) and no bloom.
+     * Both off means the default look is untouched; the caller also drops the pixel ratio to 1.
+     */
+    setLite(on) {
+      fanHook.lite = on; // park/crowd.js swaps to its simple fans
+      look.sun.castShadow = !on;
+      look.bloom.enabled = !on;
+      if (!on) refreshShadows(); // the shadow map is only redrawn on request: it is stale after being off
     },
     /** Depth of field focused at focusFt (ft from the camera), blurring up to maxPx; null: off. */
     setFocus(focusFt, maxPx = 6) {

@@ -9,9 +9,11 @@ import html as htmllib
 import json
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from pitchsim.data import FEED_URL, RAW_DIR
@@ -47,6 +49,15 @@ def bases_empty(df: pd.DataFrame) -> pd.Series:
 def clip_name(row) -> str:
     """File name for one pitch's clip."""
     return f"{int(row['game_pk'])}_{int(row['at_bat_number'])}_{int(row['pitch_number'])}.mp4"
+
+
+def listed_clip_names(clips_dir: Path) -> set[str]:
+    """Clip file names already named by any <dir>/download_list*.csv (earlier download rounds), so a new round
+    never picks them again even if the file was not saved or was renamed."""
+    names: set[str] = set()
+    for f in Path(clips_dir).glob("download_list*.csv"):
+        names |= {clip_name(r) for _, r in pd.read_csv(f).iterrows()}
+    return names
 
 
 def play_ids_from_feed(feed: dict) -> pd.DataFrame:
@@ -100,9 +111,11 @@ def _download(url: str, path: Path) -> None:
         f.write(r.read())
 
 
-def fetch_clips(df: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
+def fetch_clips(df: pd.DataFrame, out_dir: Path, download: bool = True) -> pd.DataFrame:
     """Download one clip per row into out_dir (sequential, skips existing files).
-    Never raises on a per-pitch failure; status is ok | cached | no_play_id | no_mp4 | http_error."""
+    Never raises on a per-pitch failure; status is ok | cached | no_play_id | no_mp4 | http_error.
+    download=False only resolves play ids: no clip is requested, status is cached | pending | no_play_id
+    (the mp4 host refuses scripts; clips are saved by hand and matched by m5_match_clips.py)."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     ids = play_ids(df)
@@ -113,6 +126,8 @@ def fetch_clips(df: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
             status = "cached"
         elif pd.isna(pid):
             status = "no_play_id"
+        elif not download:
+            status = "pending"
         else:
             try:
                 url = clip_url_from_page(_get_page(pid))
@@ -128,3 +143,93 @@ def fetch_clips(df: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
                      "clip_path": str(path) if status in ("ok", "cached") else None,
                      "status": status})
     return pd.DataFrame(rows)
+
+
+def smoothed_yield(n_ok, n_clips, prior: float, k: float = 4.0):
+    """Usable fraction shrunk toward the overall rate `prior`: (ok + k*prior) / (n + k).
+    A beta prior worth k clips: a venue seen on 4 clips is half data, half prior, so one lucky or
+    unlucky game cannot rank a venue alone, and an unseen venue (n=0) gets exactly the prior."""
+    return (n_ok + k * prior) / (n_clips + k)
+
+
+def venue_yield_table(df: pd.DataFrame, k: float = 4.0) -> pd.DataFrame:
+    """df has home_team, game_pk, ok (bool: the clip's 2D pose passed screening).  One row per home_team:
+    n_clips, n_games, usable_frac, smoothed.  Usability is decided by the home broadcast, hence by venue."""
+    prior = float(df["ok"].mean())
+    t = df.groupby("home_team").agg(n_clips=("ok", "size"), n_games=("game_pk", "nunique"), n_ok=("ok", "sum"))
+    t["usable_frac"] = t["n_ok"] / t["n_clips"]
+    t["smoothed"] = smoothed_yield(t["n_ok"], t["n_clips"], prior, k)
+    return t.drop(columns="n_ok").reset_index().sort_values("smoothed", ascending=False)
+
+
+def home_team_map(raw_dir: Path = RAW_DIR) -> pd.Series:
+    """game_pk -> home_team from every cached Statcast CSV (files without those columns are skipped)."""
+    cols = ["game_pk", "home_team"]
+    parts = [pd.read_csv(f, usecols=cols) for f in Path(raw_dir).glob("*.csv")
+             if set(cols) <= set(pd.read_csv(f, nrows=0).columns)]
+    return pd.concat(parts).drop_duplicates("game_pk").set_index("game_pk")["home_team"]
+
+
+def pick_by_yield(df: pd.DataFrame, n: int, home: pd.Series, venue: pd.DataFrame,
+                  min_yield: float = 0.15, seed: int = 0) -> pd.DataFrame:
+    """Like round_robin, but best expected-yield venues first.  `venue` has home_team + smoothed
+    (venue_yield_table); unseen venues get the mean smoothed value as prior.  Home teams under `min_yield`
+    are dropped only if the rest still holds n clips; otherwise they stay (ranked last) so the list is not short."""
+    score = venue.set_index("home_team")["smoothed"]
+    prior = float(score.mean())
+    s = df["game_pk"].map(home).map(score).fillna(prior)
+    keep = s >= min_yield
+    if keep.sum() >= n:
+        df, s = df[keep], s[keep]
+    return round_robin(df, n, seed, game_score=s.groupby(df["game_pk"]).first().to_dict())
+
+
+def round_robin(df: pd.DataFrame, n: int, seed: int = 0, game_score: dict | None = None) -> pd.DataFrame:
+    """n rows, one game at a time in a random game order (then a second pass, ...), so clips
+    spread across as many games as possible.  Rows inside a game are shuffled too.
+    With `game_score` {game_pk: expected yield} the game order is best-first (random among ties)."""
+    rng = np.random.default_rng(seed)
+    by_game = df.groupby("game_pk").indices
+    order = list(rng.permutation(list(by_game)))
+    if game_score:
+        order.sort(key=lambda g: -game_score[g])  # stable: keeps the random order within equal scores
+    queues = [list(rng.permutation(by_game[g])) for g in order]
+    pos = []
+    while len(pos) < n and any(queues):
+        for q in queues:
+            if q and len(pos) < n:
+                pos.append(q.pop())
+    return df.iloc[pos]
+
+
+def interleave(a: pd.DataFrame, b: pd.DataFrame) -> pd.DataFrame:
+    """a0, b0, a1, b1, ...; the longer one's tail follows."""
+    rows = []
+    for i in range(max(len(a), len(b))):
+        rows += [x.iloc[i] for x in (a, b) if i < len(x)]
+    return pd.DataFrame(rows).reset_index(drop=True)
+
+
+def mp4_basename(url: str) -> str:
+    """Savant's own (percent-decoded) file name for a clip link: what the browser saves it as."""
+    return urllib.parse.unquote(url.rsplit("/", 1)[-1])
+
+
+_DUP = re.compile(r" \(\d+\)\.mp4$")
+
+
+def match_downloads(expected: dict[str, str | None], files: list[str]) -> dict:
+    """Pure part of the matcher.  expected: wanted clip name -> Savant basename (None if no link);
+    files: names in the folder.  Returns renames {saved: wanted}, have (already named), missing,
+    leftovers (unmatched .mp4), duplicates ("x (1).mp4"), partial (.crdownload)."""
+    present = set(files)
+    have = [n for n in expected if n in present]
+    renames = {b: n for n, b in expected.items() if n not in present and b in present}
+    used = set(expected) | set(renames)
+    return {
+        "have": have, "renames": renames,
+        "missing": [n for n in expected if n not in present and n not in renames.values()],
+        "duplicates": sorted(f for f in files if _DUP.search(f)),
+        "partial": sorted(f for f in files if f.endswith(".crdownload")),
+        "leftovers": sorted(f for f in files if f.endswith(".mp4") and f not in used and not _DUP.search(f)),
+    }

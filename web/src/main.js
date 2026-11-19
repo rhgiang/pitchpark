@@ -12,19 +12,30 @@ import {
   initialState, reduce, preroll, currentAtBat, currentPitch, shownPaths, MODES, SPEEDS, VIEWS, spinFactor,
 } from "./state.js";
 import { makeTube, updateTube } from "./trail.js";
-import { makeBall, makeGhost, updateBall, spinBall } from "./ball.js";
+import { makeBall, makeGhost, updateBall, spinBall, setSeams, seamStyle } from "./ball.js";
+import { spinAngleRad } from "./park/signature.js";
 import { renderHud, buildStrip } from "./hud.js";
-import { makePitcher, poseAtRelease, poseAtTime, handPosition } from "./pitcher.js";
+import { boneLengths } from "./pitcher.js";
+import { pitcherApi } from "./signed_off/index.js"; // Ohtani keeps his signed-off pose code
+import { loadHandModels } from "./handModels.js";
 import { buildPark } from "./park/index.js";
 import { initLook, setTimeOfDay, refreshShadows, inkProof, timeOfDay, TIMES } from "./look.js";
-import { showMenu } from "./menu.js";
+import { showMenu, displayName } from "./menu.js";
+import { loadOrAsk, openHow, startTour, toast, kbd } from "./guide-ui.js";
+import { shouldAutoTour, tourSeen } from "./guide.js";
 import { menuPick } from "./menu-ui.js";
 import { frameSlot, shouldDraw, pixelRatio } from "./pacing.js";
+import { makeSlowDetector, getFlag, setFlag, LITE_KEY, slugInIndex } from "./health.js";
+import { loadIndexOrAsk, askNotInPark, watchContext, offerLite, phoneNote } from "./notices.js";
+import { debugHas } from "./debug.js";
 
 // No MSAA: the composer renders to its own targets, and SMAA (look.js) anti-aliases instead.
 const renderer = new THREE.WebGLRenderer({ antialias: false });
-renderer.setPixelRatio(pixelRatio(window.devicePixelRatio)); // capped: see pacing.js
+let lite = getFlag(LITE_KEY); // lighter graphics (look.setLite): saved across visits
+renderer.setPixelRatio(pixelRatio(window.devicePixelRatio, lite)); // capped: see pacing.js
 document.body.appendChild(renderer.domElement);
+// GPU reset: no drawing while the context is gone; redraw everything when it is back (see notices.watchContext).
+let contextLost = false;
 
 const scene = new THREE.Scene();
 const park = buildPark(); // swappable: see park/index.js
@@ -48,6 +59,7 @@ const camera = new THREE.PerspectiveCamera(UMPIRE_VFOV_DEG, 1, 0.05, 6000);
 camera.layers.enable(1); // layer 1: drawn but not outlined (look.js)
 camera.layers.enable(2); // layer 2: not outlined and never inked over (look.js)
 const look = initLook(renderer, scene, camera);
+look.setLite(lite);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enabled = false;
@@ -135,6 +147,7 @@ function endIntro() {
   look.setFocus(null);
   appliedView = null; // re-apply the view's FOV and controls
   document.body.classList.remove("intro");
+  maybeTour();
 }
 /** Advance the intro by dt s and pose the camera; ends it after INTRO_S. */
 function updateIntro(dt) {
@@ -175,14 +188,27 @@ function closeMenu() {
 /** Menu -> chosen pitcher loaded -> menu closed. */
 async function chooseFromMenu(index, preselect) {
   openMenu();
-  await pickPitcher(await menuPick(index, preselect));
+  for (let slug = preselect; ; ) {
+    slug = await menuPick(index, slug);
+    const name = displayName(index.find((p) => p.slug === slug)?.name ?? slug);
+    if (await loadOrAsk(slug, name, () => pickPitcher(slug)) !== null) break; // null: "Back to menu"
+  }
   closeMenu();
+}
+
+// First-visit tour: armed in start() (menu path, not seen), shown once the intro sweep has ended.
+let tourPending = false;
+function maybeTour() {
+  if (!tourPending || intro || menuOpen) return;
+  tourPending = false;
+  $("help").open = false;
+  setTimeout(startTour, 400); // let the panels fade back in first
 }
 
 function resize() {
   menuDrawn = false;
   dirty = true;
-  renderer.setPixelRatio(pixelRatio(window.devicePixelRatio)); // the window may have moved screens
+  renderer.setPixelRatio(pixelRatio(window.devicePixelRatio, lite)); // the window may have moved screens
   renderer.setSize(window.innerWidth, window.innerHeight);
   look.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -190,6 +216,27 @@ function resize() {
 }
 window.addEventListener("resize", resize);
 resize();
+watchContext(renderer.domElement, {
+  onLost: () => { contextLost = true; },
+  onRestored: () => { contextLost = false; menuDrawn = false; dirty = true; refreshShadows(); },
+});
+// Dev only (?debug=contextloss[-stuck]): drop the context 4 s in; "-stuck" never gives it back.
+if (debugHas("contextloss") || debugHas("contextloss-stuck")) {
+  const ext = renderer.getContext().getExtension("WEBGL_lose_context");
+  setTimeout(() => ext?.loseContext(), 4000);
+  if (debugHas("contextloss")) setTimeout(() => ext?.restoreContext(), 7000);
+}
+
+/** Lighter graphics on/off: pixel ratio 1, no shadows or bloom (look.setLite). Saved; the ? panel button shows it. */
+function setLite(on, announce = true) {
+  lite = on;
+  setFlag(LITE_KEY, on);
+  look.setLite(on);
+  resize();
+  $("lite-btn").classList.toggle("on", on);
+  $("lite-btn").setAttribute("aria-pressed", String(on));
+  if (announce) on ? toast("Lighter graphics on · change it in ", kbd("?")) : toast("Lighter graphics off");
+}
 
 const $ = (id) => document.getElementById(id);
 let state = initialState();
@@ -216,7 +263,7 @@ function dispatch(action) {
     // the figure keeps the previous pose (and a missing arm angle keeps the previous one).
     // With a delivery the figure is posed every frame instead (render loop).
     if (!state.delivery && pitch.release?.every(Number.isFinite)) {
-      poseAtRelease(figure, pitch.release, pitch.arm_angle_deg ?? figure.userData.armAngleDeg);
+      api.poseAtRelease(figure, pitch.release, pitch.arm_angle_deg ?? figure.userData.armAngleDeg);
       refreshShadows(); // the pitcher moved: redraw his shadow
     }
   }
@@ -228,8 +275,10 @@ function dispatch(action) {
 
 const randomSeed = () => Math.floor(Math.random() * 2 ** 31);
 
+let api = pitcherApi(null); // pose functions for the current pitcher
+const handModelsReady = loadHandModels(); // sculpted glove/hand if present (?models=0: procedural)
 async function pickPitcher(slug) {
-  const [data, delivery] = await Promise.all([loadPitcher(slug), loadDelivery(slug)]);
+  const [data, delivery] = await Promise.all([loadPitcher(slug), loadDelivery(slug), handModelsReady]);
   if (figure) {
     scene.remove(figure);
     figure.traverse((o) => {
@@ -238,7 +287,9 @@ async function pickPitcher(slug) {
       o.skeleton?.dispose(); // bone texture
     });
   }
-  figure = makePitcher(data.pitcher.throws, data.pitcher.height_in ?? 75); // scaled to his height
+  if (delivery) $("compare-link").href = `/compare.html?slug=${slug}`;
+  api = pitcherApi(slug);
+  figure = api.makePitcher(data.pitcher.throws, data.pitcher.height_in ?? 75, delivery && boneLengths(delivery)); // his height and bone lengths
   posedAt = null; // new figure is in makePitcher's static pose: the poseFigure memo must not skip it (same t|ab|pitch after a round trip)
   refreshShadows(); // new figure: redraw even if this at-bat's first pitch has no release
   scene.add(figure);
@@ -254,6 +305,25 @@ async function pickPitcher(slug) {
   $("ab-count").textContent = `(${data.at_bats.length} held-out)`;
   dispatch({ type: "pickPitcher", slug, data, delivery });
   dispatch({ type: "pickAtBat", index: 0 });
+  await warmUp(); // still inside the loading chip: the first pitch should not stall on shader compiles
+}
+
+/**
+ * Compile the shaders the first pitch needs while the loading chip is up. The park drew once behind
+ * the menu, but the new figure (skinned), zone, ball, ghost and trails only meet the GPU when first
+ * drawn, and three's compile() skips invisible objects, so they are shown for the call. Never blocks
+ * the load for long: a failure or a slow driver is ignored (it just compiles lazily, as before).
+ */
+async function warmUp() {
+  const hidden = [ball, ghost, trail, ghostTrail, noSpinLine].filter((o) => !o.visible);
+  hidden.forEach((o) => { o.visible = true; });
+  try {
+    await Promise.race([renderer.compileAsync(scene, camera), new Promise((r) => setTimeout(r, 3000))]);
+  } catch (err) {
+    console.warn("shader warm-up skipped:", err);
+  } finally {
+    hidden.forEach((o) => { o.visible = false; });
+  }
 }
 
 /** Open or close the pitcher / at-bat picker (no argument: toggle). */
@@ -312,6 +382,12 @@ for (const m of MODES) $(`mode-${m}`).onclick = () => dispatch({ type: "setMode"
 for (const v of VIEWS) $(`view-${v}`).onclick = () => dispatch({ type: "setView", view: v });
 for (const v of SPEEDS) $(`speed-${v}`).onclick = () => dispatch({ type: "setSpeed", speed: v });
 $("tod").onclick = cycleTimeOfDay;
+$("how-btn").onclick = openHow;
+$("lite-btn").onclick = () => setLite(!lite);
+$("lite-btn").classList.toggle("on", lite);
+$("lite-btn").setAttribute("aria-pressed", String(lite));
+$("how-link").onclick = openHow;
+$("tour-btn").onclick = () => { $("help").open = false; startTour(); };
 let pitcherIndex = [];
 $("change").onclick = async () => { await chooseFromMenu(pitcherIndex, state.slug); startIntro(); };
 
@@ -322,18 +398,27 @@ const q = new URLSearchParams(location.search);
 setTimeOfDay(q.get("tod") ?? "day");
 $("tod").textContent = `${timeOfDay()[0].toUpperCase()}${timeOfDay().slice(1)}`;
 
+let indexFailOnce = debugHas("indexfail"); // dev only: ?debug=indexfail fails the first load so "Try again" can be seen
 async function start() {
-  const index = await loadIndex();
+  const index = await loadIndexOrAsk(async () => {
+    if (indexFailOnce) { indexFailOnce = false; throw new Error("debug=indexfail"); }
+    return loadIndex();
+  });
+  phoneNote();
   $("pitchers").replaceChildren(...index.map((p) => {
     const b = document.createElement("button");
     b.dataset.slug = p.slug;
     b.innerHTML = `${p.name} <span class="sub">${p.throws}HP · ${p.n_at_bats} AB</span>`;
-    b.onclick = () => pickPitcher(p.slug);
+    b.onclick = () => loadOrAsk(p.slug, displayName(p.name), () => pickPitcher(p.slug));
     return b;
   }));
   pitcherIndex = index;
+  tourPending = shouldAutoTour(location.search, tourSeen());
   if (showMenu(location.search)) await chooseFromMenu(index, index[0].slug);
-  else await pickPitcher(q.get("pitcher"));
+  else if (!slugInIndex(index, q.get("pitcher"))) { // a link to someone who is not in the park
+    await askNotInPark();
+    await chooseFromMenu(index, index[0].slug);
+  } else if (await loadOrAsk(q.get("pitcher"), q.get("pitcher"), () => pickPitcher(q.get("pitcher"))) === null) await chooseFromMenu(index, index[0].slug);
   if (q.has("ab")) {
     const ab = q.get("ab");
     dispatch(ab === "random"
@@ -362,6 +447,7 @@ async function start() {
   if (q.get("panel") === "nolook") $("look").open = false;
   // Freeze at t (no playback) so a headless screenshot catches the ball mid-flight.
   dispatch({ type: "seek", t: q.has("t") ? Number(q.get("t")) : 0 - preroll(state) }); // no ?t=: from the start of the delivery
+  maybeTour(); // no intro ran (e.g. ?view=): the tour can open now
   if (fpsBox) benchmark();
 }
 start();
@@ -434,11 +520,22 @@ function poseFigure(p) {
   if (!state.delivery || !figure || key === posedAt) return;
   posedAt = key;
   const release = p.release?.every(Number.isFinite) ? p.release : null;
-  poseAtTime(figure, state.delivery, state.t, release, p.arm_angle_deg ?? figure.userData.armAngleDeg);
+  api.poseAtTime(figure, state.delivery, state.t, release, p.arm_angle_deg ?? figure.userData.armAngleDeg);
   refreshShadows();
 }
 
+// Slow-device check: only frames of active playback count (a pitch flying or the intro sweep, tab visible);
+// pacing.js idles a still picture at 20 fps on purpose. Asked once per visit, and never when already light.
+const slowWatch = makeSlowDetector();
+let slowAsked = lite;
+function watchSpeed(now) {
+  const active = !menuOpen && !document.hidden && (state.playing || (intro && !intro.frozen));
+  const slow = slowWatch.frame(now, active) || (debugHas("slow") && active); // ?debug=slow (dev): ask at the first pitch
+  if (slow && !slowAsked) { slowAsked = true; offerLite(() => setLite(true)); }
+}
+
 let last = null;
+let spinNow = null; // this pitch's spin, for the park's Spin Tower (park/tower.js)
 let nextSlot = 0; // when the next capped frame is due (ms)
 let lastDraw = -Infinity;
 let drawnKey = null; // t and camera of the last drawn frame
@@ -446,7 +543,8 @@ renderer.info.autoReset = false; // count the whole frame (all passes), reset be
 renderer.setAnimationLoop((now) => {
   const slot = frameSlot(now, nextSlot); // 60 fps cap, whatever the display's rate
   nextSlot = slot.next;
-  if (!slot.due) return countFrame(now, false);
+  if (!slot.due || contextLost) return countFrame(now, false); // lost context: nothing can be drawn
+  watchSpeed(now);
   if (menuOpen) { // one still frame behind the blur, then nothing until Play ball
     if (menuDrawn) return countFrame(now, false);
     const pose = introSweep(MENU_VIEW_S);
@@ -474,9 +572,12 @@ renderer.setAnimationLoop((now) => {
     updateBall(ball, flying ? (state.mode === "sim" ? p.sim : p.real) : null, ft);
     if (!flying && figure) {
       ball.visible = true;
-      ball.position.copy(handPosition(figure));
+      ball.position.copy(api.handPosition(figure));
     }
-    spinBall(ball, p.spin_rpm == null ? null : p.spin_axis_deg, 2 * Math.PI * (p.spin_rpm / 60) * ft * spinFactor(state.speed));
+    setSeams(ball, seamStyle(p.pitch_type)); // assumed from the pitch type (Statcast has no seam data)
+    const spinAngle = spinAngleRad(p.spin_rpm, ft, spinFactor(state.speed));
+    spinBall(ball, p.spin_rpm == null ? null : p.spin_axis_deg, spinAngle);
+    spinNow = { rpm: p.spin_rpm ?? null, axisDeg: p.spin_axis_deg, angleRad: spinAngle, pitchType: p.pitch_type }; // the park's Spin Tower copies it
     updateBall(ghost, flying && state.mode === "ghost" ? p.sim : null, ft);
     updateTube(trail, flying ? (state.mode === "sim" ? p.sim : p.real) : null, ft);
     updateTube(ghostTrail, flying && state.mode === "ghost" ? p.sim : null, ft);
@@ -493,6 +594,6 @@ renderer.setAnimationLoop((now) => {
   drawnKey = key;
   lastDraw = now;
   renderer.info.reset();
-  park.userData.update?.({ timeS: now / 1000, board: boardInfo() });
+  park.userData.update?.({ timeS: now / 1000, board: boardInfo(), spin: spinNow });
   look.render();
 });

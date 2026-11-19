@@ -12,3 +12,6 @@ web/dist/
 third_party/
 .venv-pose/
 web/.vite/
+
+# reference models downloaded for building our own (not ours to commit)
+ref/

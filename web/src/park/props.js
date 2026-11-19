@@ -2,6 +2,8 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { PALETTE, makeToonMaterial, lampMaterial, makeGlowSprite, noOutline, terrain } from "../look.js";
 import { PARK_NAME, wordmarkTexture } from "./brand.js";
+import { isOld } from "./old.js";
+import { scoreboardDeg } from "./signature.js";
 import { sweep, frameAt, radialFrame, box, place, textTexture, shadeOf } from "./build.js";
 import {
   POLE_R, POLE_L, ISLAND, polar, fenceDistFt, normals, rng, BLEACHER_GAP_FT,
@@ -148,10 +150,12 @@ function wallAds() {
 }
 
 /** Foul pole: tall yellow pole with a screen on the fair side. */
+// Tall yellow poles (structure); ?old=structure keeps the 90 ft ones.
+const POLE_H = isOld("structure") ? 90 : 140;
 function foulPole([x, y], side) {
   const g = frameAt([x, y], [Math.SQRT1_2 * side, Math.SQRT1_2]);
   const y0 = makeToonMaterial(PALETTE.mustard);
-  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.7, 90, 10).translate(0, 45, 0), y0);
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.7, POLE_H, 10).translate(0, POLE_H / 2, 0), y0);
   pole.castShadow = true;
   g.add(pole);
   g.add(box(y0, 0.2, 70, 3, 0, 18, side * -1.8));
@@ -374,7 +378,7 @@ export function buildProps(plan, flags, poles) {
   });
   g.add(lamps);
   g.add(foulPole(POLE_R, 1), foulPole(POLE_L, -1));
-  const board = scoreboard(24, fenceDistFt(24) + BLEACHER_GAP_FT + plan.bleacherDepth + 20);
+  const board = scoreboard(scoreboardDeg(), fenceDistFt(scoreboardDeg()) + BLEACHER_GAP_FT + plan.bleacherDepth + 20);
   g.userData.setBoard = board.userData.setBoard;
   g.add(board);
   g.add(distanceMarkers(), battersEye(), bullpens(), wallAds());

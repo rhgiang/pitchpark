@@ -102,12 +102,18 @@ def test_paths_end_at_plate(exported):
     for _, p in _pitches(out):
         if p["real"] is None:
             continue
-        x, y, z = p["real"]["p"][-1]
-        assert abs(x - p["plate_real"][0]) <= 1e-4 and abs(z - p["plate_real"][1]) <= 1e-4
-        assert p["real"]["t"][-1] == p["plate_real"][2] and p["real"]["t"][0] == 0
-        assert abs(y - FRONT_OF_PLATE_Y) <= 1e-4
-        if p["sim"] is not None:
-            assert abs(p["sim"]["p"][-1][1] - FRONT_OF_PLATE_Y) <= 1e-4
+        f, r, T = p["real"]["f"], p["real"]["r"], p["real"]["T"]
+        assert T == p["plate_real"][2]
+        tau = r + T                                  # the fit evaluated at the plate
+        pos = [f[k] + f[3 + k] * tau + 0.5 * f[6 + k] * tau ** 2 for k in range(3)]
+        assert abs(pos[0] - p["plate_real"][0]) <= 1e-3 and abs(pos[2] - p["plate_real"][1]) <= 1e-3
+        assert abs(pos[1] - FRONT_OF_PLATE_Y) <= 1e-3
+        for key in ("sim", "nospin"):
+            if p[key] is not None:
+                rows = p[key]["s"]
+                assert rows[0][:3] == pytest.approx(p["release"], abs=1e-3)
+                assert p[key]["T"] == p["plate_" + key][2]
+                assert abs(rows[-1][1] - FRONT_OF_PLATE_Y) <= 1e-4
 
 
 def test_sim_matches_m3(exported):
@@ -138,8 +144,6 @@ def test_nospin_path(exported):
     for a, p in _pitches(out):
         if p["status"] != "ok":
             continue
-        assert abs(p["nospin"]["p"][-1][1] - FRONT_OF_PLATE_Y) <= 1e-4
-        assert p["nospin"]["t"][-1] == p["plate_nospin"][2] and p["nospin"]["t"][0] == 0
         i = key.get_loc((a["game_pk"], int(a["id"].split("-")[1]), p["pitch_number"]))
         rows = test.iloc[[i]]
         pos, _, t = run_sim(rows, fits[p["pitch_type"]].cd, 0.0, "release")
@@ -148,7 +152,7 @@ def test_nospin_path(exported):
         assert np.allclose([p["tunnel"]["break_x_in"], p["tunnel"]["break_z_in"]], brk,
                            atol=1e-3)
         n += 1
-    assert n > 50 and out["meta"]["schema"] == 2
+    assert n > 50 and out["meta"]["schema"] == 3
 
 
 def test_nospin_null_without_model(exported):
@@ -177,7 +181,7 @@ def write_fixture() -> None:
     """Two SYNTHETIC at-bats for the web tests: the no-tracking one and one with a no-model
     pitch; together they include a CU."""
     raw, (g, n) = synthetic_raw()
-    out = export_pitcher(raw, pd.Series(air_density(), index=raw.index))
+    out = export_pitcher(raw, pd.Series(air_density(), index=raw.index), checks=True)
     first = next(a for a in out["at_bats"] if a["id"] == f"{g}-{n}")
     second = next(a for a in out["at_bats"] if a is not first
                   and any(p["status"] == "no_model" for p in a["pitches"])

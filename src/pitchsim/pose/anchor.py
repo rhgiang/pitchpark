@@ -195,6 +195,31 @@ def _hermite_ease(t: np.ndarray, t0: int, t1: int, t2: int, f1: float) -> np.nda
     return np.where(t > t2, 1.0, out)
 
 
+def _forward_only(py: np.ndarray, ll: int, ri: int) -> np.ndarray:
+    """Change to add to the pelvis's y (ft) so that between frames `ll` and `ri` it never moves back.
+
+    correct_to_mean calls it from leg lift to the last frame.  Why: from leg lift on the hips only travel
+    toward the plate (the body's centre of mass speeds up toward home through the stride, e.g. Fleisig et
+    al. 1999, and carries over the planted lead leg in the follow-through).  The averaged lift can instead drift BACK
+    ~1 ft in the frames before a late foot strike (the pinned pivot toe drags the depth-compressed body
+    back; ground_root's bridge only spans 0.1 s) and then rush forward, which snapped the back knee straight
+    in 2 frames (Misiorowski, Sale); after release it stalled and restarted (Sale).  The y over [ll, ri] is replaced by its running minimum, smoothed with
+    a Gaussian (sigma 3 frames = 0.05 s; smoothing a non-increasing curve keeps it non-increasing) so the
+    flat spot neither starts nor stops with a kink.  Padding is extended linearly at each end's own slope (a
+    Gaussian leaves a line unchanged), so the result meets the input at leg lift and release; the change is
+    held, not dropped, outside [ll, ri].
+    """
+    out = np.zeros(len(py))
+    c, pad = np.minimum.accumulate(py[ll:ri + 1]), 9
+    if len(c) < 2:
+        return out
+    k = np.arange(1, pad + 1)
+    q = np.concatenate([c[0] - (c[1] - c[0]) * k[::-1], c, c[-1] + (c[-1] - c[-2]) * k])
+    out[ll:ri + 1] = gaussian_filter1d(q, 3.0)[pad:-pad] - py[ll:ri + 1]
+    out[:ll], out[ri + 1:] = out[ll], out[ri]
+    return out
+
+
 def correct_to_mean(j_ft: np.ndarray, release_index: int, foot_strike_index: int, throws: str,
                     target: dict, leg_lift_index: int | None = None, knee_reach: float = 0.97,
                     info: dict | None = None, fps: float = 60.0, arm_ease_s: float = 0.45,
@@ -226,6 +251,7 @@ def correct_to_mean(j_ft: np.ndarray, release_index: int, foot_strike_index: int
     4. Back foot: from foot strike it eases toward the body shift over `pivot_ease_s` (so it is still
        catching up through release, as a real back foot drags off the rubber); where the hips run away
        from it, it drags after them (toe height kept), the drag easing in over 0.1 s.
+    4b. Forward only: from leg lift on, the pelvis never moves back toward the rubber (_forward_only).
     5. Arm angle: the throwing arm turns about the shoulder in the catcher's-view (x-z) plane (the plane
        release_values measures it in), eased over the `arm_ease_s` before release (or from foot strike, if
        that is earlier), held after (no snap back).
@@ -313,6 +339,7 @@ def correct_to_mean(j_ft: np.ndarray, release_index: int, foot_strike_index: int
         # (the lowering is done by foot strike: after it the planted lead leg only has the pelvis travel
         # over it, not also a sinking pelvis, which made the knee fold fast)
         j[:, _UPPER, :2] += w_body[:, None, None] * shift[:2]
+        j[:, _UPPER, 1] += _forward_only(j[:, 0, 1], ll, n - 1)[:, None]
         j[:, _UPPER, 2] += (w_lead * shift[2])[:, None]
         # 1. toe targets (the foot, ankle -> toe, moves rigidly with its toe)
         toes = []
@@ -389,3 +416,234 @@ def correct_to_mean(j_ft: np.ndarray, release_index: int, foot_strike_index: int
                     pelvis_drop_at_release_ft=float(drop[ri]), iterations=it + 1,
                     converged=bool(np.abs(gaps).max() < 0.005 and abs(g_a) < 0.05))
     return j
+
+
+def smooth_extra(j_ft: np.ndarray, fps: float, until: int, throws: str, sigma_s: float = 0.12,
+                 blend_s: float = 0.5) -> np.ndarray:
+    """Zero-phase extra smoothing of the windup, before the leg-lift peak `until` only (opt-in, per pitcher).
+
+    Why: Cease's lead foot/knee still show a ~150 ft/s^2 acceleration spike and a creeping foot before the
+    leg lift that phase_smooth (3-frame sigma) leaves, because the averaged lifts disagree there.  Joint
+    positions get a wide Gaussian (sigma_s, symmetric = no time shift) blended in with weight 1 until
+    `until` - blend_s, easing (smootherstep: C2) to 0 at `until`, so the leg-lift peak and everything after
+    it are untouched bit for bit.  Then the skeleton is rebuilt so nothing else changes: bones keep their
+    exact per-frame lengths (child = parent + length * smoothed direction, root first), and the planted
+    pivot foot (ankle and toe) stays where it was, its knee re-solved by two-bone IK from the moved hip.
+    """
+    _check(throws)
+    j = np.asarray(j_ft, float)
+    sm = gaussian_filter1d(j, sigma_s * fps, axis=0, mode="nearest")
+    u = np.clip((until - np.arange(len(j))) / max(blend_s * fps, 1.0), 0.0, 1.0)
+    w = _smootherstep(u)[:, None, None]
+    tgt = j + w * (sm - j)
+    out = j.copy()
+    out[:, 0] = tgt[:, 0]
+    for k in range(1, j.shape[1]):  # SMPL_PARENT lists parents before children
+        p = SMPL_PARENT[k]
+        d = tgt[:, k] - tgt[:, p]
+        d /= np.maximum(np.linalg.norm(d, axis=1), 1e-9)[:, None]
+        out[:, k] = out[:, p] + np.linalg.norm(j[:, k] - j[:, p], axis=1)[:, None] * d
+    # the pivot (throwing-side) leg is the planted one in the windup
+    hip, knee, ank, toe = _HIP[throws], _KNEE[throws], _ANKLE[throws], _TOE[throws]
+    out[:, ank], out[:, toe] = j[:, ank], j[:, toe]
+    a = np.linalg.norm(j[:, knee] - j[:, hip], axis=1)
+    b = np.linalg.norm(j[:, ank] - j[:, knee], axis=1)
+    pole = j[:, knee] - j[:, hip]
+    out[:, knee], _ = _two_bone(out[:, hip], j[:, ank], a, b, pole)
+    out[w[:, 0, 0] == 0] = j[w[:, 0, 0] == 0]  # weight 0: exactly the input (no float residue from the rebuild)
+    return out
+
+
+def smooth_knee(j_ft: np.ndarray, fps: float, start: int, until: int, throws: str) -> np.ndarray:
+    """Remove the lead-knee "buckle" before the leg-lift peak `until` (opt-in, per pitcher).
+
+    Why: the lead knee's flexion rate jumps from ~1.6 to ~3.3 deg/frame over the ~4 frames before the peak
+    (angular accel spike ~ -1800 deg/s^2, then a reversal), which reads as the knee giving way.  The hip-knee-ankle
+    angle on [start, until] is replaced by a cubic Hermite that matches the data's value and slope at both ends
+    (C1 join; a quintic that also matched curvature overshoots, because the rate must still reach the data's
+    value at `until`), so frames >= `until` stay bit-identical.  Only the angle changes: hip and knee stay put
+    and the shank + foot + toe rotate rigidly about the knee axis (normal of the hip-knee-ankle plane), so
+    every bone length is exact and the thigh (leg-lift height) is untouched.  Zero-phase: no time shift.
+    """
+    _check(throws)
+    j = np.asarray(j_ft, float).copy()
+    lead = "L" if throws == "R" else "R"
+    hip, knee, ank, toe = _HIP[lead], _KNEE[lead], _ANKLE[lead], _TOE[lead]
+    u, v = j[:, hip] - j[:, knee], j[:, ank] - j[:, knee]
+    uh, vh = u / np.linalg.norm(u, axis=1)[:, None], v / np.linalg.norm(v, axis=1)[:, None]
+    ang = np.arccos(np.clip((uh * vh).sum(1), -1, 1))
+    m = lambda i: (ang[i + 1] - ang[i - 1]) / 2  # slope per frame, central difference of the original data
+    T = until - start
+    s = np.arange(T + 1) / T
+    new = ((2 * s**3 - 3 * s**2 + 1) * ang[start] + (s**3 - 2 * s**2 + s) * T * m(start)
+           + (-2 * s**3 + 3 * s**2) * ang[until] + (s**3 - s**2) * T * m(until))
+    delta = np.zeros(len(j))
+    delta[start:until + 1] = new - ang[start:until + 1]  # new angle - old angle; > 0 opens the knee
+    n = np.cross(uh, vh)
+    n /= np.maximum(np.linalg.norm(n, axis=1), 1e-9)[:, None]
+    th = delta[:, None]
+    kn = j[:, knee]
+    for q in (ank, toe):  # Rodrigues rotation by +delta about n = u x v: turns v away from u, so the knee angle grows by delta
+        r = j[:, q] - kn
+        rot = r * np.cos(th) + np.cross(n, r) * np.sin(th) + n * (n * r).sum(1)[:, None] * (1 - np.cos(th))
+        j[:, q] = kn + rot
+    src = np.asarray(j_ft, float)
+    j[:start], j[until:] = src[:start], src[until:]  # exact, no float residue outside the window
+    return j
+
+
+def retime_windup(j_ft: np.ndarray, fps: float, until: int, new_until: int, throws: str, ease_frames: int = 8) -> np.ndarray:
+    """Speed up the windup before the leg-lift peak `until` (opt-in, per pitcher); returns len - (until - new_until) frames.
+
+    Why: the averaged template's leg lift reads slower than the pitcher's own clips (knee rise to the peak
+    takes ~20% longer).  Frames 0..until are replayed in `new_until` = M frames through a monotone old-time map
+    with slope r > 1 that eases (smootherstep) to exactly 1 over the last `ease_frames` before the peak, so the
+    join with the untouched tail is C1 (no velocity step) while the whole rise still runs ~r times faster
+    (a map that eased over the whole windup left the rise, which sits just before the peak, unchanged).
+    With E = ease_frames and I(u) = int_0^u (1 - smootherstep), t_old(k) = k + (r-1) (min(k, M-E) + E I((k-M+E)/E)^+)
+    and t_old(M) = until fixes r.  Positions are cubic-interpolated at t_old, then the skeleton is rebuilt as in
+    smooth_extra: bones keep their (interpolated) lengths, the planted pivot ankle/toe stay as resampled, the
+    pivot knee is re-solved.  Frames >= `until` are copied bit for bit, so everything after the peak is unchanged
+    except its index (shifted by until - new_until); the caller must move release_index / pre_s by the same amount.
+    """
+    from scipy.interpolate import CubicSpline
+    _check(throws)
+    j = np.asarray(j_ft, float)
+    M, E = int(new_until), int(ease_frames)
+    assert E < M < until, "need ease_frames < new_until < until"
+    ug = np.linspace(0.0, 1.0, 2001)
+    Ig = np.concatenate([[0.0], np.cumsum(1 - _smootherstep(ug[:-1] + 0.5 / 2000)) / 2000])
+    I = lambda u: np.interp(np.clip(u, 0.0, 1.0), ug, Ig)       # noqa: E731
+    k = np.arange(M + 1, dtype=float)
+    shape = np.minimum(k, M - E) + E * I((k - M + E) / E)
+    r = 1.0 + (until - M) / shape[-1]
+    t_old = k + (r - 1.0) * shape
+    t_old[-1] = until                                            # quadrature residue only
+    src = np.arange(until + 1)
+    res = CubicSpline(src, j[: until + 1], axis=0)(t_old)
+    ln = np.stack([np.linalg.norm(j[:, c] - j[:, SMPL_PARENT[c]], axis=1) for c in range(1, j.shape[1])], 1)
+    ln = np.stack([np.interp(t_old, src, ln[: until + 1, c]) for c in range(ln.shape[1])], 1)
+    out = res.copy()
+    for c in range(1, j.shape[1]):  # parents before children
+        d = res[:, c] - res[:, SMPL_PARENT[c]]
+        d /= np.maximum(np.linalg.norm(d, axis=1), 1e-9)[:, None]
+        out[:, c] = out[:, SMPL_PARENT[c]] + ln[:, c - 1, None] * d
+    hip, knee, ank, toe = _HIP[throws], _KNEE[throws], _ANKLE[throws], _TOE[throws]
+    out[:, ank], out[:, toe] = res[:, ank], res[:, toe]
+    a, b = ln[:, knee - 1], ln[:, ank - 1]
+    out[:, knee], _ = _two_bone(out[:, hip], res[:, ank], a, b, res[:, knee] - res[:, hip])
+    return np.concatenate([out[:M], j[until:]])
+
+
+def fix_lead_stance(j_ft: np.ndarray, until: int, throws: str, ease_start: int = 0, lateral: float = 0.3) -> np.ndarray:
+    """Make the lead knee bend FORWARD at the start of the windup (opt-in, per pitcher).
+
+    Why: in Cease's averaged template the lead knee starts ~0.6 ft BEHIND the hip-ankle line (it bends
+    backwards, like hyperextension) and only swings forward by ~frame 33; a knee cannot bend that way, so
+    it reads as the knee buckling.  Hip, ankle and toe stay put, so every bone keeps its length and only the
+    knee moves: it is re-solved by two-bone IK (_two_bone) with the bend direction `pole` blended from the
+    data's own to "forward + `lateral` x outward" (forward = pivot foot ankle->toe over the first frames,
+    outward = pivot hip -> lead hip; the pivot knee sits at about this direction).  The blend weight is 1 up
+    to `ease_start` and eases (smootherstep, C2) to 0 at `until`, where the data resumes bit for bit.
+    The knee flexion angle is fixed by the hip-ankle distance and so is unchanged in magnitude.
+    """
+    _check(throws)
+    j = np.asarray(j_ft, float)
+    lead = "L" if throws == "R" else "R"
+    hip, knee, ank, toe = _HIP[lead], _KNEE[lead], _ANKLE[lead], _TOE[lead]
+    f = (j[:20, _TOE[throws]] - j[:20, _ANKLE[throws]]).mean(0)
+    f[2] = 0.0
+    f /= np.linalg.norm(f)
+    o = j[:, _HIP[lead]] - j[:, _HIP[throws]]
+    o[:, 2] = 0.0
+    o /= np.linalg.norm(o, axis=1)[:, None]
+    tgt_pole = f[None] + lateral * o
+    a, b = np.linalg.norm(j[:, knee] - j[:, hip], axis=1), np.linalg.norm(j[:, ank] - j[:, knee], axis=1)
+    k = np.arange(len(j))
+    w = _smootherstep(np.clip((until - k) / max(until - ease_start, 1), 0.0, 1.0))
+    p0 = j[:, knee] - j[:, hip]
+    k0, _ = _two_bone(j[:, hip], j[:, ank], a, b, p0)          # the data's own knee, rebuilt (rounding residue only)
+    k1, _ = _two_bone(j[:, hip], j[:, ank], a, b, w[:, None] * tgt_pole + (1 - w[:, None]) * p0 / np.linalg.norm(p0, axis=1)[:, None])
+    out = j.copy()
+    out[:, knee] = j[:, knee] + (k1 - k0)  # shift by the IK change only: weight 0 gives the input exactly
+    out[until:] = j[until:]
+    return out
+
+
+def land_trailing_leg(j_ft: np.ndarray, release_index: int, start: int, land: int, throws: str,
+                      foot_drop_ft: float = 0.305, reach: float = 0.95) -> np.ndarray:
+    """Bring the trailing (throwing-side) leg down and plant it after release (opt-in, per pitcher).
+
+    Why: in Cease's averaged template the trailing foot is still ~1.8 ft up and moving when the clip ends,
+    because the averaging of clips cut off at different times smears the landing away.  A real follow-through
+    swings the back leg through and plants it (the foot passes the lead foot and lands, then the pitcher is
+    done).  Hip and pelvis stay where they are; only knee, ankle and toe move, by blending (weight w, a
+    smootherstep ease from 0 at `start` to 1 at `land`, so C2 at both ends) from the data to a landing:
+      ankle: xy goes to where the data's ankle is at `land` and stays there (no sliding once planted), z goes to
+             mound height there + `foot_drop_ft` (the flat-foot ankle height, measured on the planted lead foot);
+      toe:   same foot-bone direction, tilted to the flat foot;
+      knee:  two-bone IK (_two_bone) from the hip to the new ankle, bend direction = the data's own knee.
+    The data's leg bones shrink to ~2.4 ft total by the clip end (averaging artefact), which cannot reach the
+    ground from the hip.  So the thigh, shin and foot lengths are blended to their values at the release frame
+    (a constant leg) as w -> 1; every bone is then exactly that length for frames >= `land`.
+    Frames <= max(release_index, start) are returned bit for bit.
+    """
+    _check(throws)
+    j = np.asarray(j_ft, float)
+    hip, knee, ank, toe = _HIP[throws], _KNEE[throws], _ANKLE[throws], _TOE[throws]
+    n = len(j)
+    k = np.arange(n)
+    w = _smootherstep(np.clip((k - start) / max(land - start, 1), 0.0, 1.0))
+    a0 = np.linalg.norm(j[:, knee] - j[:, hip], axis=1)
+    b0 = np.linalg.norm(j[:, ank] - j[:, knee], axis=1)
+    f0 = np.linalg.norm(j[:, toe] - j[:, ank], axis=1)
+    a = (1 - w) * a0 + w * a0[release_index]
+    b = (1 - w) * b0 + w * b0[release_index]
+    f = (1 - w) * f0 + w * f0[release_index]
+    # Where the foot lands: under the data's ankle at `land`, but pulled toward the hip until the (constant)
+    # leg reaches it with `reach` of its length, so the knee stays bent (a straight leg locks and, for IK,
+    # snaps).  If the hip is too high even directly above, the ankle stops that far below it instead.
+    Lc = a[-1] + b[-1]
+    hip_land = j[land, hip].copy()
+    off = j[land, ank, :2] - hip_land[:2]
+    az = mound_z_ft(*(hip_land[:2] + off)) + foot_drop_ft
+    dz = hip_land[2] - az
+    if dz > reach * Lc:
+        az = hip_land[2] - reach * Lc
+        dz = reach * Lc
+    hmax = np.sqrt((reach * Lc) ** 2 - dz ** 2)
+    nrm = np.linalg.norm(off)
+    axy = hip_land[:2] + off * min(1.0, hmax / max(nrm, 1e-9))
+    az = max(az, mound_z_ft(*axy) + foot_drop_ft) if hip_land[2] - mound_z_ft(*axy) - foot_drop_ft <= reach * Lc else az
+    # Swing the ankle about the hip like a pendulum rather than cutting a straight line: blend the unit
+    # direction hip->ankle and the distance R separately, so the foot never passes close to the hip (a
+    # straight blend does, and with the longer constant leg the knee then folds up and pops over the hip).
+    P = np.array([*axy, az])
+    hip_ref = (1 - w[:, None]) * j[:, hip] + w[:, None] * j[land, hip]   # = hip(k) before, hip(land) once w = 1
+    rel_old = j[:, ank] - j[:, hip]
+    R_old = np.linalg.norm(rel_old, axis=1)
+    rel_land = P - j[land, hip]
+    R_land = np.linalg.norm(rel_land)
+    u0, u1 = rel_old / R_old[:, None], np.broadcast_to(rel_land / R_land, rel_old.shape)
+    om = np.arccos(np.clip((u0 * u1).sum(1), -1.0, 1.0))[:, None]   # slerp: constant-rate swing, no speed spike
+    so = np.maximum(np.sin(om), 1e-9)
+    u = (np.sin((1 - w[:, None]) * om) * u0 + np.sin(w[:, None] * om) * u1) / so
+    u = np.where(om < 1e-6, u0, u)
+    u /= np.linalg.norm(u, axis=1)[:, None]
+    new_ank = hip_ref + u * ((1 - w) * R_old + w * R_land)[:, None]
+    new_ank[land:] = P
+    d_old = (j[:, toe] - j[:, ank]) / f0[:, None]
+    h = j[land, toe] - j[land, ank]
+    h[2] = 0.0
+    h = h / np.linalg.norm(h)
+    sz = foot_drop_ft / f0[release_index]  # downward tilt of the flat foot
+    d_land = h * np.sqrt(1 - sz ** 2) + np.array([0.0, 0.0, -sz])
+    d = (1 - w[:, None]) * d_old + w[:, None] * d_land
+    d /= np.linalg.norm(d, axis=1)[:, None]
+    p0 = j[:, knee] - j[:, hip]
+    new_knee, new_ank = _two_bone(j[:, hip], new_ank, a, b, p0)
+    out = j.copy()
+    out[:, knee], out[:, ank], out[:, toe] = new_knee, new_ank, new_ank + d * f[:, None]
+    m = k > max(release_index, start)
+    out[~m] = j[~m]
+    return out

@@ -2,7 +2,7 @@
 
     python scripts/export_viewer.py data/raw/<pitcher>.csv [more.csv ...] [--out web/public/data]
 
-Writes <out>/<slug>.json per pitcher (a pitcher's season CSVs are pooled) and <out>/index.json = [{slug, name, throws, n_at_bats}].
+Writes <out>/<slug>.json per pitcher (a pitcher's season CSVs are pooled) and <out>/index.json = [{slug, name, throws, n_at_bats, height_in, mix}].
 CSV paths are explicit (no globbing data/raw/). Synthetic pitchers may only be written to
 web/test/fixtures/ so nothing fake lands next to real pitchers in the viewer.
 """
@@ -20,6 +20,12 @@ from pitchsim.physics import air_density
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "web" / "test" / "fixtures"
+
+
+def counts_by_type(data: dict) -> dict:
+    """Pitch count per pitch type over the export's pitches (what the menu's mix bar shows)."""
+    types = pd.Series([p["pitch_type"] for a in data["at_bats"] for p in a["pitches"]]).dropna()
+    return {k: int(v) for k, v in types.value_counts().items()}
 
 
 def main():
@@ -55,8 +61,10 @@ def main():
         counts = pd.Series([p["status"] for a in data["at_bats"] for p in a["pitches"]])
         print(f"{plain}: {len(data['at_bats'])} at-bats, "
               f"{counts.value_counts().to_dict()}, {path.stat().st_size / 1e6:.2f} MB -> {path}")
+        # height and pitch counts let the start menu draw its cards without downloading every pitcher
         index.append({"slug": slug, "name": name, "throws": data["pitcher"]["throws"],
-                      "n_at_bats": len(data["at_bats"])})
+                      "n_at_bats": len(data["at_bats"]), "height_in": height,
+                      "mix": counts_by_type(data)})
 
     (out / "index.json").write_text(json.dumps(index, indent=1), encoding="utf-8")
     print(f"wrote {out / 'index.json'}")

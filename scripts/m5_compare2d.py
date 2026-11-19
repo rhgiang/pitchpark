@@ -50,6 +50,7 @@ def phase_bounds_s(joints: np.ndarray, throws: str, ri: int, corr: dict) -> list
     """Phase boundaries (s from release) from the delivery's landmarks (m5_build's correction.json):
     set/rocker | leg-lift start | leg-lift peak | foot strike | release (t = 0)."""
     rk, ll, fs = corr["rocker_index"], corr["leg_lift_index"], corr["foot_strike_index"]
+    rk = 0 if rk is None else rk  # no rocker step: the knee's set height is taken from the start
     kz = joints[:, LEAD_KNEE[throws], 2]
     base = kz[rk:ll].min()
     above = np.nonzero(kz[rk:ll + 1] > base + LIFT_START_FRAC * (kz[ll] - base))[0]
@@ -61,10 +62,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("clips_dir")
     ap.add_argument("--deliveries", default=str(ROOT / "web/public/data/deliveries"))
-    ap.add_argument("--results", default=str(ROOT / "results/m5"))
+    ap.add_argument("--results", default=None, help="default results/m5/<slug> (as m5_build)")
     ap.add_argument("--raw", required=True, help="the pitcher's Statcast CSV")
     a = ap.parse_args()
-    vd, slug, dd, res = Path(a.clips_dir), Path(a.clips_dir).name, Path(a.deliveries), Path(a.results)
+    vd, slug, dd = Path(a.clips_dir), Path(a.clips_dir).name, Path(a.deliveries)
+    res = Path(a.results) if a.results else ROOT / "results/m5" / slug
 
     dl = json.loads((dd / f"{slug}.json").read_text())
     clips = json.loads((dd / f"{slug}.clips.json").read_text())
@@ -157,8 +159,10 @@ def main():
     # ---- export for the page: the replica camera per clip + its scores (numbers only, no video) ----
     def clip_score(c, method):
         s = df[(df["clip"] == c) & (df["method"] == method)]
-        return {"overall": round(float(s["err"].median()), 4),
-                "phases": {k: round(float(v.median()), 4) for k, v in s.groupby("phase")["err"]}}
+        # None where there is no score: with one train clip its own floor_2d has no other-game reference (NaN)
+        r4 = lambda v: None if pd.isna(v) else round(float(v), 4)  # noqa: E731
+        return {"overall": r4(s["err"].median()),
+                "phases": {k: r4(v.median()) for k, v in s.groupby("phase")["err"]}}
 
     out = {"schema": 1, "slug": slug, "conf_min": CONF_MIN, "torso_in": round(torso_in, 2),
            "phases": [{"name": n, "t0_s": lo, "t1_s": hi} for n, lo, hi in

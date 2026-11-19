@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { JOINTS, J } from "./skeleton.js";
 import { PALETTE, makeToonMaterial } from "./look.js";
+import { handModel } from "./handModels.js";
 
 /**
  * The pitcher's meshes (M5 look): a stylised, toon-shaded ballplayer built from simple shapes on
@@ -214,8 +215,9 @@ function bodyParts(throws) {
     add("skin", taper(P("elbow"), P("wrist"), 0.13, 0.095), () => J[`${sd}_elbow`]);
     // Hand: the mitt on the glove side, the ball grip on the throwing side.
     const wrist = (g) => skin(atWrist(g, sd), () => J[`${sd}_wrist`]);
-    if (sd === G) for (const [m, g] of mitt()) parts.push([m, wrist(g)]);
-    else for (const g of gripHand()) parts.push(["skin", wrist(g)]);
+    // A sculpted model (handModels.js) replaces the procedural hand when it has loaded.
+    const hand = sd === G ? handModel("mitt") ?? mitt() : handModel("grip") ?? gripHand().map((g) => ["skin", g]);
+    for (const [m, g] of hand) parts.push([m in COLORS ? m : "glove", wrist(g)]);
 
     // Thigh: thick at the hip, a sphere at the knee shared with the shin.
     add("pants", taper(P("hip"), P("knee"), 0.28, 0.19, 14), () => J[`${sd}_hip`]);
@@ -234,14 +236,54 @@ function bodyParts(throws) {
   return parts;
 }
 
+// The bone a part's mesh stretches toward when its bone is longer or shorter (first child, except
+// where the first is a hip: pelvis -> spine1, spine3 -> neck).
+const FIT_CHILD = JOINTS.map((_, i) => {
+  const kids = JOINTS.flatMap((j, c) => (j.parent === i ? [c] : []));
+  return i === J.pelvis ? J.spine1 : i === J.spine3 ? J.neck : (kids[0] ?? -1);
+});
+
+/**
+ * Re-fit the rest-pose mesh to a pitcher's own bone lengths (rest from skeleton.js restFromLengths).
+ * Each vertex moves by its bones' joint displacements, blended along the bone from its start joint
+ * (0) to its end joint (1), so a longer shin is a longer shin and the sphere at the knee follows
+ * the knee. Thickness is unchanged (a long-limbed pitcher is longer, not fatter). The wrist bone
+ * moves rigidly with the hand joint: the ball sits on it, and the fingers must stay round it.
+ */
+function fitToRest(geometry, rest) {
+  const delta = JOINTS.map((_, i) => rest[i].clone().sub(R(JOINTS[i].smpl)));
+  const pos = geometry.attributes.position, si = geometry.attributes.skinIndex, sw = geometry.attributes.skinWeight;
+  const v = new THREE.Vector3(), axis = new THREE.Vector3(), d = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    const move = new THREE.Vector3();
+    for (let n = 0; n < 4; n++) {
+      const w = sw.getComponent(i, n);
+      if (w === 0) continue;
+      const b = si.getComponent(i, n), c = FIT_CHILD[b];
+      let t = 0;
+      if (c >= 0) {
+        const o = R(JOINTS[b].smpl);
+        axis.copy(R(JOINTS[c].smpl)).sub(o);
+        t = b === J.left_wrist || b === J.right_wrist ? 1 : Math.min(Math.max(v.clone().sub(o).dot(axis) / axis.lengthSq(), 0), 1);
+      }
+      move.addScaledVector(c >= 0 ? d.copy(delta[b]).lerp(delta[c], t) : delta[b], w);
+    }
+    pos.setXYZ(i, v.x + move.x, v.y + move.y, v.z + move.z);
+  }
+  return geometry;
+}
+
 /**
  * The figure's merged geometry (one group per material) and its materials, for `throws`
  * ("R" | "L": the mitt goes on the other hand). Materials are named by their COLORS key.
+ * `rest` (optional): the pitcher's own rest joints; the default is the 75 in rig.
  */
-export function figureGeometry(throws) {
+export function figureGeometry(throws, rest = null) {
   const parts = bodyParts(throws);
   const keys = [...new Set(parts.map((p) => p[0]))];
   const byMat = keys.map((k) => mergeGeometries(parts.filter((p) => p[0] === k).map((p) => p[1])));
   const materials = keys.map((k) => Object.assign(makeToonMaterial(COLORS[k]), { name: k }));
-  return { geometry: mergeGeometries(byMat, true), materials };
+  const geometry = mergeGeometries(byMat, true);
+  return { geometry: rest ? fitToRest(geometry, rest) : geometry, materials };
 }

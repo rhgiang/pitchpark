@@ -84,3 +84,21 @@ def test_foot_strike_frame_none_when_foot_never_settles():
     p, r = stride()
     p.xy[:, 15, 0] += 10 * np.arange(120)  # still sliding 10 px/frame at release: no plant to find
     assert foot_strike_frame(p, "R", r) is None
+
+
+def test_lead_ankle_is_the_glove_side_ankle():
+    # A LHP strides with his RIGHT foot (COCO 16); scripts that draw/score foot strike use this helper.
+    from pitchsim.pose.release import lead_ankle_idx
+    assert lead_ankle_idx("R") == 15 and lead_ankle_idx("L") == 16
+
+
+def test_screen_low_arm_slot_scales_the_wrist_rise():
+    """SYNTHETIC sidearm-ish delivery: the wrist peaks only 0.3 torso lengths above the shoulder.  A
+    pitcher with an ~11 deg arm angle (Sale) never lifts it 0.45 (the Ohtani-tuned bar, arm ~33 deg),
+    so the bar scales with sin(arm angle); without an arm angle the old bar holds."""
+    p = synth()
+    t = np.arange(len(p.xy))
+    p.xy[:, 10, 1] = p.xy[0, 10, 1] + 0 * t - 108.75 * np.exp(-0.5 * ((t - 40) / 8.0) ** 2)  # rise 0.30
+    assert screen(p, "R") == (False, "no_pitcher")
+    assert screen(p, "R", arm_angle_deg=11.0) == (True, "")
+    assert screen(p, "R", arm_angle_deg=45.0) == (False, "no_pitcher")  # never stricter than 0.45
