@@ -123,7 +123,9 @@ export function bleacherPaths() {
     for (let a = a0; a <= a1 + 1e-9; a += 1) pts.push(polar(a, fenceDistFt(a) + BLEACHER_GAP_FT));
     return pts;
   };
-  return [side(-42, -BATTERS_EYE_HALF_DEG), side(BATTERS_EYE_HALF_DEG, 42)];
+  // Signature features: the right-field bleachers stop at 22 deg; the brick wall and the Falls' pool (signature.js) take the rest.
+  const rightEnd = isOld("falls") && isOld("oracle") ? 42 : 22;
+  return [side(-42, -BATTERS_EYE_HALF_DEG), side(BATTERS_EYE_HALF_DEG, rightEnd)];
 }
 
 /** A material for vertex-coloured sweeps (the colour lives in the vertices). */

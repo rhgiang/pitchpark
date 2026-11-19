@@ -10,6 +10,8 @@ import { buildFieldDetails } from "./fielddetails.js";
 import { isOld } from "./old.js";
 import { buildHome } from "./home.js";
 import { bullpenFences } from "./structure.js";
+import { clearForSignature } from "./signature.js";
+import { buildSignature } from "./signature-build.js";
 import {
   ISLAND, fieldBoundary, fencePath, polar, fenceDistFt, resample, normals, rng, inside,
   BATTERS_EYE_HALF_DEG, FIELD_CENTRE_FT,
@@ -82,7 +84,8 @@ function makePlan() {
   // Light towers: four behind the main stands, two behind the outfield bleachers.
   const back = offsetPath(main, MAIN_DEPTH_FT + 6);
   for (const f of [0.12, 0.33, 0.67, 0.88]) plan.towers.push({ p: back[Math.round(f * (back.length - 1))], h: 150 });
-  for (const s of [-1, 1]) plan.towers.push({ p: polar(s * 33, fenceDistFt(33) + 32 + BLEACHER_DEPTH_FT + 8), h: 125 });
+  // (the right one moves in to 16 deg when the Falls' pool takes the bleachers' place at 33 deg: see signature.js)
+  for (const s of [-1, 1]) { const a = s > 0 && !(isOld("falls") && isOld("oracle")) ? 16 : 33; plan.towers.push({ p: polar(s * a, fenceDistFt(a) + 32 + BLEACHER_DEPTH_FT + 8), h: 125 }); }
 
   // Paths from the plazas out to the island's edge (gentle curves).
   for (const a of [180, 138, 222, 98, 262, 0, 40, -40]) {
@@ -203,6 +206,7 @@ function makePlan() {
     const j = Math.round(i);
     plan.banners.push({ p: fascia[j], dir: [fascia[j + 1][0] - fascia[j - 1][0], fascia[j + 1][1] - fascia[j - 1][1]], text: w });
   });
+  clearForSignature(plan); // keep scatter out of the Spin Tower, Falls and palms (no random draws: layout unchanged)
   return plan;
 }
 
@@ -241,7 +245,8 @@ export function buildPark() {
   g.add(buildStands());
   const flags = [], poles = [];
   const props = buildProps(plan, flags, poles);
-  g.add(props, buildSurrounds(plan, flags, poles), ...buildFlags(flags, poles), buildBrand(plan));
+  const signature = buildSignature(flags, poles); // before buildFlags: its pennants join the shared flag list
+  g.add(props, buildSurrounds(plan, flags, poles), signature, ...buildFlags(flags, poles), buildBrand(plan));
   if (!isOld("home")) g.add(buildHome(upperPath()));
   if (!isOld("structure")) g.add(bullpenFences());
   if (!isOld("field")) g.add(buildFieldDetails()); // rosin bag (?old=field hides it)
@@ -249,8 +254,9 @@ export function buildPark() {
   // Everything animated registers a tick(t); collected once here, not traversed every frame.
   const tickers = [];
   g.traverse((o) => { if (o.userData.tick) tickers.push(o.userData.tick); });
-  g.userData.update = ({ timeS, board }) => {
+  g.userData.update = ({ timeS, board, spin }) => {
     for (const f of tickers) f(timeS);
+    signature.userData.setSpin(spin); // the Spin Tower's ball turns with this pitch's spin
     props.userData.setBoard(board);
   };
   return g;

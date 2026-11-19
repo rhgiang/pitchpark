@@ -13,6 +13,7 @@ import {
 } from "./state.js";
 import { makeTube, updateTube } from "./trail.js";
 import { makeBall, makeGhost, updateBall, spinBall, setSeams, seamStyle } from "./ball.js";
+import { spinAngleRad } from "./park/signature.js";
 import { renderHud, buildStrip } from "./hud.js";
 import { boneLengths } from "./pitcher.js";
 import { pitcherApi } from "./signed_off/index.js"; // Ohtani keeps his signed-off pose code
@@ -534,6 +535,7 @@ function watchSpeed(now) {
 }
 
 let last = null;
+let spinNow = null; // this pitch's spin, for the park's Spin Tower (park/tower.js)
 let nextSlot = 0; // when the next capped frame is due (ms)
 let lastDraw = -Infinity;
 let drawnKey = null; // t and camera of the last drawn frame
@@ -573,7 +575,9 @@ renderer.setAnimationLoop((now) => {
       ball.position.copy(api.handPosition(figure));
     }
     setSeams(ball, seamStyle(p.pitch_type)); // assumed from the pitch type (Statcast has no seam data)
-    spinBall(ball, p.spin_rpm == null ? null : p.spin_axis_deg, 2 * Math.PI * (p.spin_rpm / 60) * ft * spinFactor(state.speed));
+    const spinAngle = spinAngleRad(p.spin_rpm, ft, spinFactor(state.speed));
+    spinBall(ball, p.spin_rpm == null ? null : p.spin_axis_deg, spinAngle);
+    spinNow = { rpm: p.spin_rpm ?? null, axisDeg: p.spin_axis_deg, angleRad: spinAngle, pitchType: p.pitch_type }; // the park's Spin Tower copies it
     updateBall(ghost, flying && state.mode === "ghost" ? p.sim : null, ft);
     updateTube(trail, flying ? (state.mode === "sim" ? p.sim : p.real) : null, ft);
     updateTube(ghostTrail, flying && state.mode === "ghost" ? p.sim : null, ft);
@@ -590,6 +594,6 @@ renderer.setAnimationLoop((now) => {
   drawnKey = key;
   lastDraw = now;
   renderer.info.reset();
-  park.userData.update?.({ timeS: now / 1000, board: boardInfo() });
+  park.userData.update?.({ timeS: now / 1000, board: boardInfo(), spin: spinNow });
   look.render();
 });

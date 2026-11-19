@@ -296,6 +296,20 @@ function bushesAndRocks(bushes, rocks) {
  * scrolling downward (texture offset in update), plus a white lip of foam. Not outlined.
  */
 function waterfall({ p, dir }) {
+  const tex = fallTexture();
+  const fall = new THREE.Mesh(new THREE.PlaneGeometry(14, 260), new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.92, side: THREE.DoubleSide }));
+  const g = frameAt(p, [-dir[1], dir[0]]); // local x along the edge, z outward
+  fall.position.set(0, -130, 2);
+  g.add(noOutline(fall));
+  const foam = noOutline(new THREE.Mesh(new THREE.CylinderGeometry(9, 9, 2, 12, 1, true).scale(1, 1, 0.5).translate(0, -1, 2),
+    new THREE.MeshBasicMaterial({ color: 0xf2fbfa, transparent: true, opacity: 0.8 })));
+  g.add(foam);
+  g.userData.tick = (t) => { tex.offset.y = t * 0.6; };
+  return g;
+}
+
+/** The waterfall's scrolling stripe texture (also used by the Falls, falls.js). */
+export function fallTexture() {
   const c = document.createElement("canvas");
   c.width = 64; c.height = 256;
   const x = c.getContext("2d");
@@ -309,15 +323,7 @@ function waterfall({ p, dir }) {
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(2, 3);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const fall = new THREE.Mesh(new THREE.PlaneGeometry(14, 260), new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.92, side: THREE.DoubleSide }));
-  const g = frameAt(p, [-dir[1], dir[0]]); // local x along the edge, z outward
-  fall.position.set(0, -130, 2);
-  g.add(noOutline(fall));
-  const foam = noOutline(new THREE.Mesh(new THREE.CylinderGeometry(9, 9, 2, 12, 1, true).scale(1, 1, 0.5).translate(0, -1, 2),
-    new THREE.MeshBasicMaterial({ color: 0xf2fbfa, transparent: true, opacity: 0.8 })));
-  g.add(foam);
-  g.userData.tick = (t) => { tex.offset.y = t * 0.6; };
-  return g;
+  return tex;
 }
 
 /** Rocks hanging under the island (the cricket clip's floating debris): small faceted cones. */
