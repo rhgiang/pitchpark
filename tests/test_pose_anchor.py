@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-from pitchsim.pose.anchor import anchor, correct_to_mean, mound_z_ft, release_values, segment_lengths, smooth_extra
+from pitchsim.pose.anchor import anchor, correct_to_mean, mound_z_ft, release_values, segment_lengths, smooth_extra, smooth_knee
 
 RUBBER_Y, MOUND_Z = 60.5, 10 / 12
 
@@ -313,3 +313,26 @@ def test_smooth_extra_damps_spike_keeps_anchors():
     assert np.array_equal(o[until:], j[until:])                  # exactly untouched from the peak on
     assert np.allclose(o[:, 8], j[:, 8]) and np.allclose(o[:, 11], j[:, 11])  # planted pivot ankle/toe fixed
     assert np.allclose(segment_lengths(o), segment_lengths(j), atol=1e-9)
+
+
+def test_smooth_knee_removes_rate_jump_keeps_bones_and_tail():
+    """SYNTHETIC: lead knee flexes slowly then jumps to a fast rate just before `until`; the jump is spread out."""
+    n, until, start = 140, 100, 70
+    j = _figure(n)
+    f = np.arange(n)
+    # flexion angle (deg): 1 deg/frame, then 3 deg/frame from frame 94 (a buckle); thigh fixed, shank rotated in the x-z plane
+    ang = np.radians(120 - np.minimum(f, 94) - 3 * np.maximum(f - 94, 0))
+    hip, knee = np.array([0.0, 0.0, 2.0]), np.array([0.0, 0.0, 1.0])
+    j[:, 1], j[:, 4] = hip, knee
+    for i in range(n):  # shank of length 1 at `ang` from the thigh direction (0, 0, 1)
+        j[i, 7] = knee + [np.sin(ang[i]), 0.0, np.cos(ang[i])]
+        j[i, 10] = j[i, 7] + [0.3 * np.sin(ang[i]), 0.0, 0.3 * np.cos(ang[i])]
+    o = smooth_knee(j, 60.0, start, until, "R")
+    def knee_ang(x):
+        u, v = x[:, 1] - x[:, 4], x[:, 7] - x[:, 4]
+        return np.arccos((u * v).sum(1) / np.linalg.norm(u, axis=1) / np.linalg.norm(v, axis=1))
+    peak = lambda x: np.abs(np.diff(knee_ang(x), 2)[start - 2:until]).max()
+    assert peak(o) < 0.5 * peak(j)                                   # accel spike at the rate jump halved at least
+    assert np.array_equal(o[until:], j[until:]) and np.array_equal(o[:start], j[:start])
+    assert np.allclose(segment_lengths(o), segment_lengths(j), atol=1e-9)
+    assert np.array_equal(o[:, [1, 4]], j[:, [1, 4]])               # hip and knee never move

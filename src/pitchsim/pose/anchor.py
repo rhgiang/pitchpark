@@ -452,3 +452,41 @@ def smooth_extra(j_ft: np.ndarray, fps: float, until: int, throws: str, sigma_s:
     out[:, knee], _ = _two_bone(out[:, hip], j[:, ank], a, b, pole)
     out[w[:, 0, 0] == 0] = j[w[:, 0, 0] == 0]  # weight 0: exactly the input (no float residue from the rebuild)
     return out
+
+
+def smooth_knee(j_ft: np.ndarray, fps: float, start: int, until: int, throws: str) -> np.ndarray:
+    """Remove the lead-knee "buckle" before the leg-lift peak `until` (opt-in, per pitcher).
+
+    Why: the lead knee's flexion rate jumps from ~1.6 to ~3.3 deg/frame over the ~4 frames before the peak
+    (angular accel spike ~ -1800 deg/s^2, then a reversal), which reads as the knee giving way.  The hip-knee-ankle
+    angle on [start, until] is replaced by a cubic Hermite that matches the data's value and slope at both ends
+    (C1 join; a quintic that also matched curvature overshoots, because the rate must still reach the data's
+    value at `until`), so frames >= `until` stay bit-identical.  Only the angle changes: hip and knee stay put
+    and the shank + foot + toe rotate rigidly about the knee axis (normal of the hip-knee-ankle plane), so
+    every bone length is exact and the thigh (leg-lift height) is untouched.  Zero-phase: no time shift.
+    """
+    _check(throws)
+    j = np.asarray(j_ft, float).copy()
+    lead = "L" if throws == "R" else "R"
+    hip, knee, ank, toe = _HIP[lead], _KNEE[lead], _ANKLE[lead], _TOE[lead]
+    u, v = j[:, hip] - j[:, knee], j[:, ank] - j[:, knee]
+    uh, vh = u / np.linalg.norm(u, axis=1)[:, None], v / np.linalg.norm(v, axis=1)[:, None]
+    ang = np.arccos(np.clip((uh * vh).sum(1), -1, 1))
+    m = lambda i: (ang[i + 1] - ang[i - 1]) / 2  # slope per frame, central difference of the original data
+    T = until - start
+    s = np.arange(T + 1) / T
+    new = ((2 * s**3 - 3 * s**2 + 1) * ang[start] + (s**3 - 2 * s**2 + s) * T * m(start)
+           + (-2 * s**3 + 3 * s**2) * ang[until] + (s**3 - s**2) * T * m(until))
+    delta = np.zeros(len(j))
+    delta[start:until + 1] = new - ang[start:until + 1]  # new angle - old angle; > 0 opens the knee
+    n = np.cross(uh, vh)
+    n /= np.maximum(np.linalg.norm(n, axis=1), 1e-9)[:, None]
+    th = delta[:, None]
+    kn = j[:, knee]
+    for q in (ank, toe):  # Rodrigues rotation by +delta about n = u x v: turns v away from u, so the knee angle grows by delta
+        r = j[:, q] - kn
+        rot = r * np.cos(th) + np.cross(n, r) * np.sin(th) + n * (n * r).sum(1)[:, None] * (1 - np.cos(th))
+        j[:, q] = kn + rot
+    src = np.asarray(j_ft, float)
+    j[:start], j[until:] = src[:start], src[until:]  # exact, no float residue outside the window
+    return j
