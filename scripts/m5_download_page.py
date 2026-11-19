@@ -53,14 +53,16 @@ addEventListener("keydown",e=>{if(e.key==="n"&&!e.ctrlKey&&!e.metaKey)next()});c
 
 
 def choose(clips_dir: Path, n_train: int, n_test: int, seed: int = 0, venue: pd.DataFrame | None = None,
-           home: pd.Series | None = None) -> pd.DataFrame:
+           home: pd.Series | None = None, exclude_home: list[str] | None = None) -> pd.DataFrame:
     """Rows to save: round-robin over games per split, train/test alternating; skips clips already on disk.
     With `venue` (venue_yield.csv) each split's games are picked best expected-yield first; the split column
-    itself (split_by_game, seed 0) is untouched."""
+    itself (split_by_game, seed 0) is untouched.  `exclude_home` (needs `home`) drops games hosted by those teams."""
     df = pd.read_csv(clips_dir / "clips.csv")
     df = df[df["play_id"].notna()].reset_index(drop=True)
     listed = listed_clip_names(clips_dir)
     df = df[[not ((clips_dir / clip_name(r)).exists() or clip_name(r) in listed) for _, r in df.iterrows()]]
+    if exclude_home:
+        df = df[~df["game_pk"].map(home).isin(exclude_home)]
     pick = round_robin if venue is None else (lambda d, n, sd: pick_by_yield(d, n, home, venue, seed=sd))
     tr, te = (pick(df[df["split"] == s].reset_index(drop=True), n, seed)
               for s, n in (("train", n_train), ("test", n_test)))
@@ -75,12 +77,13 @@ def main() -> None:
     ap.add_argument("--out", default="data/video/download.html")
     ap.add_argument("--list-name", default="download_list.csv", help="per-pitcher list file written in the clips dir")
     ap.add_argument("--venue-yield", help="venue_yield.csv from m5_venue_yield.py: pick games by expected usable rate")
+    ap.add_argument("--exclude-home", nargs="+", default=[], help="home teams to skip (e.g. NYY: road games only)")
     a = ap.parse_args()
     venue = pd.read_csv(a.venue_yield) if a.venue_yield else None
-    home = home_team_map() if venue is not None else None
+    home = home_team_map() if venue is not None or a.exclude_home else None
     sections = []
     for d in map(Path, a.clips_dirs):
-        sel = choose(d, a.n_train, a.n_test, venue=venue, home=home)
+        sel = choose(d, a.n_train, a.n_test, venue=venue, home=home, exclude_home=a.exclude_home)
         sel.to_csv(d / a.list_name, index=False)
         rows = [{"split": r["split"], "pitch_type": r["pitch_type"], "name": clip_name(r),
                  "url": LINK.format(r["play_id"])} for _, r in sel.iterrows()]
