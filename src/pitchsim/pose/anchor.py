@@ -533,3 +533,38 @@ def retime_windup(j_ft: np.ndarray, fps: float, until: int, new_until: int, thro
     a, b = ln[:, knee - 1], ln[:, ank - 1]
     out[:, knee], _ = _two_bone(out[:, hip], res[:, ank], a, b, res[:, knee] - res[:, hip])
     return np.concatenate([out[:M], j[until:]])
+
+
+def fix_lead_stance(j_ft: np.ndarray, until: int, throws: str, ease_start: int = 0, lateral: float = 0.3) -> np.ndarray:
+    """Make the lead knee bend FORWARD at the start of the windup (opt-in, per pitcher).
+
+    Why: in Cease's averaged template the lead knee starts ~0.6 ft BEHIND the hip-ankle line (it bends
+    backwards, like hyperextension) and only swings forward by ~frame 33; a knee cannot bend that way, so
+    it reads as the knee buckling.  Hip, ankle and toe stay put, so every bone keeps its length and only the
+    knee moves: it is re-solved by two-bone IK (_two_bone) with the bend direction `pole` blended from the
+    data's own to "forward + `lateral` x outward" (forward = pivot foot ankle->toe over the first frames,
+    outward = pivot hip -> lead hip; the pivot knee sits at about this direction).  The blend weight is 1 up
+    to `ease_start` and eases (smootherstep, C2) to 0 at `until`, where the data resumes bit for bit.
+    The knee flexion angle is fixed by the hip-ankle distance and so is unchanged in magnitude.
+    """
+    _check(throws)
+    j = np.asarray(j_ft, float)
+    lead = "L" if throws == "R" else "R"
+    hip, knee, ank, toe = _HIP[lead], _KNEE[lead], _ANKLE[lead], _TOE[lead]
+    f = (j[:20, _TOE[throws]] - j[:20, _ANKLE[throws]]).mean(0)
+    f[2] = 0.0
+    f /= np.linalg.norm(f)
+    o = j[:, _HIP[lead]] - j[:, _HIP[throws]]
+    o[:, 2] = 0.0
+    o /= np.linalg.norm(o, axis=1)[:, None]
+    tgt_pole = f[None] + lateral * o
+    a, b = np.linalg.norm(j[:, knee] - j[:, hip], axis=1), np.linalg.norm(j[:, ank] - j[:, knee], axis=1)
+    k = np.arange(len(j))
+    w = _smootherstep(np.clip((until - k) / max(until - ease_start, 1), 0.0, 1.0))
+    p0 = j[:, knee] - j[:, hip]
+    k0, _ = _two_bone(j[:, hip], j[:, ank], a, b, p0)          # the data's own knee, rebuilt (rounding residue only)
+    k1, _ = _two_bone(j[:, hip], j[:, ank], a, b, w[:, None] * tgt_pole + (1 - w[:, None]) * p0 / np.linalg.norm(p0, axis=1)[:, None])
+    out = j.copy()
+    out[:, knee] = j[:, knee] + (k1 - k0)  # shift by the IK change only: weight 0 gives the input exactly
+    out[until:] = j[until:]
+    return out

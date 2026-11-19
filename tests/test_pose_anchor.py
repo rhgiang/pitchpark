@@ -355,3 +355,18 @@ def test_retime_windup_shortens_keeps_tail_bones_and_seam():
     v = np.linalg.norm(np.diff(o[:, 7], axis=0), axis=1)
     assert v[:new].mean() > 1.05 * np.linalg.norm(np.diff(j[:until, 7], axis=0), axis=1).mean()
     assert abs(v[new - 1] - v[new]) < 0.2 * v[new] + 1e-4                       # seam: no velocity step (C1 join)
+
+
+def test_fix_lead_stance_flips_backward_knee_keeps_bones_and_tail():
+    """SYNTHETIC: a lead knee that starts bent backwards (behind the hip-ankle line) ends up bent forwards; the tail is untouched."""
+    from pitchsim.pose.anchor import fix_lead_stance
+    n, until = 80, 40
+    j = _figure(n)
+    j[:, 2] = [0.0, 0.2, 2.0]; j[:, 1] = [0.0, -0.2, 2.0]; j[:, 5] = [0.0, 0.2, 1.0]; j[:, 8] = [0.0, 0.2, 0.0]
+    j[:, 11] = [-0.3, 0.2, 0.0]                                    # pivot (right) toe points to -x = forward
+    j[:, 4] = [0.4, -0.2, 1.0]; j[:, 7] = [-0.0, -0.2, 0.2]       # lead (left) knee behind (+x), ankle below the hip
+    j[:, 10] = [-0.3, -0.2, 0.2]
+    o = fix_lead_stance(j, until, "R")
+    assert o[0, 4, 0] < j[0, 1, 0] - 0.1                           # knee now forward (-x) of the hip
+    assert np.array_equal(o[until:], j[until:]) and np.array_equal(o[:, [1, 7, 10]], j[:, [1, 7, 10]])
+    assert np.allclose(segment_lengths(o), segment_lengths(j), atol=1e-9)
