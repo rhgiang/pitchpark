@@ -27,7 +27,7 @@ runner, Vite + Three.js. No new dependencies.
 - **Worktree:** `C:\Users\ryanh\Documents\arkitecht-m7`, branch `m7-face-the-pitcher`.
 - **Python:** `PYTHONPATH=src ../arkitecht/.venv/Scripts/python.exe` (the editable install points
   at the main checkout).
-- **Raw data:** `data/raw/` is a directory junction to `../arkitecht/data/raw` (Task 1). Never
+- **Data:** `data/` is a directory junction to `../arkitecht/data` (raw CSVs and `synthetic.csv`; Task 1). Never
   re-download cached data.
 - **Pitchers (slug → MLBAM id):** sale-chris 519242, ohtani-shohei 660271,
   misiorowski-jacob 694819, cease-dylan 656302, yamamoto-yoshinobu 808967, king-michael 650633,
@@ -78,7 +78,7 @@ runner, Vite + Three.js. No new dependencies.
 **Files:**
 - Modify: `results/M2.md` (gitignored folder: commit only if already tracked; check with
   `git ls-files results`)
-- Create: `data/raw` junction (not committed)
+- Create: `data` junction (not committed)
 
 - [ ] **Step 1:** In PowerShell, create the data link:
   `cmd /c mklink /J C:\Users\ryanh\Documents\arkitecht-m7\data\raw C:\Users\ryanh\Documents\arkitecht\data\raw`.
