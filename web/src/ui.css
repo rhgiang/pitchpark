@@ -143,6 +143,8 @@ body.menu .glass { opacity: 0; pointer-events: none; }
 #menu h1 { margin: 0; font-size: clamp(44px, 8vw, 84px); font-weight: 800; letter-spacing: 0.04em;
   text-transform: uppercase; line-height: 1; text-shadow: 0 4px 30px rgba(0, 0, 0, 0.45); }
 #menu h1 span { color: var(--gold); }
+#menu h1 { display: flex; align-items: center; gap: 0.25em; }
+#menu h1 .logo { height: 0.82em; width: auto; border-radius: 0.2em; box-shadow: 0 4px 30px rgba(0, 0, 0, 0.45); }
 #menu .tag { margin: 10px 0 26px; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; opacity: 0.7; }
 #cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; width: 100%; }
 .card { text-align: left; display: flex; flex-direction: column; justify-content: flex-start; /* buttons centre content vertically; keep every card top-aligned */ padding: 14px 16px 15px; background: var(--glass); border: 1px solid var(--edge);
