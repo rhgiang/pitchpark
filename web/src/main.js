@@ -362,7 +362,12 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "KeyA") return dispatch({ type: "pickAtBat", index: "random", seed: randomSeed() });
   if (e.code === "KeyT") return cycleTimeOfDay();
   if (e.code === "KeyP") return togglePicker();
-  if (e.code === "Escape") return togglePicker(false);
+  // Esc backs out one layer: picker, then the help panel, then the start menu.
+  if (e.code === "Escape") {
+    if (!$("picker").hidden) return togglePicker(false);
+    if ($("help").open) return void ($("help").open = false);
+    return $("change").click();
+  }
   if (e.key === "?") return void ($("help").open = !$("help").open);
   if (KEYS[e.code]) {
     e.preventDefault();
