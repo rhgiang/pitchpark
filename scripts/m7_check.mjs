@@ -57,6 +57,7 @@ for (const slug of slugs) {
       // TV distance sim vs real point mix; threshold = real bootstrap's 95th percentile of TV
       const tv = 0.5 * Object.keys(rm).reduce((a, t) => a + Math.abs(m.mix_by_count[c][t] - rm[t]), 0);
       m.mix_tv[c] = tv;
+      // mix_tv rows: real/hi = real-bootstrap TV95 threshold, lo = 0, sim = sim TV (no sim noise; fine at 20k ABs)
       add(stand, `mix_tv@${c}`, { est: rl.mix_tv95[c], lo: 0, hi: rl.mix_tv95[c] }, tv);
     }
     sim[stand] = m;
