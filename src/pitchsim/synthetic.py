@@ -85,6 +85,54 @@ def make(n=1500, seed=0,
     return pd.DataFrame(rows)
 
 
+def synthetic_at_bats(n=3000, seed=0):
+    """SYNTHETIC Statcast-like frame WITH at-bat columns (counts, stand, results, strike zone).
+
+    make() gives the pitch physics only; the M6/M7 models also need game / at-bat / count /
+    description / zone columns. Pitches from make() are walked in game order into at-bats whose
+    counts evolve by the real rules, and whose outcomes follow the plate location (take: called
+    strike in the zone else ball; swing: whiff / foul / foul tip / in play at fixed odds).
+    Not real data: only for tests and web/test/fixtures.
+    """
+    rng = np.random.default_rng(seed + 1)
+    d = make(n, seed).sort_values("game_pk", kind="stable").reset_index(drop=True)
+    d["plate_z"] = d["plate_z"].astype(float)
+    rows, i = [], 0
+    for g, idx in d.groupby("game_pk").indices.items():
+        idx, ab, k = list(idx), 0, 0
+        while True:
+            ab += 1
+            stand, balls, strikes, n_p = rng.choice(["L", "R"]), 0, 0, 0
+            top, bot = 3.5 + rng.normal(0, 0.05), 1.6 + rng.normal(0, 0.05)
+            while True:
+                if k >= len(idx):
+                    break
+                r = d.loc[idx[k]]
+                k += 1
+                n_p += 1
+                inz = abs(r["plate_x"]) < 0.83 and bot < r["plate_z"] < top
+                if rng.random() < 0.5:   # swing
+                    desc = rng.choice(["swinging_strike", "foul_tip", "foul", "hit_into_play"],
+                                      p=[0.25, 0.03, 0.37, 0.35])
+                else:
+                    desc = "called_strike" if inz else "ball"
+                rows.append(dict(r, game_pk=g, at_bat_number=ab, pitch_number=n_p, stand=stand,
+                                 balls=balls, strikes=strikes, description=desc, zone=5,
+                                 sz_top=top, sz_bot=bot, outs_when_up=0, fld_score=0, bat_score=0,
+                                 on_1b=np.nan, on_2b=np.nan, on_3b=np.nan,
+                                 n_thruorder_pitcher=1 + (ab - 1) // 9, pitcher=1,
+                                 p_throws="R", game_year=2026))
+                if desc == "hit_into_play":
+                    break
+                balls += desc == "ball"
+                strikes += desc in ("called_strike", "swinging_strike") or (desc in ("foul", "foul_tip") and strikes < 2)
+                if balls == 4 or strikes == 3:
+                    break
+            if k >= len(idx):
+                break
+    return pd.DataFrame(rows)
+
+
 if __name__ == "__main__":
     out = Path(__file__).resolve().parents[2] / "data"
     out.mkdir(exist_ok=True)
