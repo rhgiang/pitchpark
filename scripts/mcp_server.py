@@ -64,5 +64,22 @@ def generator_check(slug: str, pitch_type: str | None = None) -> list[dict]:
     return T.generator_check(slug, pitch_type)
 
 
+@mcp.tool()
+def sequence_model_check(slug: str) -> dict:
+    """M6 held-out log loss per model (lower is better) and calibration gap for pitchers M6
+    evaluated (Ohtani, Misiorowski, Sale). Others return evaluated=false: untested, not an error."""
+    return T.sequence_model_check(slug)
+
+
+@mcp.tool()
+def next_pitch_probs(slug: str, balls: int, strikes: int, stand: str, prev_type: str = "start",
+                     tto: int = 1, sample: bool = False, seed: int = 0) -> dict:
+    """P(next pitch type) from the M6 logistic+tto model for a count, batter side (L/R), previous
+    pitch type ("start" = first pitch) and times through the order (1-3). sample=true also draws one
+    pitch (seeded). Works for any pitcher with cached Statcast data; check sequence_model_check for
+    whether M6 validated that pitcher."""
+    return T.next_pitch_probs(slug, balls, strikes, stand, prev_type, tto, sample, seed)
+
+
 if __name__ == "__main__":
     mcp.run()

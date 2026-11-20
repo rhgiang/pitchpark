@@ -84,3 +84,23 @@ def test_generator_check_filters_and_rejects_bad_input(tmp_path):
         T.generator_check("nobody", None, tmp_path)
     with pytest.raises(ValueError):
         T.generator_check("../x", None, tmp_path)
+
+
+def test_sequence_model_check_matches_surname_and_flags_unevaluated(tmp_path):
+    f = tmp_path / "s.json"
+    f.write_text('{"Sale": {"n_pitches": 10}}')
+    assert T.sequence_model_check("sale-chris", f) == {"evaluated": True, "n_pitches": 10}
+    assert T.sequence_model_check("king-michael", f)["evaluated"] is False   # not an error
+
+
+def test_next_pitch_probs_validates_before_fitting():
+    with pytest.raises(ValueError):
+        T.next_pitch_probs("sale-chris", 4, 0, "R")       # 4 balls
+    with pytest.raises(ValueError):
+        T.next_pitch_probs("../x", 0, 0, "R")             # bad slug
+
+
+def test_next_pitch_probs_sums_to_one_and_samples_reproducibly():
+    r = T.next_pitch_probs("sale-chris", 0, 2, "R", "FF", 2, sample=True, seed=3)
+    assert abs(sum(r["probs"].values()) - 1) < 0.01 and r["sampled"] in r["probs"]
+    assert r["sampled"] == T.next_pitch_probs("sale-chris", 0, 2, "R", "FF", 2, sample=True, seed=3)["sampled"]

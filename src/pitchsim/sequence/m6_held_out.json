@@ -1,0 +1,41 @@
+{
+ "Ohtani": {
+  "n_pitches": 2088,
+  "folds": 5,
+  "held_out_log_loss": {
+   "mix": 1.553,
+   "count": 1.509,
+   "logistic": 1.425,
+   "logistic_plus_tto": 1.418,
+   "boosted": 1.433,
+   "transformer": 1.421
+  },
+  "logistic_max_calibration_gap": 0.071
+ },
+ "Misiorowski": {
+  "n_pitches": 3811,
+  "folds": 5,
+  "held_out_log_loss": {
+   "mix": 1.159,
+   "count": 1.121,
+   "logistic": 1.071,
+   "logistic_plus_tto": 1.066,
+   "boosted": 1.064,
+   "transformer": 1.07
+  },
+  "logistic_max_calibration_gap": 0.028
+ },
+ "Sale": {
+  "n_pitches": 2574,
+  "folds": 5,
+  "held_out_log_loss": {
+   "mix": 1.178,
+   "count": 1.133,
+   "logistic": 1.002,
+   "logistic_plus_tto": 0.996,
+   "boosted": 0.99,
+   "transformer": 1.003
+  },
+  "logistic_max_calibration_gap": 0.022
+ }
+}
