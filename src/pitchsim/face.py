@@ -49,6 +49,9 @@ def aim_velocity(rel_pos_ft, speed_fps: float, spin_rpm: float, axis_deg: float,
         return [(x - tx) * 12, (z - tz) * 12]       # inches
 
     sol = least_squares(miss, guess, xtol=1e-12, ftol=1e-12, gtol=1e-12, diff_step=1e-6)
+    err = float(np.hypot(*miss(sol.x)))
+    if err > 0.01:      # never let a non-converged pitch into the bank
+        raise ValueError(f"aim_velocity did not converge: plate miss {err:.4f} in (> 0.01 in)")
     return _direction(sol.x[0], sol.x[1], speed_fps)
 
 
@@ -63,6 +66,8 @@ def reaim_knots(sim: dict, dx_ft: float, dz_ft: float) -> dict:
     """
     rows = [list(r) for r in sim["s"]]
     y0, y1 = rows[0][1], rows[-1][1]
+    if y0 == y1:
+        raise ValueError("reaim_knots needs knots spanning a distance in y (y0 == y_end)")
     out = []
     for x, y, z, vx, vy, vz in rows:
         u = (y0 - y) / (y0 - y1)
