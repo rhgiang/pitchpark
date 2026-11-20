@@ -81,7 +81,7 @@ runner, Vite + Three.js. No new dependencies.
 - Create: `data` junction (not committed)
 
 - [ ] **Step 1:** In PowerShell, create the data link:
-  `cmd /c mklink /J C:\Users\ryanh\Documents\arkitecht-m7\data\raw C:\Users\ryanh\Documents\arkitecht\data\raw`.
+  `cmd /c mklink /J C:\Users\ryanh\Documents\arkitecht-m7\data C:\Users\ryanh\Documents\arkitecht\data`.
   Check that `ls data/raw` lists the 8 pitchers' CSVs.
 - [ ] **Step 2:** Run M2 for each new pitcher on his newest season:
   `PYTHONPATH=src ../arkitecht/.venv/Scripts/python.exe scripts/train_generative.py data/raw/<id>_2026-03-01_2026-11-30.csv`.
