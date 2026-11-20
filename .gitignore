@@ -1,11 +1,11 @@
 data/
+!web/public/data/
 results/*
 !results/*.md
 *.zip
 __pycache__/
 .venv/
 *.egg-info/
-web/public/data/
 web/node_modules/
 web/dist/
 .superpowers/
@@ -15,3 +15,6 @@ web/.vite/
 
 # reference models downloaded for building our own (not ours to commit)
 ref/
+# Compare-page data names the research clips: kept local, never shipped (compare.html is dev-only).
+web/public/data/deliveries/*.clips.json
+web/public/data/deliveries/*.compare.json

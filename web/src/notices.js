@@ -124,6 +124,13 @@ export const offerLite = (onUse) => showCard({
   buttons: [{ label: "Use lighter graphics", big: true, onClick: onUse }, { label: "Keep" }],
 });
 
+/** F2: the viewer switched itself to lighter graphics (health.js makeAutoLite); say so and how to undo it. */
+export const autoLiteNote = (onBack) => showCard({
+  pos: "corner", modal: false, dismissible: true,
+  title: "Switched to lighter graphics", text: "This device was running slow. Switch back any time in the ? panel.",
+  buttons: [{ label: "Switch back", onClick: onBack }, { label: "OK", big: true }],
+});
+
 /** H: a one-time note on phones (remembered; shown once even if never dismissed). */
 export function phoneNote(storage) {
   const coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;

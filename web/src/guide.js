@@ -13,7 +13,7 @@ export const TOUR_STEPS = [
     html: "Speeds 1×, ¼×, ⅒× to watch the release and the break. Keys <kbd>Z</kbd> <kbd>X</kbd> <kbd>C</kbd>." },
   { id: "compare", target: "#help", title: "Compare to video",
     html: "The compare page lines the 3D delivery up with the real broadcast pose. Open this <b>?</b> panel for the link; it needs a clip from your own disk." },
-];
+].filter((s) => !(import.meta.env?.PROD && s.id === "compare")); // the public build has no compare page
 
 /** Storage that may be missing or throw (private window, blocked site data). */
 const defaultStorage = () => { try { return globalThis.localStorage ?? null; } catch { return null; } };

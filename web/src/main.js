@@ -25,13 +25,13 @@ import { loadOrAsk, openHow, startTour, toast, kbd } from "./guide-ui.js";
 import { shouldAutoTour, tourSeen } from "./guide.js";
 import { menuPick } from "./menu-ui.js";
 import { frameSlot, shouldDraw, pixelRatio } from "./pacing.js";
-import { makeSlowDetector, getFlag, setFlag, LITE_KEY, slugInIndex } from "./health.js";
-import { loadIndexOrAsk, askNotInPark, watchContext, offerLite, phoneNote } from "./notices.js";
+import { makeSlowDetector, makeAutoLite, getFlag, setFlag, LITE_KEY, LITE_CHOICE_KEY, slugInIndex } from "./health.js";
+import { loadIndexOrAsk, askNotInPark, watchContext, offerLite, autoLiteNote, phoneNote } from "./notices.js";
 import { debugHas } from "./debug.js";
 
 // No MSAA: the composer renders to its own targets, and SMAA (look.js) anti-aliases instead.
 const renderer = new THREE.WebGLRenderer({ antialias: false });
-let lite = getFlag(LITE_KEY); // lighter graphics (look.setLite): saved across visits
+let lite = getFlag(LITE_KEY) || debugHas("lite"); // lighter graphics (look.setLite): saved across visits
 renderer.setPixelRatio(pixelRatio(window.devicePixelRatio, lite)); // capped: see pacing.js
 document.body.appendChild(renderer.domElement);
 // GPU reset: no drawing while the context is gone; redraw everything when it is back (see notices.watchContext).
@@ -228,9 +228,10 @@ if (debugHas("contextloss") || debugHas("contextloss-stuck")) {
 }
 
 /** Lighter graphics on/off: pixel ratio 1, no shadows or bloom (look.setLite). Saved; the ? panel button shows it. */
-function setLite(on, announce = true) {
+function setLite(on, announce = true, auto = false) {
   lite = on;
-  setFlag(LITE_KEY, on);
+  if (!auto) { setFlag(LITE_KEY, on); setFlag(LITE_CHOICE_KEY, true); } // auto: this visit only, and not a user choice
+
   look.setLite(on);
   resize();
   $("lite-btn").classList.toggle("on", on);
@@ -239,6 +240,7 @@ function setLite(on, announce = true) {
 }
 
 const $ = (id) => document.getElementById(id);
+if (import.meta.env.PROD) $("compare-link")?.remove(); // compare.html is dev-only (vite.config.js)
 let state = initialState();
 let shown = { ab: null, pitch: null }; // what the camera and zone are set up for
 
@@ -287,7 +289,7 @@ async function pickPitcher(slug) {
       o.skeleton?.dispose(); // bone texture
     });
   }
-  if (delivery) $("compare-link").href = `/compare.html?slug=${slug}`;
+  if (delivery && $("compare-link")) $("compare-link").href = `/compare.html?slug=${slug}`;
   api = pitcherApi(slug);
   figure = api.makePitcher(data.pitcher.throws, data.pitcher.height_in ?? 75, delivery && boneLengths(delivery)); // his height and bone lengths
   posedAt = null; // new figure is in makePitcher's static pose: the poseFigure memo must not skip it (same t|ab|pitch after a round trip)
@@ -383,7 +385,7 @@ for (const v of VIEWS) $(`view-${v}`).onclick = () => dispatch({ type: "setView"
 for (const v of SPEEDS) $(`speed-${v}`).onclick = () => dispatch({ type: "setSpeed", speed: v });
 $("tod").onclick = cycleTimeOfDay;
 $("how-btn").onclick = openHow;
-$("lite-btn").onclick = () => setLite(!lite);
+$("lite-btn").onclick = () => { slowAsked = true; setLite(!lite); }
 $("lite-btn").classList.toggle("on", lite);
 $("lite-btn").setAttribute("aria-pressed", String(lite));
 $("how-link").onclick = openHow;
@@ -527,9 +529,12 @@ function poseFigure(p) {
 // Slow-device check: only frames of active playback count (a pitch flying or the intro sweep, tab visible);
 // pacing.js idles a still picture at 20 fps on purpose. Asked once per visit, and never when already light.
 const slowWatch = makeSlowDetector();
+// Automatic fallback: median frame time over the first 3 s of playback; never overrides a saved choice (health.js).
+const autoLite = makeAutoLite(() => ({ lite, userChose: getFlag(LITE_CHOICE_KEY) }));
 let slowAsked = lite;
 function watchSpeed(now) {
   const active = !menuOpen && !document.hidden && (state.playing || (intro && !intro.frozen));
+  if (autoLite.frame(now, active)) { slowAsked = true; setLite(true, false, true); autoLiteNote(() => setLite(false)); }
   const slow = slowWatch.frame(now, active) || (debugHas("slow") && active); // ?debug=slow (dev): ask at the first pitch
   if (slow && !slowAsked) { slowAsked = true; offerLite(() => setLite(true)); }
 }
