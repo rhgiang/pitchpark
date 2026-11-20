@@ -19,7 +19,8 @@ from pitchsim.sequence.location import LocationModel
 from pitchsim.statcast import fit_plate_crossing
 from pitchsim.validation import game_folds, split_by_game
 
-PITCHERS = {"Ohtani": 660271, "Misiorowski": 694819, "Sale": 519242}
+PITCHERS = {"Ohtani": 660271, "Misiorowski": 694819, "Sale": 519242, "Cease": 656302, "Yamamoto": 808967,
+            "King": 650633, "Sanchez": 650911, "Schlittler": 693645}
 GRID = [1, 3, 10, 30, 100, 300]
 MIN_TRAIN = 30   # pitches of one type in a fold's training games
 K, SEED = 5, 0

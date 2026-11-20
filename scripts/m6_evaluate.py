@@ -23,7 +23,8 @@ from pitchsim.sequence.context import add_context
 from pitchsim.sequence.logistic import FEATURES, BoostedSeq, LogisticSeq
 from pitchsim.validation import game_folds, split_by_game
 
-PITCHERS = {"Ohtani": 660271, "Misiorowski": 694819, "Sale": 519242}
+PITCHERS = {"Ohtani": 660271, "Misiorowski": 694819, "Sale": 519242, "Cease": 656302, "Yamamoto": 808967,
+            "King": 650633, "Sanchez": 650911, "Schlittler": 693645}
 # model name -> (class, hyperparameter grid)
 MODELS = {"count": (lambda t, h: CountBaseline(t, a=h), [0.3, 1, 3, 10, 30, 100]),
           "logistic": (lambda t, h: LogisticSeq(t, C=h), [0.01, 0.03, 0.1, 0.3, 1, 3])}

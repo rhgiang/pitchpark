@@ -27,7 +27,8 @@ out = {}
 for name, g in folds.groupby("pitcher", sort=False):
     ll = {m: wmean(g, f"logloss_{m}") for m in
           ["mix", "count", "logistic", "logistic_plus_tto", "boosted"]}
-    ll["transformer"] = wmean(tf[tf["pitcher"] == name], "transformer")
+    t = tf[tf["pitcher"] == name]   # transformer covers the original three only
+    ll["transformer"] = wmean(t, "transformer") if len(t) else None
     r = rel[(rel["pitcher"] == name) & (rel["model"] == "logistic") & (rel["n"] >= 100)]
     out[name] = {"n_pitches": int(g["test_pitches"].sum()), "folds": len(g),
                  "held_out_log_loss": ll,
