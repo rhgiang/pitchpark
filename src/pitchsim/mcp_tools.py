@@ -6,14 +6,17 @@ same one the viewer shows. Each function takes the loaded JSON dict, so it is te
 """
 from __future__ import annotations
 
+import functools
 import json
 import re
+import unicodedata
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "web" / "public" / "data"
+M6_SUMMARY = Path(__file__).resolve().parent / "sequence" / "m6_held_out.json"   # tracked copy of M6 numbers
 M2_DIR = Path(__file__).resolve().parents[2] / "results" / "m2"   # gitignored: needs train_generative.py run locally
 
 
@@ -147,3 +150,70 @@ def generator_check(slug: str, pitch_type: str | None = None, m2_dir: Path = M2_
     if pitch_type:
         df = df[df["pitch_type"] == pitch_type]
     return json.loads(df.to_json(orient="records"))   # NaN -> null
+
+
+def sequence_model_check(slug: str, summary: Path = M6_SUMMARY) -> dict:
+    """M6 held-out log loss per model (mix, count, logistic, logistic+tto, boosted, transformer;
+    lower is better, 5 game folds) and the largest calibration gap, for pitchers M6 evaluated.
+    Others get evaluated=False, not an error: next_pitch_probs still works for them."""
+    data = json.loads(summary.read_text(encoding="utf-8"))
+    name = next((k for k in data if slug.startswith(_slugify(k) + "-")), None)   # keys are surnames
+    if name is None:
+        return {"evaluated": False, "message": f"M6 did not evaluate {slug!r}; its probabilities are untested"}
+    return {"evaluated": True, **data[name]}
+
+
+def _slugify(name: str) -> str:
+    plain = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "-", plain.lower()).strip("-")
+
+
+RAW_DIR = Path(__file__).resolve().parents[2] / "data" / "raw"
+_C_GRID = [0.01, 0.03, 0.1, 0.3, 1, 3]   # same grid M6 tunes over
+
+
+@functools.lru_cache(maxsize=8)
+def _fit_logistic_tto(slug: str, raw_dir: Path = RAW_DIR):
+    """Logistic+tto fit on ALL of this pitcher's cached games, with C tuned on a 30% game slice
+    (as M6 does per fold). Returns (model, types, prev_types). Needs data/raw/*.csv (gitignored)."""
+    from pitchsim.data import load_seasons
+    from pitchsim.sequence.baseline import log_loss
+    from pitchsim.sequence.context import add_context
+    from pitchsim.sequence.logistic import FEATURES, LogisticSeq
+    from pitchsim.validation import split_by_game
+
+    files = [f for f in sorted(raw_dir.glob("*.csv"))
+             if f.stem[0].isdigit() and _slugify(str(pd.read_csv(f, nrows=1)["player_name"].iloc[0])) == slug]
+    if not files:
+        raise FileNotFoundError(f"no raw Statcast CSV for {slug!r} in data/raw/")
+    df = add_context(load_seasons(files)).dropna(subset=["pitch_type"])   # after add_context: untyped pitches break chains
+    if len(df) < 300:
+        raise ValueError(f"only {len(df)} pitches for {slug!r}; too few to fit")
+    types = sorted(df["pitch_type"].unique())
+    feats = FEATURES + ["tto"]
+    fit, val = split_by_game(df, seed=0)
+    y = val["pitch_type"].map({t: i for i, t in enumerate(types)}).to_numpy()
+    c = min(_C_GRID, key=lambda c: log_loss(LogisticSeq(types, C=c, features=feats).fit(fit).predict(val), y))
+    return LogisticSeq(types, C=c, features=feats).fit(df), types, set(df["prev_type"])
+
+
+def next_pitch_probs(slug: str, balls: int, strikes: int, stand: str, prev_type: str = "start",
+                     tto: int = 1, sample: bool = False, seed: int = 0) -> dict:
+    """P(next pitch type) from M6's logistic+tto model, fit on all this pitcher's cached games.
+    prev_type: a pitch code from the pitcher's arsenal, "start" (first pitch) or "unknown". tto: times
+    through the order (3 = third or later). With sample=True also draws one type (seeded)."""
+    if not re.fullmatch(r"[a-z0-9-]+", slug):
+        raise ValueError(f"bad slug {slug!r}; use a slug from list_pitchers")
+    if balls not in range(4) or strikes not in range(3) or stand not in ("L", "R") or tto not in (1, 2, 3):
+        raise ValueError("need balls 0-3, strikes 0-2, stand L or R, tto 1-3")
+    model, types, prevs = _fit_logistic_tto(slug)
+    if prev_type not in prevs:
+        raise ValueError(f"prev_type {prev_type!r} not in {sorted(prevs)}")
+    row = pd.DataFrame({"count": [f"{balls}-{strikes}"], "stand": [stand],
+                        "prev_type": [prev_type], "tto": [str(min(tto, 3))]})
+    p = model.predict(row)[0]
+    out = {"probs": {t: round(float(x), 3) for t, x in sorted(zip(types, p), key=lambda tx: -tx[1])},
+           "model": "logistic+tto, fit on all cached games (not scored on held-out games; see sequence_model_check)"}
+    if sample:
+        out["sampled"] = model.sample(row, np.random.default_rng(seed))[0]
+    return out
