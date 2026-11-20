@@ -6,9 +6,11 @@ same one the viewer shows. Each function takes the loaded JSON dict, so it is te
 """
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import re
+import sys
 import unicodedata
 from pathlib import Path
 
@@ -172,6 +174,15 @@ RAW_DIR = Path(__file__).resolve().parents[2] / "data" / "raw"
 _C_GRID = [0.01, 0.03, 0.1, 0.3, 1, 3]   # same grid M6 tunes over
 
 
+def _raw_files(slug: str, raw_dir: Path = RAW_DIR) -> list[Path]:
+    """This pitcher's season CSVs in data/raw/ (matched by the slug of player_name)."""
+    files = [f for f in sorted(raw_dir.glob("*.csv"))
+             if f.stem[0].isdigit() and _slugify(str(pd.read_csv(f, nrows=1)["player_name"].iloc[0])) == slug]
+    if not files:
+        raise FileNotFoundError(f"no raw Statcast CSV for {slug!r} in data/raw/")
+    return files
+
+
 @functools.lru_cache(maxsize=8)
 def _fit_logistic_tto(slug: str, raw_dir: Path = RAW_DIR):
     """Logistic+tto fit on ALL of this pitcher's cached games, with C tuned on a 30% game slice
@@ -182,10 +193,7 @@ def _fit_logistic_tto(slug: str, raw_dir: Path = RAW_DIR):
     from pitchsim.sequence.logistic import FEATURES, LogisticSeq
     from pitchsim.validation import split_by_game
 
-    files = [f for f in sorted(raw_dir.glob("*.csv"))
-             if f.stem[0].isdigit() and _slugify(str(pd.read_csv(f, nrows=1)["player_name"].iloc[0])) == slug]
-    if not files:
-        raise FileNotFoundError(f"no raw Statcast CSV for {slug!r} in data/raw/")
+    files = _raw_files(slug, raw_dir)
     df = add_context(load_seasons(files)).dropna(subset=["pitch_type"])   # after add_context: untyped pitches break chains
     if len(df) < 300:
         raise ValueError(f"only {len(df)} pitches for {slug!r}; too few to fit")
@@ -217,3 +225,63 @@ def next_pitch_probs(slug: str, balls: int, strikes: int, stand: str, prev_type:
     if sample:
         out["sampled"] = model.sample(row, np.random.default_rng(seed))[0]
     return out
+
+
+@functools.lru_cache(maxsize=4)
+def _fit_arm(slug: str, raw_dir: Path = RAW_DIR):
+    """M2 arm + M1/M3 flight per pitch type, fitted on the training games of the pitcher's latest
+    season, as train_generative.py / export.py do (so samples come from the models M2 scored).
+    Returns {pitch_type: (arm, TypeFit, median training air density)}. Needs data/raw/ and a
+    cached game_conditions.csv (no network)."""
+    from pitchsim.data import add_air_density, load_seasons
+    from pitchsim.generative import fit_pitch_type
+    from pitchsim.seam import fit_pitch_types
+    from pitchsim.statcast import clean
+
+    raw = load_seasons(_raw_files(slug, raw_dir))
+    if "game_year" in raw:
+        raw = raw[raw["game_year"] == raw["game_year"].max()]   # the arm is modelled per season
+    df = clean(raw.reset_index(drop=True))
+    cond = raw_dir / "game_conditions.csv"
+    have = set(pd.read_csv(cond)["game_pk"]) if cond.exists() else set()
+    if not set(df["game_pk"]) <= have:
+        raise RuntimeError("game_conditions.csv lacks some games; run scripts/export_viewer.py once to cache them")
+    with contextlib.redirect_stdout(sys.stderr):   # add_air_density prints; stdout is the MCP channel
+        rho = add_air_density(df, pd.read_csv(cond))["rho"]
+        train, _, fits, _ = fit_pitch_types(df, rho)
+    return {t: (fit_pitch_type(train[train["pitch_type"] == t], mixture=True), f,
+                float(train.loc[train["pitch_type"] == t, "rho"].median()))
+            for t, f in fits.items()}
+
+
+def sample_pitches(slug: str, pitch_type: str, n: int = 100, seed: int = 0) -> dict:
+    """SYNTHETIC pitches: draw n releases from the M2 arm for one pitch type, fly them with M1 + the
+    M3 push, and summarise where they cross the front of the plate. Not real data. Air density is
+    the median of the training games. generator_check says how far to trust this pitch type."""
+    from pitchsim.generative import generated_release_state, sample
+    from pitchsim.physics import simulate_batch
+    from pitchsim.seam import predict_push
+    from pitchsim.tunneling import approach_angles_deg, perceived_velocity_mph
+
+    if not re.fullmatch(r"[a-z0-9-]+", slug):
+        raise ValueError(f"bad slug {slug!r}; use a slug from list_pitchers")
+    if not 1 <= n <= 1000:
+        raise ValueError("n must be 1-1000")
+    arm = _fit_arm(slug)
+    if pitch_type not in arm:
+        raise ValueError(f"{pitch_type!r} not fitted for {slug!r}; available: {sorted(arm)}")
+    model, fit, rho = arm[pitch_type]
+    gen = sample(model, n, seed)
+    pos, vel = generated_release_state(gen)
+    plate, v_plate, _ = simulate_batch(pos, vel, gen["release_spin_rate"].to_numpy(),
+                                       gen["spin_axis"].to_numpy(), fit.cd, fit.eff, rho=rho,
+                                       extra_acc=predict_push(fit.per, gen))
+    vaa, haa = approach_angles_deg(v_plate)
+    d = pd.DataFrame({"plate_x_in": plate[:, 0] * 12, "plate_z_in": plate[:, 2] * 12,
+                      "speed_mph": gen["release_speed"], "spin_rpm": gen["release_spin_rate"],
+                      "vaa_deg": vaa, "haa_deg": haa,
+                      "perceived_mph": perceived_velocity_mph(gen["release_speed"], gen["release_extension"])})
+    stats = {c: {"median": round(float(d[c].median()), 2), "sd": round(float(d[c].std()), 2)} for c in d}
+    return {"synthetic": True, "pitch_type": pitch_type, "n": n, "seed": seed,
+            "model": f"M2 arm ({model.gmm.n_components}-component) + M1 + M3, fit on training games",
+            "summary": stats, "first_10": json.loads(d.head(10).round(2).to_json(orient="records"))}

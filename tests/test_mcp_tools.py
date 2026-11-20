@@ -105,3 +105,26 @@ def test_next_pitch_probs_sums_to_one_and_samples_reproducibly():
     r = T.next_pitch_probs("sale-chris", 0, 2, "R", "FF", 2, sample=True, seed=3)
     assert abs(sum(r["probs"].values()) - 1) < 0.01 and r["sampled"] in r["probs"]
     assert r["sampled"] == T.next_pitch_probs("sale-chris", 0, 2, "R", "FF", 2, sample=True, seed=3)["sampled"]
+
+
+def test_sample_pitches_validates_before_fitting():
+    with pytest.raises(ValueError):
+        T.sample_pitches("../x", "FF")
+    with pytest.raises(ValueError):
+        T.sample_pitches("sale-chris", "FF", n=0)
+
+
+@pytest.mark.skipif(not list(T.RAW_DIR.glob("519242_*.csv")), reason="needs Sale's CSV in data/raw/ (gitignored)")
+def test_sample_pitches_is_labelled_synthetic_and_reproducible():
+    r = T.sample_pitches("sale-chris", "FF", n=200, seed=1)
+    assert r["synthetic"] is True and r["n"] == 200
+    assert 93 < r["summary"]["speed_mph"]["median"] < 99          # Sale's fastball, plausibly
+    assert -6 < r["summary"]["vaa_deg"]["median"] < -3
+    assert r == T.sample_pitches("sale-chris", "FF", n=200, seed=1)
+
+
+@pytest.mark.skipif(not list(T.RAW_DIR.glob("519242_*.csv")), reason="needs Sale's CSV in data/raw/ (gitignored)")
+def test_fit_arm_writes_nothing_to_stdout(capfd):
+    T._fit_arm.cache_clear()
+    T._fit_arm("sale-chris")
+    assert capfd.readouterr().out == ""      # stdout is the MCP protocol channel

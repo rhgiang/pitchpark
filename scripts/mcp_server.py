@@ -81,5 +81,14 @@ def next_pitch_probs(slug: str, balls: int, strikes: int, stand: str, prev_type:
     return T.next_pitch_probs(slug, balls, strikes, stand, prev_type, tto, sample, seed)
 
 
+@mcp.tool()
+def sample_pitches(slug: str, pitch_type: str, n: int = 100, seed: int = 0) -> dict:
+    """SYNTHETIC pitches, not real data: draws n releases from the M2 arm for one pitch type, flies
+    them with M1 + M3, returns plate position (in, x right / z up), speed, spin, approach angles and
+    perceived speed as median/sd, plus 10 example pitches. Check generator_check first for how far
+    to trust that pitch type. Slow the first time per pitcher (fits on call)."""
+    return T.sample_pitches(slug, pitch_type, n, seed)
+
+
 if __name__ == "__main__":
     mcp.run()
