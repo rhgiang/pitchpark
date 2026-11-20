@@ -100,6 +100,7 @@ def test_next_pitch_probs_validates_before_fitting():
         T.next_pitch_probs("../x", 0, 0, "R")             # bad slug
 
 
+@pytest.mark.skipif(not list(T.RAW_DIR.glob("519242_*.csv")), reason="needs Sale's CSV in data/raw/ (gitignored)")
 def test_next_pitch_probs_sums_to_one_and_samples_reproducibly():
     r = T.next_pitch_probs("sale-chris", 0, 2, "R", "FF", 2, sample=True, seed=3)
     assert abs(sum(r["probs"].values()) - 1) < 0.01 and r["sampled"] in r["probs"]
