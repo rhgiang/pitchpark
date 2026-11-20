@@ -240,6 +240,7 @@ function setLite(on, announce = true, auto = false) {
 }
 
 const $ = (id) => document.getElementById(id);
+if (import.meta.env.PROD) $("compare-link")?.remove(); // compare.html is dev-only (vite.config.js)
 let state = initialState();
 let shown = { ab: null, pitch: null }; // what the camera and zone are set up for
 
@@ -288,7 +289,7 @@ async function pickPitcher(slug) {
       o.skeleton?.dispose(); // bone texture
     });
   }
-  if (delivery) $("compare-link").href = `/compare.html?slug=${slug}`;
+  if (delivery && $("compare-link")) $("compare-link").href = `/compare.html?slug=${slug}`;
   api = pitcherApi(slug);
   figure = api.makePitcher(data.pitcher.throws, data.pitcher.height_in ?? 75, delivery && boneLengths(delivery)); // his height and bone lengths
   posedAt = null; // new figure is in makePitcher's static pose: the poseFigure memo must not skip it (same t|ab|pitch after a round trip)
