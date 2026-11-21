@@ -19,6 +19,7 @@ import { renderHud, buildStrip } from "./hud.js";
 import { boneLengths } from "./pitcher.js";
 import { pitcherApi } from "./signed_off/index.js"; // Ohtani keeps his signed-off pose code
 import { loadHandModels } from "./handModels.js";
+import { showOpenHand } from "./figure.js";
 import { buildPark } from "./park/index.js";
 import { initLook, setTimeOfDay, refreshShadows, inkProof, timeOfDay, TIMES } from "./look.js";
 import { showMenu, displayName, faceFromUrl } from "./menu.js";
@@ -653,6 +654,7 @@ function poseFigure(p) {
   posedAt = key;
   const release = p.release?.every(Number.isFinite) ? p.release : null;
   api.poseAtTime(figure, state.delivery, state.t, release, p.arm_angle_deg ?? figure.userData.armAngleDeg);
+  showOpenHand(figure, state.t >= 0); // the ball leaves the hand at release (t = 0): the hand opens
   refreshShadows();
 }
 

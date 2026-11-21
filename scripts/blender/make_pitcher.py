@@ -70,6 +70,7 @@ BODY_TRIS = 9000     # triangle budget
 SHOE_Y = 0.42        # cleats below
 SOCK_Y = 1.38        # navy socks below, knicker pants above
 BELT = (3.44, 3.58)  # navy belt
+BELT_LOOPS = dict(front=(0.23, 0.28), back=(0.17, 0.21))  # |x| of the white belt loops (reference texture)
 TRIM_X = (1.21, 1.29)  # sleeve trim |x|; skin (forearm) beyond
 NECK_Y = 5.02        # skin above (front of the collar; the back sits a little higher)
 HAIR_Y = 5.76        # hairline height at the sides (just behind the face)
@@ -77,6 +78,47 @@ NAPE = (-0.3, 5.45)  # hairline at the back: (z relative to the head's centre, y
 FACE_Z = 0.12        # face: in front of this (relative to the head's centre) stays skin
 HEAD_Y = 5.35       # all skin above this (ears), outside the hair
 NECK_HALF = 0.3      # |x| of the neck opening (the shoulders either side stay jersey)
+# Slimming (Ryan: the reference's torso and neck read too beefy, and out of proportion). Measured on
+# the fitted body: chest ~0.9 ft deep (an athlete in a jersey ~0.75), neck base ~0.7 x 0.6 ft (a real
+# neck ~0.4 x 0.4), and hips/seat 1.2 x 0.87 ft, wider and deeper than the chest (pear-shaped; an
+# athlete's hips are about as wide as his chest, the shoulders wider).
+SLIM = dict(
+    torso=(1.0, 0.84),    # x (width) and z (depth) scale of the trunk, belt to shoulders
+    hips=(0.88, 0.86),    # the same for the seat and hips
+    hips_y=(2.7, 2.95, 3.35, 3.6),
+    torso_y=(3.55, 3.85, 4.85, 5.1),  # ramps in over the first two heights, out over the last two
+    neck=0.72,            # x/z scale of the neck and the trapezius slope round it
+    neck_y=(4.95, 5.15, 5.3, 5.45),
+    neck_r=(0.3, 0.5),    # |x| from the centre: full neck slimming inside, none outside (the shoulders)
+    arm_x=(0.45, 0.72),   # |x|: trunk slimming fades out here, so the arms (T-pose) keep their shape
+    trap=0.14,            # ft the ring round the neck (chest top, trapezius, upper back) is lowered: the
+                          # reference's chest rose to the chin, hiding the neck in front
+    trap_y=(4.75, 4.95, 5.15, 5.25),  # heights it applies to (stops below the jaw)
+    trap_x=(0.16, 0.26, 0.42, 0.62),  # distance from the neck's axis: ramps in off the neck, out by the shoulders
+)
+# Reshaping (Ryan, after slimming: the torso still had parts "weirdly protruding" and no real neck).
+# The reference's trunk surface is lumpy (image-to-3D), and scaling keeps the lumps. So below the
+# armpits each horizontal slice is moved onto a clean cross-section with a designed taper, the area
+# round the shoulders is smoothed, and the neck becomes a clean oval column.
+TRUNK = dict(
+    # (height, half-width, half-depth) ft: waist ~1.0 x 0.68, chest ~1.18 x 0.77, widening to the armpits
+    # (Ryan, next round: "very bulky": chest/back narrowed ~6%, shoulders slimmed below.)
+    profile=[(3.45, 0.49, 0.34), (3.8, 0.48, 0.33), (4.15, 0.51, 0.345), (4.5, 0.55, 0.365), (4.8, 0.58, 0.355)],
+    power=2.6,            # superellipse exponent: 2 an ellipse, higher boxier (a torso is a rounded box)
+    y=(3.38, 3.52, 4.72, 4.95),   # reshaped fully between the middle two heights, ramps outside them
+    smooth_y=(4.6, 5.25),         # then smoothed between these heights (chest, shoulders, upper back)
+    smooth_x=0.75,                # ... inside this |x| (not the arms)
+    smooth_iters=15,
+)
+SHOULDERS = dict(x=0.92, y=(4.55, 4.8, 5.6, 5.7), fade_x=(0.75, 1.0))  # x scale above the chest; fades out along the arm
+# Forearms: the reference's curves forward (palm forward), so at the wrist cut it sat ~0.2 ft in front of the
+# wrist joint, where the hand models attach: the hands looked detached. Each slice is moved onto the elbow-wrist
+# line and the end tapered to the hand's wrist (grip/open stubs ~0.14 x 0.19 ft; a little wider so they tuck in).
+FOREARM = dict(x=(1.72, 1.9),       # |x|: the tube takes over between these (just past the elbow joint at 1.67)
+               elbow=(0.12, 0.125),  # half-size (y up, z forward) just below the elbow, ft
+               wrist=(0.075, 0.1),   # at the wrist cut: the hand models' wrist (grip/open stubs ~0.14 x 0.19)
+               smooth=8)             # smoothing passes where the tube meets the elbow
+NECK = dict(r=(0.2, 0.185), y=(4.88, 5.0, 5.24, 5.32), reach=0.34)  # oval half-axes; band; |dist| from its axis
 ARM_CUT = 2.52       # |x| of the wrist joints (skeleton.js): the hand models (grip.glb, mitt.glb) start here
 
 
@@ -161,7 +203,8 @@ def region(c, head):
     if c.y > NECK_Y + (0.12 if c.z < head.z else 0) and (ax < NECK_HALF or c.y > HEAD_Y):
         return "skin"
     if BELT[0] < c.y < BELT[1]:
-        return "navy"
+        lo, hi = BELT_LOOPS["front" if c.z > 0.05 else "back"]
+        return "pants" if lo < ax < hi else "navy"
     return "pants" if c.y < BELT[0] else "jersey"
 
 
@@ -190,6 +233,12 @@ def split_at_boundaries(ob, head):
     for co, no in cuts:
         geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
         bmesh.ops.bisect_plane(bm, geom=geom, plane_co=bl(co), plane_no=bl(no))
+    # Belt loop edges: vertical cuts through the belt only (through everything they cost ~4k triangles).
+    for x in (*BELT_LOOPS["front"], *BELT_LOOPS["back"]):
+        for sx in (1, -1):
+            faces = [f for f in bm.faces if BELT[0] - 0.05 < vw(f.calc_center_median()).y < BELT[1] + 0.05]
+            geom = list({e for f in faces for e in f.edges}) + list({v for f in faces for v in f.verts}) + faces
+            bmesh.ops.bisect_plane(bm, geom=geom, plane_co=bl(V(sx * x, 0, 0)), plane_no=bl(V(1, 0, 0)))
     bmesh.ops.triangulate(bm, faces=bm.faces)
     bm.to_mesh(ob.data)
     bm.free()
@@ -244,6 +293,151 @@ def fit(ob, src):
         w = [1 / (d ** 4 + 1e-6) for d, _ in near[:2]]
         move = sum((d * wi for (_, d), wi in zip(near[:2], w)), Vector()) / sum(w)
         v.co = bl(p + move)
+
+
+def slim(ob):
+    """Scale the trunk and neck toward the body's centre line (x = 0, z = the spine's), each inside
+    a band of heights with smooth ramps at both ends and fading out sideways, so no crease appears
+    where the slimmed part meets the rest (the shoulders, arms, hips and head are untouched)."""
+    k = SLIM
+    zc = JT["spine3"][0].z
+
+    def band(y, a, b, c, d):
+        return smoothstep((y - a) / (b - a)) * (1 - smoothstep((y - c) / (d - c)))
+
+    for v in ob.data.vertices:
+        p = vw(v.co)
+        ax = abs(p.x)
+        wt = band(p.y, *k["torso_y"]) * (1 - smoothstep((ax - k["arm_x"][0]) / (k["arm_x"][1] - k["arm_x"][0])))
+        wn = band(p.y, *k["neck_y"]) * (1 - smoothstep((ax - k["neck_r"][0]) / (k["neck_r"][1] - k["neck_r"][0])))
+        wh = band(p.y, *k["hips_y"])
+        sx = 1 - (1 - k["torso"][0]) * wt - (1 - k["neck"]) * wn - (1 - k["hips"][0]) * wh
+        sz = 1 - (1 - k["torso"][1]) * wt - (1 - k["neck"]) * wn - (1 - k["hips"][1]) * wh
+        dn = math.hypot(p.x - JT["neck"][0].x, p.z - JT["neck"][0].z)
+        drop = k["trap"] * band(p.y, *k["trap_y"]) * band(dn, *k["trap_x"])
+        v.co = bl(V(p.x * sx, p.y - drop, zc + (p.z - zc) * sz))
+
+
+def _centre(pts, y0, y1, sel, x0=None, step=0.1):
+    """Centre (x, z) of the selected points' horizontal slices as a function of height: bounding-box
+    middles of 0.1 ft slices (thin slices hold too few vertices: their centres jump), interpolated
+    linearly between slices. x0 fixes x (the trunk is symmetric about x = 0)."""
+    box = {}
+    for p in pts:
+        if y0 - step <= p.y <= y1 + step and sel(p):
+            k = math.floor(p.y / step)
+            lo, hi = box.get(k, ((p.x, p.z), (p.x, p.z)))
+            box[k] = ((min(lo[0], p.x), min(lo[1], p.z)), (max(hi[0], p.x), max(hi[1], p.z)))
+    mid = {(k + 0.5) * step: ((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2) for k, (lo, hi) in box.items()}
+    ys = sorted(mid)
+
+    def at(y):
+        y = min(max(y, ys[0]), ys[-1])
+        i = max(j for j in range(len(ys)) if ys[j] <= y)
+        j = min(i + 1, len(ys) - 1)
+        u = 0 if j == i else (y - ys[i]) / (ys[j] - ys[i])
+        x = mid[ys[i]][0] + (mid[ys[j]][0] - mid[ys[i]][0]) * u
+        return (x if x0 is None else x0), mid[ys[i]][1] + (mid[ys[j]][1] - mid[ys[i]][1]) * u
+    return at
+
+
+def reshape(ob):
+    """Trunk and neck onto clean cross-sections (TRUNK, NECK), then smooth the shoulder area.
+
+    Each vertex keeps its height and its angle round the slice's centre; only its distance from the
+    centre changes, to the target shape's radius at that angle, blended in and out over the bands'
+    ramps. Superellipse |x/a|^p + |z/b|^p = 1: radius at angle t (from +z toward +x) is
+    1 / ((|sin t|/a)^p + (|cos t|/b)^p)^(1/p)."""
+    k, nk = TRUNK, NECK
+    band = lambda y, a, b, c, d: smoothstep((y - a) / (b - a)) * (1 - smoothstep((y - c) / (d - c)))
+    prof = k["profile"]
+
+    def ab(y):
+        y = min(max(y, prof[0][0]), prof[-1][0])
+        for (y0, a0, b0), (y1, a1, b1) in zip(prof, prof[1:]):
+            if y <= y1:
+                u = smoothstep((y - y0) / (y1 - y0))
+                return a0 + (a1 - a0) * u, b0 + (b1 - b0) * u
+
+    def sup(t, a, b, pw):
+        return 1 / ((abs(math.sin(t)) / a) ** pw + (abs(math.cos(t)) / b) ** pw) ** (1 / pw)
+
+    P = [vw(v.co) for v in ob.data.vertices]
+    tc = _centre(P, k["y"][0], k["y"][3], lambda p: abs(p.x) < 0.7, x0=0.0)
+    nx, nz = JT["neck"][0].x, JT["neck"][0].z
+    nc = _centre(P, nk["y"][0], nk["y"][3], lambda p: math.hypot(p.x - nx, p.z - nz) < nk["reach"], x0=nx)
+    for v, p in zip(ob.data.vertices, P):
+        w = band(p.y, *k["y"]) * (1 - smoothstep((abs(p.x) - 0.7) / 0.15))
+        if w > 0:
+            cx, cz = tc(p.y)
+            t = math.atan2(p.x - cx, p.z - cz)
+            r0 = math.hypot(p.x - cx, p.z - cz)
+            r = r0 + (sup(t, *ab(p.y), k["power"]) - r0) * w
+            p = V(cx + r * math.sin(t), p.y, cz + r * math.cos(t))
+        dn = math.hypot(p.x - nx, p.z - nz)
+        w = band(p.y, *nk["y"]) * (1 - smoothstep((dn - nk["reach"] + 0.08) / 0.08))
+        if w > 0:
+            cx, cz = nc(p.y)
+            t = math.atan2(p.x - cx, p.z - cz)
+            r0 = math.hypot(p.x - cx, p.z - cz)
+            r = r0 + (sup(t, *nk["r"], 2) - r0) * w
+            p = V(cx + r * math.sin(t), p.y, cz + r * math.cos(t))
+        v.co = bl(p)
+    bm = bmesh.new()
+    bm.from_mesh(ob.data)
+    verts = [v for v in bm.verts if k["smooth_y"][0] < vw(v.co).y < k["smooth_y"][1] and abs(vw(v.co).x) < k["smooth_x"]]
+    for _ in range(k["smooth_iters"]):
+        bmesh.ops.smooth_vert(bm, verts=verts, factor=0.5, use_axis_x=True, use_axis_y=True, use_axis_z=True)
+    bm.to_mesh(ob.data)
+    bm.free()
+
+
+def forearms(ob):
+    """Rebuild each forearm as a clean tapered oval tube round the elbow-wrist line (FOREARM). The
+    reference's forearm curved forward and was lumpy; straightening it slice by slice kept the lumps
+    and creased it (Ryan: "odd and unsmooth"). Each vertex keeps its position along the arm and its
+    angle round the axis; its distance from the axis becomes the oval's radius there (half-sizes
+    eased from the elbow's to the wrist's), blended in past the elbow. Then the region is smoothed."""
+    k = FOREARM
+    for side, sx in (("left", 1), ("right", -1)):
+        ey, ez = JT[f"{side}_elbow"][0].y, JT[f"{side}_elbow"][0].z
+        on_arm = lambda p: sx * p.x > k["x"][0] - 0.05 and abs(p.y - ey) < 0.4 and abs(p.z - ez) < 0.5
+        for v in ob.data.vertices:
+            p = vw(v.co)
+            if not on_arm(p):
+                continue
+            u = smoothstep((sx * p.x - k["x"][0]) / (ARM_CUT - k["x"][0]))   # 0 elbow end .. 1 wrist
+            hy = k["elbow"][0] + (k["wrist"][0] - k["elbow"][0]) * u
+            hz = k["elbow"][1] + (k["wrist"][1] - k["elbow"][1]) * u
+            t = math.atan2(p.y - ey, p.z - ez)
+            r = 1 / math.hypot(math.sin(t) / hy, math.cos(t) / hz)
+            r0 = math.hypot(p.y - ey, p.z - ez)
+            w = smoothstep((sx * p.x - k["x"][0]) / (k["x"][1] - k["x"][0]))
+            rr = r0 + (r - r0) * w
+            v.co = bl(V(p.x, ey + rr * math.sin(t), ez + rr * math.cos(t)))
+    bm = bmesh.new()
+    bm.from_mesh(ob.data)
+    verts = [v for v in bm.verts if k["x"][0] - 0.15 < abs(vw(v.co).x) < k["x"][1] + 0.1]
+    for _ in range(k["smooth"]):
+        bmesh.ops.smooth_vert(bm, verts=verts, factor=0.5, use_axis_x=True, use_axis_y=True, use_axis_z=True)
+    bm.to_mesh(ob.data)
+    bm.free()
+
+
+def shoulders(ob):
+    """Narrow the upper body (SHOULDERS x scale) above the chest, fading out along the arms."""
+    k = SHOULDERS
+    band = lambda y, a, b, c, d: smoothstep((y - a) / (b - a)) * (1 - smoothstep((y - c) / (d - c)))
+    for v in ob.data.vertices:
+        p = vw(v.co)
+        w = band(p.y, *k["y"]) * (1 - smoothstep((abs(p.x) - k["fade_x"][0]) / (k["fade_x"][1] - k["fade_x"][0])))
+        if w > 0:
+            v.co = bl(V(p.x * (1 - (1 - k["x"]) * w), p.y, p.z))
+
+
+def smoothstep(x):
+    x = min(max(x, 0.0), 1.0)
+    return x * x * (3 - 2 * x)
 
 
 def cut(ob, keep_inner, name=None, weld=False, sides=(1, -1)):
@@ -452,7 +646,109 @@ LEAF = {"head": V(0, 0.45, 0), "left_hand": V(0.15, 0, 0), "right_hand": V(-0.15
         "left_foot": V(0, 0, 0.15), "right_foot": V(0, 0, 0.15)}
 
 
-def rig_and_bind(body, cap):
+# Jersey piping (Ryan: the repaint lost the uniform's details). Read off the reference's textured
+# front (render: 0.0037 ft per pixel): navy piping round a crew neck and down a button placket to the
+# belt (just left of centre). The reference also has a "Y" from the neck to the placket; in toon
+# shading it read as a necklace (Ryan: "weird neckline"), so it is left out. Viewer ft, fitted body.
+PIPING = dict(
+    r=0.016,                  # tube radius
+    neck=(5.07, 5.22),        # crew-neck plane height at the front and at the back (low in front: more neck)
+    neck_reach=0.42,          # horizontal distance from the neck joint searched for the neck loop
+    placket=(-0.04, 4.82, 3.6),  # x, from y, to y
+)
+
+
+def surface_line(body, pts, d):
+    """Project viewer points onto the body along direction d (a ray from 1 ft back), lifted off the
+    surface a little; points whose ray misses are dropped."""
+    out = []
+    for p in pts:
+        ok, hit, nrm, _ = body.ray_cast(bl(p - d * 1.0), bl(d), distance=3.0)
+        if ok:
+            out.append(vw(hit) + vw(nrm) * PIPING["r"])
+    return out
+
+
+def piping(body):
+    """The jersey's navy piping as thin tubes on the surface, with a clean crew neckline.
+
+    Neckline: the neck is cut by a plane tilted low in front and higher at the back (like a real crew
+    neck); the cut is an exact closed loop round the neck (the piping goes on it) and a straight paint
+    edge: skin above the plane, jersey below, near the neck. Only faces near the neck are cut.
+    Placket: a vertical line sampled densely and projected onto the chest from
+    the front, so the tube follows the surface instead of cutting under it between points."""
+    k = PIPING
+    nx, nz = JT["neck"][0].x, JT["neck"][0].z
+    yf, yb = k["neck"]
+    rz = 0.25  # the plane's slope runs over the neck's depth
+    slope = (yf - yb) / (2 * rz)  # dy/dz: higher toward the back (-z)
+    co, no = V(nx, (yf + yb) / 2, nz), V(0, 1, -slope).normalized()
+    near = lambda q: math.hypot(q.x - nx, q.z - nz) < k["neck_reach"] and 4.85 < q.y < 5.5
+    bm = bmesh.new()
+    bm.from_mesh(body.data)
+    faces = [f for f in bm.faces if near(vw(f.calc_center_median()))]
+    geom = list({e for f in faces for e in f.edges}) + list({v for f in faces for v in f.verts}) + faces
+    cut = bmesh.ops.bisect_plane(bm, geom=geom, plane_co=bl(co), plane_no=bl(no))
+    edges = [e for e in cut["geom_cut"] if isinstance(e, bmesh.types.BMEdge)]
+    # The neck's contour: in each angle bin round the neck joint, the innermost point of the cut
+    # (the cut also crosses the shoulders and the edge of the cut region further out).
+    n = 48
+    ang = lambda q: math.atan2(q.x - nx, q.z - nz)
+    rad = lambda q: math.hypot(q.x - nx, q.z - nz)
+    bins = [None] * n
+    for v in {v for e in edges for v in e.verts}:
+        q = vw(v.co)
+        i = int((ang(q) / (2 * math.pi) % 1) * n) % n
+        if bins[i] is None or rad(q) < rad(bins[i]):
+            bins[i] = q
+    bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 3])
+    bm.to_mesh(body.data)
+    bm.free()
+    # The loop follows the real neck surface: at each angle a ray goes out from the neck's axis, on the
+    # plane, to the first surface it meets (the neck). An ideal oval sank into the back of the neck,
+    # which sits further out (Ryan: "whatever is happening at the back of the neck"). Smoothed, so a
+    # stray hit does not kink it; a miss falls back to the oval.
+    plane_y = lambda z: co.y + slope * (z - nz)
+    a_, b_ = NECK["r"]
+    oval = lambda t: 1 / math.hypot(math.sin(t) / a_, math.cos(t) / b_)
+    ts = [2 * math.pi * i / n for i in range(n)]
+    rs = []
+    for t in ts:
+        d = V(math.sin(t), slope * math.cos(t), math.cos(t)).normalized()   # outward, along the plane
+        ok, hit, _, _ = body.ray_cast(bl(V(nx, co.y, nz)), bl(d), distance=0.6)
+        r = math.hypot(vw(hit).x - nx, vw(hit).z - nz) if ok else 0
+        rs.append(r if 0.12 < r < 0.4 else oval(t))
+    rs = [sorted(rs[(i + j) % n] for j in range(-2, 3))[2] for i in range(n)]
+    for _ in range(3):
+        rs = [(rs[i - 1] + 2 * rs[i] + rs[(i + 1) % n]) / 4 for i in range(n)]
+    loop = [V(nx + r * math.sin(t), plane_y(nz + r * math.cos(t)), nz + r * math.cos(t)) for t, r in zip(ts, rs)]
+    print(f"[make_pitcher] neck loop r {min(rs):.2f}..{max(rs):.2f}")
+    r_at = lambda q: rs[round((ang(q) / (2 * math.pi) % 1) * n) % n]
+    skin, jersey = MATS.index("skin"), MATS.index("jersey")
+    for f in body.data.polygons:  # skin above the plane and within the neck, jersey otherwise
+        q = vw(f.center)
+        if near(q) and f.material_index in (skin, jersey):
+            above = (q - co).dot(no)
+            chin = math.cos(ang(q)) > 0.6 and above > 0.1   # the jaw overhangs the neck in front
+            # Above the plane is skin (the nape curves out past the neck's radius toward the hairline),
+            # except the shoulder slope just above it, off the neck.
+            shoulder = rad(q) >= r_at(q) + 0.03 and above < 0.06 and not chin
+            f.material_index = skin if above > 0 and not shoulder else jersey
+    # On the surface, not in it; the back half further out and up a hair, where the shoulder slope
+    # rises round the neck and hid all but a stub of the trim.
+    def lift(p):
+        back = max(0.0, -math.cos(ang(p)))
+        return p + (p - V(nx, p.y, nz)).normalized() * k["r"] * (0.8 + 1.6 * back) + V(0, 0.02 * back, 0)
+    loop = [lift(p) for p in loop]
+    tubes = [tube("pipe_neck", loop + loop[:1], k["r"], "navy", sides=6)]
+    front = V(0, 0, -1)
+    x0, _, y1 = k["placket"]
+    y0 = max(loop, key=lambda p: p.z).y  # the placket runs from the collar's front, straight down
+    tubes.append(tube("pipe_placket", surface_line(body, [V(x0, y0 + (y1 - y0) * i / 30, 0) for i in range(31)], front), k["r"], "navy", sides=6))
+    return tubes
+
+
+def rig_and_bind(body, cap, pipes):
     """The viewer's 24-bone skeleton (skeleton.js rest T-pose), with the body skinned to it by
     Blender's automatic weights and the cap rigid on the head.
 
@@ -483,6 +779,16 @@ def rig_and_bind(body, cap):
     bpy.ops.object.parent_set(type="ARMATURE_AUTO")
     unweighted = sum(1 for v in body.data.vertices if not any(g.weight > 0 for g in v.groups))
     assert unweighted == 0, f"bone heat left {unweighted} vertices unweighted"
+    for o in pipes:  # piping bends with the jersey under it: copy the nearest surface's weights
+        bpy.context.view_layer.objects.active = o
+        for g in body.vertex_groups:
+            o.vertex_groups.new(name=g.name)
+        m = o.modifiers.new("weights", "DATA_TRANSFER")
+        m.object, m.use_vert_data, m.data_types_verts = body, True, {"VGROUP_WEIGHTS"}
+        m.vert_mapping, m.layers_vgroup_select_src, m.layers_vgroup_select_dst = "POLYINTERP_NEAREST", "ALL", "NAME"
+        bpy.ops.object.modifier_apply(modifier=m.name)
+        o.parent = arm
+        o.modifiers.new("rig", "ARMATURE").object = arm
     for o in cap:
         o.vertex_groups.new(name="head").add(list(range(len(o.data.vertices))), 1.0, "REPLACE")
         o.parent = arm
@@ -509,15 +815,20 @@ def main():
     clean(body)
     paint(body)
     fit(body, source_joints(body))
+    slim(body)
+    forearms(body)
+    shoulders(body)
+    reshape(body)
     cut(body, True)
     close_wrists(body)
+    pipes = piping(body)
     cap = build_cap(body)
-    rig = rig_and_bind(body, cap)
+    rig = rig_and_bind(body, cap, pipes)
     print(f"[make_pitcher] body {tris(body)}, cap {sum(tris(o) for o in cap)} triangles")
     if PREVIEW_DIR:
         os.makedirs(PREVIEW_DIR, exist_ok=True)
         render("pitcher")
-    export(body, cap, rig)
+    export(body, cap + pipes, rig)
 
 
 main()

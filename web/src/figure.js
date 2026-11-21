@@ -30,6 +30,7 @@ const COLORS = {
   jersey: PALETTE.jersey, navy: PALETTE.navy, pants: PALETTE.pants, skin: PALETTE.skin, hair: HAIR,
   glove: PALETTE.glove, gloveDark: GLOVE_DARK, gloveLight: GLOVE_LIGHT, shoe: PALETTE.shoe,
   capDark: 0x1b3049, rope: PALETTE.coral, // the sculpted cap's seams/stitching and front rope (make_pitcher.py)
+  grip: PALETTE.skin, open: PALETTE.skin, // the throwing hand holding the ball / opened after release (showOpenHand)
 };
 
 /**
@@ -184,10 +185,29 @@ function bodyParts(throws) {
     // Hand: the mitt on the glove side, the ball grip on the throwing side.
     const wrist = (g) => skin(atWrist(g, sd), () => J[`${sd}_wrist`]);
     // A sculpted model (handModels.js) replaces the procedural hand when it has loaded.
-    const hand = sd === G ? handModel("mitt") ?? mitt() : handModel("grip") ?? gripHand().map((g) => ["skin", g]);
+    // The throwing hand comes twice, as material "grip" and (if open.glb loaded) "open": showOpenHand swaps them.
+    const hand = sd === G ? handModel("mitt") ?? mitt()
+      : [...(handModel("grip") ?? gripHand().map((g) => ["skin", g])).map(([, g]) => ["grip", g]),
+        ...(handModel("open") ?? []).map(([, g]) => ["open", g])];
     for (const [m, g] of hand) parts.push([m in COLORS ? m : "glove", wrist(g)]);
   }
   return parts;
+}
+
+/**
+ * Show the throwing hand open (after release: the ball has gone, and an empty grip reads as a claw)
+ * or holding the ball. Toggles the two hand materials' visibility; three.js skips hidden material
+ * groups in every pass (shadows, the outline pass's override material), so the hidden hand leaves
+ * no trace. A figure without the open hand keeps its grip.
+ */
+export function showOpenHand(figure, open) {
+  figure.traverse((o) => {
+    if (!o.isMesh || !Array.isArray(o.material)) return;
+    const byName = Object.fromEntries(o.material.map((m) => [m.name, m]));
+    if (!byName.open) return;
+    byName.open.visible = open;
+    if (byName.grip) byName.grip.visible = !open;
+  });
 }
 
 /** The body built from simple shapes (no hands), pushed onto `parts` as [material key, skinned geometry]. */
@@ -296,7 +316,7 @@ export function figureGeometry(throws, rest = null) {
   const parts = bodyParts(throws);
   const keys = [...new Set(parts.map((p) => p[0]))];
   const byMat = keys.map((k) => mergeGeometries(parts.filter((p) => p[0] === k).map((p) => p[1])));
-  const materials = keys.map((k) => Object.assign(makeToonMaterial(COLORS[k]), { name: k }));
+  const materials = keys.map((k) => Object.assign(makeToonMaterial(COLORS[k]), { name: k, visible: k !== "open" }));
   const geometry = mergeGeometries(byMat, true);
   return { geometry: rest ? fitToRest(geometry, rest) : geometry, materials };
 }
