@@ -1,21 +1,15 @@
-"""Build the viewer's sculpted glove (mitt.glb) and throwing hand (grip.glb) in Blender, headless.
+"""Build the viewer's sculpted glove (mitt.glb) in Blender, headless. (The throwing hand, grip.glb,
+is make_grip.py's: a posed MakeHuman hand replaced the metaball blob hand that was built here.)
 
     blender --background --factory-startup --python scripts/blender/make_hands.py -- [preview_dir]
-
-How it works (plain terms): each model is made of *metaballs*, blobby primitives (balls,
-capsules, ellipsoids) whose surfaces melt into each other where they are close, like clay
-pressed together. That gives one smooth skin with soft fillets where a finger meets the palm,
-instead of separate shapes stuck together. Blender turns the blobs into a triangle mesh, we thin
-it to the triangle budget ("decimate"), shade it smooth and export glTF binary.
 
 Frame (see web/src/handModels.js): everything here is written in the *viewer's* axes (glTF /
 three.js, Y up), in feet, for the LEFT hand: origin at the wrist, +x wrist -> fingers, +y back of
 the hand (palm faces -y), +z thumb side. `bl()` converts to Blender's Z-up axes; the glTF exporter
 converts back, Blender (x, y, z) -> glTF (x, z, -y).
 
-Parts that must keep their own colour (lacing, webbing, cuff) are separate metaball "families"
-(Blender only melts metaballs whose object names share a base name), each with its own material
-name; the viewer picks the colour from that name.
+Parts that must keep their own colour (lacing, webbing, cuff) carry their own material name; the
+viewer picks the colour from that name.
 """
 import math
 import os
@@ -23,7 +17,7 @@ import sys
 
 import bmesh
 import bpy
-from mathutils import Matrix, Quaternion, Vector
+from mathutils import Matrix, Vector
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
@@ -31,27 +25,7 @@ PREVIEW_DIR = argv[0] if argv else None
 OUT_DIR = argv[1] if len(argv) > 1 else os.path.join(ROOT, "web", "public", "models")  # review builds: pass a scratch folder
 
 # ---------- tuning knobs (feet unless noted): feedback rounds should only touch these ----------
-TRI_BUDGET = 2900          # throwing hand (brief: under ~3k)
 MITT_TRI_BUDGET = 8000     # glove: shell + detail (laces, web, back opening); checked at export
-RESOLUTION = 0.003         # metaball meshing grid, ft (finer = smoother before decimating)
-STIFF = 5.0                # blob stiffness: higher = tighter fillets between parts
-
-# Throwing hand round the ball (figure.js gripHand is the reference).
-BALL_R = 1.45 / 12         # ball.js BALL_RADIUS_FT
-BALL_C = (0.28, 0.0, 0.0)  # ball centre = knuckle joint
-BALL_GAP = 0.004           # skin stays this far off the ball surface (no cutting in)
-PALM_C, PALM_SEMI = (0.09, -0.005, 0.0), (0.1, 0.04, 0.085)
-# finger: (depth z, thickness radius, arc angles deg round the ball in the x-y plane, 0 = +x, 90 = +y)
-FINGERS = {
-    "index":  (0.040, 0.026, [158, 120, 80, 40, 12]),
-    "middle": (-0.022, 0.027, [160, 120, 78, 38, 8]),
-    "ring":   (-0.072, 0.024, [165, 130, 98, 70]),
-    "pinky":  (-0.108, 0.020, [170, 145, 118]),
-}
-THUMB_Z, THUMB_R = 0.06, 0.030
-THUMB_BASE = (0.05, -0.025, 0.075)
-THUMB_ANGLES = [205, 235, 265, 298]
-
 # Glove, after the reference pictures (a stylised game glove): a big open hand. The layout is drawn
 # flat, in (x = heel -> finger tips, z = pinky side (-) -> thumb side (+)), then laid on a gently
 # cupped surface: the further a point is from the middle of the palm, the more it bends towards the
@@ -94,55 +68,9 @@ WEB_TOP_LACES = 6                    # lace wraps along the web's top bar
 # Preview-only colours (the viewer's own: web/src/look.js, figure.js); not used by the viewer.
 PREVIEW_RGB = {"glove": 0x8A5A2B, "gloveDark": 0x5B3A1C, "gloveLight": 0xB27A43, "skin": 0xC98D66, "ball": 0xF2EFE6}
 
-# Measured once (Blender 5.3, threshold 0.6): field = s (1 - d^2/r^2)^3, so the visible surface of
-# an isolated blob sits at d = r sqrt(1 - (t/s)^(1/3)). SURF is that ratio; we divide by it so the
-# numbers above are real surface sizes.
-THRESH = 0.6
-SURF = math.sqrt(1 - (THRESH / STIFF) ** (1 / 3))
-
-
 def bl(p):
     """Viewer (glTF, Y-up) coordinates -> Blender (Z-up)."""
     return Vector((p[0], -p[2], p[1]))
-
-
-def family(name):
-    """A metaball object; objects with different names never melt together."""
-    mb = bpy.data.metaballs.new(name)
-    mb.resolution, mb.render_resolution, mb.threshold = RESOLUTION, RESOLUTION, THRESH
-    ob = bpy.data.objects.new(name, mb)
-    bpy.context.scene.collection.objects.link(ob)
-    return mb
-
-
-def capsule(mb, a, b, r, negative=False):
-    a, b = bl(a), bl(b)
-    e = mb.elements.new(type="CAPSULE")
-    e.co, e.radius, e.stiffness, e.use_negative = (a + b) / 2, r / SURF, STIFF, negative
-    e.size_x = (b - a).length / 2
-    e.rotation = Vector((1, 0, 0)).rotation_difference((b - a).normalized())
-
-
-def ellipsoid(mb, c, semi, yaw=0.0, negative=False, stiff=STIFF):
-    """Ellipsoid with surface semi-axes `semi` (viewer x, y, z), turned `yaw` rad about viewer +y."""
-    e = mb.elements.new(type="ELLIPSOID")
-    r = max(semi)
-    e.co, e.radius, e.stiffness, e.use_negative = bl(c), r / SURF, stiff, negative
-    e.size_x, e.size_y, e.size_z = semi[0] / r, semi[2] / r, semi[1] / r  # Blender y = viewer z
-    e.rotation = Quaternion((0, 0, 1), yaw)  # viewer +y is Blender +z
-
-
-def chain(mb, pts, r0, r1):
-    """Capsules through `pts`, radius tapering r0 -> r1 (a finger)."""
-    n = len(pts) - 1
-    for i in range(n):
-        capsule(mb, pts[i], pts[i + 1], r0 + (r1 - r0) * (i + 0.5) / n)
-
-
-def arc(z, r, degs):
-    """Points round the ball's cross-section at depth z, `r` off its surface (finger centreline)."""
-    rad = math.sqrt(BALL_R ** 2 - z ** 2) + r + BALL_GAP
-    return [(BALL_C[0] + rad * math.cos(math.radians(d)), rad * math.sin(math.radians(d)), z) for d in degs]
 
 
 def material(name):
@@ -151,34 +79,6 @@ def material(name):
     lin = lambda v: (v / 255 / 12.92) if v <= 10 else ((v / 255 + 0.055) / 1.055) ** 2.4  # sRGB -> linear
     m.diffuse_color = (lin((c >> 16) & 255), lin((c >> 8) & 255), lin(c & 255), 1)
     return m
-
-
-def to_mesh(mb_name, mat, budget, paint=None):
-    """Mesh the metaball family on a fine grid, decimate (merge triangles where the surface is
-    flattest) to `budget`, then `paint` regions and smooth shade. `mat` is the base material."""
-    src = bpy.data.objects[mb_name]
-    bpy.context.view_layer.update()
-    me = bpy.data.meshes.new_from_object(src.evaluated_get(bpy.context.evaluated_depsgraph_get()))
-    bpy.data.objects.remove(src)
-    ob = bpy.data.objects.new(mb_name + "_mesh", me)
-    bpy.context.scene.collection.objects.link(ob)
-    bm = bmesh.new()
-    bm.from_mesh(me)
-    bmesh.ops.triangulate(bm, faces=bm.faces)
-    bm.to_mesh(me)
-    bm.free()
-    if len(me.polygons) > budget:
-        mod = ob.modifiers.new("decimate", "DECIMATE")
-        mod.ratio = budget / len(me.polygons)
-        bpy.context.view_layer.update()
-        ob.data = bpy.data.meshes.new_from_object(ob.evaluated_get(bpy.context.evaluated_depsgraph_get()))
-        ob.modifiers.clear()
-    ob.data.materials.append(material(mat))
-    if paint:
-        paint(ob)
-        tidy_paint(ob)
-    ob.data.shade_smooth()
-    return ob
 
 
 def tidy_paint(ob, passes=3):
@@ -197,29 +97,6 @@ def tidy_paint(ob, passes=3):
             best = max(set(votes), key=votes.count) if votes else mats[f.index]
             if votes.count(best) >= 2:
                 f.material_index = best
-
-
-def push_off_ball(ob):
-    """Move any vertex inside the ball (+gap) out to its surface: fingers rest on, never cut in."""
-    c, lim = bl(BALL_C), BALL_R + BALL_GAP
-    for v in ob.data.vertices:
-        d = v.co - c
-        if d.length < lim:
-            v.co = c + d.normalized() * lim
-
-
-def build_grip():
-    mb = family("skin")
-    ellipsoid(mb, PALM_C, PALM_SEMI)
-    for z, r, degs in FINGERS.values():
-        p = arc(z, r, degs)
-        # each finger starts from the palm's edge, then follows the ball
-        chain(mb, [(PALM_C[0] + 0.07, p[0][1] * 0.4, z)] + p, r * 1.08, r * 0.9)
-    t = arc(THUMB_Z, THUMB_R, THUMB_ANGLES)
-    chain(mb, [THUMB_BASE] + t, THUMB_R * 1.15, THUMB_R * 0.88)
-    ob = to_mesh("skin", "skin", TRI_BUDGET)
-    push_off_ball(ob)
-    return [ob]
 
 
 # ---------- glove: tubes swept along paths ----------
@@ -829,19 +706,11 @@ def render(obs, name, extra=()):
 def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     os.makedirs(OUT_DIR, exist_ok=True)
-    grip = build_grip()
-    export(grip, "grip", TRI_BUDGET)
     ref = ref_glove_path()
     mitt = build_mitt_from_ref(ref) if ref else build_mitt()
     export(mitt, "mitt", MITT_TRI_BUDGET)
     if PREVIEW_DIR:
         os.makedirs(PREVIEW_DIR, exist_ok=True)
-        bpy.ops.mesh.primitive_uv_sphere_add(radius=BALL_R, location=bl(BALL_C), segments=32, ring_count=16)
-        ball = bpy.context.active_object
-        ball.data.materials.append(material("ball"))
-        ball.data.shade_smooth()
-        render(grip, "grip", extra=[ball])
-        ball.hide_render = True
         render(mitt, "mitt")
 
 

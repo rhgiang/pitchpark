@@ -33,3 +33,34 @@ test("mitt.glb loads into handModels parts within budget and in the hand frame",
   assert.ok(hi[1] > 0.1 && lo[1] < -0.1, "glove on both sides of the wrist (back +y, palm -y)");
   assert.ok(hi[2] > 0.3, "thumb side is +z");
 });
+
+// The posed throwing hand (scripts/blender/make_grip.py): skin only, within budget, and holding the
+// ball where the viewer draws it (centre (0.28, 0, 0) ft): skin at most 4 mm into the ball, fingers
+// over its top (+y, the back of the hand), thumb side +z.
+const GRIP = new URL("../public/models/grip.glb", import.meta.url);
+
+test("grip.glb holds the ball at the hand joint, within budget", { skip: !existsSync(GRIP) }, async () => {
+  const parts = toParts((await parse(readFileSync(GRIP))).scene);
+  assert.ok(parts?.length, "no meshes");
+  const R = 1.45 / 12; // ball.js BALL_RADIUS_FT
+  let tris = 0, deepest = -Infinity;
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  for (const [key, g] of parts) {
+    assert.equal(key, "skin");
+    const p = g.attributes.position.array;
+    for (let i = 0; i < p.length; i += 3) {
+      for (let c = 0; c < 3; c++) {
+        assert.ok(Number.isFinite(p[i + c]), "non-finite position");
+        lo[c] = Math.min(lo[c], p[i + c]);
+        hi[c] = Math.max(hi[c], p[i + c]);
+      }
+      deepest = Math.max(deepest, R - Math.hypot(p[i] - 0.28, p[i + 1], p[i + 2]));
+    }
+    tris += g.index.count / 3;
+  }
+  assert.ok(tris <= 6000, `${tris} triangles > 6000`);
+  assert.ok(deepest < 0.004 / 0.3048, `skin ${(deepest * 304.8).toFixed(1)} mm inside the ball`);
+  assert.ok(lo[0] < 0 && hi[0] > 0.28 + R, "from behind the wrist to past the ball");
+  assert.ok(hi[1] > R, "fingers over the top of the ball (+y)");
+  assert.ok(hi[2] > 0.1, "thumb side is +z");
+});
