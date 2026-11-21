@@ -285,3 +285,60 @@ def sample_pitches(slug: str, pitch_type: str, n: int = 100, seed: int = 0) -> d
     return {"synthetic": True, "pitch_type": pitch_type, "n": n, "seed": seed,
             "model": f"M2 arm ({model.gmm.n_components}-component) + M1 + M3, fit on training games",
             "summary": stats, "first_10": json.loads(d.head(10).round(2).to_json(orient="records"))}
+
+
+# What-if inputs are typed by an agent, so bound them: outside these the physics is meaningless.
+_FLY_BOUNDS = {"release_speed": (40, 110), "release_spin_rate": (0, 4000), "spin_axis": (0, 360),
+               "release_extension": (3, 9), "release_pos_z": (2, 9), "release_pos_x": (-6, 6),
+               "release_angle_v_deg": (-20, 10), "release_angle_h_deg": (-10, 10)}
+
+
+def fly_pitch(slug: str, pitch_type: str, **overrides: float) -> dict:
+    """WHAT-IF flight of one pitch with this pitcher's M1 + M3 physics for `pitch_type` (his Cd,
+    spin efficiency and seam push, a typical game's air density). Any release parameter in
+    _FLY_BOUNDS you leave out defaults to the M2 arm's mean for that type, so fly_pitch(slug, "FF")
+    is his typical pitch and each override changes one thing. Not a real pitch, not a prediction of
+    one. `far_from_typical` lists inputs beyond 3 sd of his real range: the seam push extrapolates
+    there, so distrust the numbers. Break is plate position minus a no-spin ball thrown the same way (what the viewer shows)."""
+    from pitchsim.generative import FEATURES, generated_release_state, unwrap_deg
+    from pitchsim.physics import simulate_batch
+    from pitchsim.seam import predict_push
+    from pitchsim.tunneling import approach_angles_deg, perceived_velocity_mph
+
+    if not re.fullmatch(r"[a-z0-9-]+", slug):
+        raise ValueError(f"bad slug {slug!r}; use a slug from list_pitchers")
+    unknown = set(overrides) - set(_FLY_BOUNDS)
+    if unknown:
+        raise ValueError(f"unknown parameters {sorted(unknown)}; allowed: {sorted(_FLY_BOUNDS)}")
+    for k, v in overrides.items():
+        lo, hi = _FLY_BOUNDS[k]
+        if not lo <= v <= hi:
+            raise ValueError(f"{k}={v} outside {lo}..{hi}")
+    arm = _fit_arm(slug)
+    if pitch_type not in arm:
+        raise ValueError(f"{pitch_type!r} not fitted for {slug!r}; available: {sorted(arm)}")
+    model, fit, rho = arm[pitch_type]
+    typical = dict(zip(FEATURES, model.gmm.weights_ @ model.gmm.means_))
+    typical["spin_axis"] %= 360   # the arm unwraps the axis around its circular mean
+    row = pd.DataFrame([{**typical, **overrides}])
+    pos, vel = generated_release_state(row)
+    spin, axis = row["release_spin_rate"].to_numpy(), row["spin_axis"].to_numpy()
+    plate, v_plate, t = simulate_batch(pos, vel, spin, axis, fit.cd, fit.eff, rho=rho,
+                                       extra_acc=predict_push(fit.per, row))
+    plate0, _, _ = simulate_batch(pos, vel, np.zeros(1), axis, fit.cd, fit.eff, rho=rho)   # no spin, no push
+    vaa, haa = approach_angles_deg(v_plate)
+    r = lambda x: round(float(np.ravel(x)[0]), 2)
+    # The M3 push is a linear fit on release features: far outside this pitcher's real range it
+    # extrapolates (0 rpm gave ~6 in of phantom break), so flag inputs > 3 sd from the arm's marginal.
+    g, w = model.gmm, model.gmm.weights_
+    mu = w @ g.means_
+    sd = np.sqrt(w @ (np.array([np.diag(c) for c in g.covariances_]) + g.means_ ** 2) - mu ** 2)
+    vals = row[FEATURES].iloc[0].to_numpy(float).copy()
+    vals[FEATURES.index("spin_axis")] = unwrap_deg(vals[FEATURES.index("spin_axis")], model.axis_center_deg)
+    far = [f for f, v, m, s in zip(FEATURES, vals, mu, sd) if abs(v - m) > 3 * s]
+    return {"what_if": True, "pitch_type": pitch_type, "far_from_typical": far,
+            "inputs": {k: r(row[k]) for k in FEATURES}, "overridden": sorted(overrides),
+            "plate_x_in": r(plate[:, 0] * 12), "plate_z_in": r(plate[:, 2] * 12), "flight_s": r(t),
+            "break_x_in": r((plate[:, 0] - plate0[:, 0]) * 12), "break_z_in": r((plate[:, 2] - plate0[:, 2]) * 12),
+            "vaa_deg": r(vaa), "haa_deg": r(haa),
+            "perceived_mph": r(perceived_velocity_mph(row["release_speed"], row["release_extension"]))}

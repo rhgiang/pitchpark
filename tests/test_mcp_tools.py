@@ -128,3 +128,23 @@ def test_fit_arm_writes_nothing_to_stdout(capfd):
     T._fit_arm.cache_clear()
     T._fit_arm("sale-chris")
     assert capfd.readouterr().out == ""      # stdout is the MCP protocol channel
+
+
+def test_fly_pitch_rejects_bad_inputs_before_fitting():
+    with pytest.raises(ValueError):
+        T.fly_pitch("sale-chris", "FF", release_speed=300)       # out of bounds
+    with pytest.raises(ValueError):
+        T.fly_pitch("sale-chris", "FF", foo=1)                   # unknown parameter
+    with pytest.raises(ValueError):
+        T.fly_pitch("../x", "FF")
+
+
+@pytest.mark.skipif(not list(T.RAW_DIR.glob("519242_*.csv")), reason="needs Sale's CSV in data/raw/ (gitignored)")
+def test_fly_pitch_faster_drops_less_and_no_spin_has_no_break():
+    base = T.fly_pitch("sale-chris", "FF")
+    fast = T.fly_pitch("sale-chris", "FF", release_speed=base["inputs"]["release_speed"] + 5)
+    assert fast["plate_z_in"] > base["plate_z_in"] and fast["flight_s"] < base["flight_s"]   # less time to fall
+    assert base["overridden"] == [] and base["what_if"] is True
+    assert base["far_from_typical"] == []
+    dead = T.fly_pitch("sale-chris", "FF", release_spin_rate=0)
+    assert "release_spin_rate" in dead["far_from_typical"]       # the push extrapolates here: flagged, not trusted
