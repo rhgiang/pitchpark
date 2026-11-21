@@ -56,7 +56,11 @@
     </div>
 
     <!-- Face him (M7): the slim in-game bar; buildFaceBar (menu-ui.js) fills it. Replay's strip, bar and look are hidden meanwhile (ui.css body.face). -->
-    <div id="facebar" class="glass" hidden></div>
+    <div id="facedock">
+      <div id="reveal" class="gp rv" hidden></div>
+      <div id="guess" class="gp gb" hidden></div>
+      <div id="facebar" class="glass" hidden></div>
+    </div>
 
     <div id="play" class="glass">
       <button id="picker-btn" class="btn" title="Pitcher and at-bat (P)"><span id="picker-label">Pitcher</span> ▾</button>
@@ -94,6 +98,8 @@
         <tr><td><kbd>A</kbd></td><td>Random at-bat</td></tr>
         <tr><td><kbd>F</kbd></td><td>Replay / <span data-mode-label></span> (simulated at-bats)</td></tr>
         <tr><td><kbd>Space</kbd> <kbd>N</kbd></td><td><span data-mode-label></span>: next pitch, new at-bat</td></tr>
+        <tr><td><kbd>B</kbd> <kbd>S</kbd></td><td><span data-mode-label></span> with Call on: call the pitch a ball or a strike while it flies</td></tr>
+        <tr><td><kbd>Q</kbd> <kbd>W</kbd> <kbd>E</kbd> <kbd>D</kbd> <kbd>H</kbd></td><td><span data-mode-label></span> with Call on: guess the pitch type (the chips, left to right)</td></tr>
         <tr><td><kbd>T</kbd></td><td>Time of day</td></tr>
         <tr><td><kbd>I</kbd></td><td>Intro sweep (any key skips it)</td></tr>
         <tr><td><kbd>?</kbd></td><td>This help</td></tr>

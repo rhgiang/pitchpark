@@ -30,6 +30,7 @@ import { makeSlowDetector, makeAutoLite, getFlag, setFlag, LITE_KEY, LITE_CHOICE
 import { loadIndexOrAsk, askNotInPark, watchContext, offerLite, autoLiteNote, phoneNote } from "./notices.js";
 import { debugHas } from "./debug.js";
 import { MODE_LABEL } from "./face/labels.js";
+import { buildFaceUi } from "./face/ui.js";
 
 // No MSAA: the composer renders to its own targets, and SMAA (look.js) anti-aliases instead.
 const renderer = new THREE.WebGLRenderer({ antialias: false });
@@ -335,13 +336,30 @@ function faceLanded() {
     faceTimer = setTimeout(() => { if (!faceTouched) newAtBat(); }, 4000);
   }
 }
-window.faceControl = { next: throwNext, newAtBat, get state() { return state; } };
+/** Screen rectangles (px) of the strike zone and of the pitcher: the check that no panel covers them (screenshots / tests). */
+function screenRects() {
+  const rectOf = (obj) => {
+    camera.updateMatrixWorld();
+    const box = new THREE.Box3().setFromObject(obj), r = { l: 1e9, t: 1e9, r: -1e9, b: -1e9 };
+    for (let i = 0; i < 8; i++) {
+      const v = new THREE.Vector3(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).project(camera);
+      if (v.z > 1) continue; // behind the camera
+      const x = (v.x + 1) / 2 * innerWidth, y = (1 - v.y) / 2 * innerHeight;
+      r.l = Math.min(r.l, x); r.r = Math.max(r.r, x); r.t = Math.min(r.t, y); r.b = Math.max(r.b, y);
+    }
+    return r;
+  };
+  return { zone: zone && rectOf(zone), pitcher: figure && rectOf(figure) };
+}
+window.faceControl = { next: throwNext, newAtBat, screenRects, get state() { return state; } };
 
 const faceBarUpdate = buildFaceBar($("facebar"), {
   onNew: newAtBat, onNext: throwNext,
   onPace: (paceS) => dispatch({ type: "faceOpts", paceS }),
-  onCall: (call) => dispatch({ type: "faceOpts", call }), // stored only: the guessing UI (Task 10) reads it
+  onCall: (call) => dispatch({ type: "faceOpts", call }), // stored in face.opts; face/ui.js reads it at each throw
 });
+// Reveal card, at-bat strip and Call (guessing) bar: listens to the face:* events above.
+const faceUi = buildFaceUi({ reveal: $("reveal"), guess: $("guess") });
 // Phone: #change is hidden in Sim (it would sit under the bar), so the bar has its own way back to the menu (Replay | Sim switch).
 const menuBtn = Object.assign(document.createElement("button"), { className: "btn menu-btn", type: "button", textContent: "☰ Menu", title: "Back to the pitcher menu" });
 menuBtn.onclick = () => $("change").click();
@@ -351,6 +369,7 @@ function syncFace() {
   const face = state.kind === "face";
   document.body.classList.toggle("face", face);
   $("facebar").hidden = !face;
+  faceUi.sync(state);
   if (face) faceBarUpdate(state.face.opts, canThrow(state), currentAtBat(state).event !== null && landed(state));
 }
 async function enterFaceMode(opts, seed = randomSeed()) {
@@ -463,6 +482,7 @@ window.addEventListener("keydown", (e) => {
   if (e.target.closest?.("#facebar")) e.target.blur(); // its buttons must not swallow F / Space / N (and Space must not also click them)
   if (["SELECT", "BUTTON", "SUMMARY"].includes(e.target.tagName)) return;
   if (e.code === "KeyF") return void (state.kind === "face" ? leaveFaceMode() : enterFaceMode({ ...FACE_DEFAULTS, ...facePrefs() }));
+  if (state.kind === "face" && faceUi.key(e)) return void e.preventDefault(); // B / S call, Q W E D H type, while a guess is open
   if (state.kind === "face") { // Face him: Space throws the next pitch, N starts an at-bat; the Replay pickers are off
     if (e.code === "Space") { e.preventDefault(); return throwNext(); }
     if (e.code === "KeyN") return newAtBat();

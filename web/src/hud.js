@@ -53,7 +53,7 @@ function spinNote(state, pitch) {
 }
 
 /** Break vs no spin as "12.3 in ↓ · 4.1 in ←" (from the catcher's side: + x is right, + z up). */
-function breakLabel(tn) {
+export function breakLabel(tn) {
   if (tn.break_x_in == null) return "–";
   const z = `${Math.abs(tn.break_z_in).toFixed(1)} in ${tn.break_z_in >= 0 ? "↑" : "↓"}`;
   const x = `${Math.abs(tn.break_x_in).toFixed(1)} in ${tn.break_x_in >= 0 ? "→" : "←"}`;
