@@ -55,6 +55,9 @@
       <span id="result"></span>
     </div>
 
+    <!-- Face him (M7): the slim in-game bar; buildFaceBar (menu-ui.js) fills it. Replay's strip, bar and look are hidden meanwhile (ui.css body.face). -->
+    <div id="facebar" class="glass" hidden></div>
+
     <div id="play" class="glass">
       <button id="picker-btn" class="btn" title="Pitcher and at-bat (P)"><span id="picker-label">Pitcher</span> ▾</button>
       <button id="prev" class="btn" title="Previous pitch (←)">◀</button>
@@ -89,6 +92,8 @@
         <tr><td><kbd>N</kbd></td><td>No-spin reference path</td></tr>
         <tr><td><kbd>P</kbd></td><td>Pitcher and at-bat picker</td></tr>
         <tr><td><kbd>A</kbd></td><td>Random at-bat</td></tr>
+        <tr><td><kbd>F</kbd></td><td>Replay / <span data-mode-label></span> (simulated at-bats)</td></tr>
+        <tr><td><kbd>Space</kbd> <kbd>N</kbd></td><td><span data-mode-label></span>: next pitch, new at-bat</td></tr>
         <tr><td><kbd>T</kbd></td><td>Time of day</td></tr>
         <tr><td><kbd>I</kbd></td><td>Intro sweep (any key skips it)</td></tr>
         <tr><td><kbd>?</kbd></td><td>This help</td></tr>
@@ -112,7 +117,12 @@
       <div class="menu-inner">
         <h1>Pitch <span>Park</span></h1>
         <p class="tag">Pick a pitcher</p>
+        <div id="mode-seg" class="seg" role="radiogroup" aria-label="Mode">
+          <button type="button" data-mode="replay" class="on" role="radio" aria-checked="true"><b>Replay</b><small>real at-bats</small></button>
+          <button type="button" data-mode="face" role="radio" aria-checked="false"><b data-mode-label></b><small>simulated at-bats</small></button>
+        </div>
         <div id="cards" role="radiogroup" aria-label="Pitcher"></div>
+        <div id="face-opts" class="gp" hidden></div>
         <button id="play-ball" class="btn big" disabled>Play ball <kbd>Enter</kbd></button>
         <p class="hint"><kbd>←</kbd> <kbd>→</kbd> choose · <button id="how-link" class="linkbtn" type="button">How it works</button></p>
       </div>

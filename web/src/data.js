@@ -20,6 +20,15 @@ export function loadPitcher(slug) {
   return once(`/data/${slug}.json`, async () => expandPitcher(await getJson(`/data/${slug}.json`)));
 }
 
+/** One pitcher's Face him model (face-1: scripts/m7_export.py). Rejects on a missing file (Vite's SPA fallback included) or another schema. */
+export function loadFace(slug) {
+  return once(`/data/face/${slug}.json`, async () => {
+    const f = await getJson(`/data/face/${slug}.json`);
+    if (f?.meta?.schema !== "face-1") throw new Error(`face data schema ${f?.meta?.schema} is not supported`);
+    return f;
+  });
+}
+
 /** Start fetching a pitcher's data and delivery ahead of the pick (hover, focus, selection); never throws. */
 export function prefetchPitcher(slug) {
   loadPitcher(slug).catch(() => {}); // the real load reports the error

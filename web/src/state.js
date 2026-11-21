@@ -1,6 +1,7 @@
 // Viewer state as a pure reducer (no Three.js, no DOM) so it tests in Node.
 // The data is one pitcher's export (scripts/export_viewer.py): held-out at-bats, pitches in order.
-import { duration } from "./trajectory.js";
+import { duration, expandKnots } from "./trajectory.js";
+import { rng, newAtBat, throwPitch } from "./face/engine.js";
 
 export const MODES = ["real", "sim", "ghost"]; // "Statcast fit", "M1 + M3", both
 export const SPEEDS = [1, 0.25, 0.1];
@@ -12,6 +13,11 @@ export const VIEWS = ["umpire", "batter", "side", "ride", "free", "tv"]; // keys
 export const SLOWED_SPIN_FACTOR = 1 / 20;
 export const spinFactor = (speed) => (speed >= 1 ? SLOWED_SPIN_FACTOR : 1);
 
+// Face him (M7): seconds between a pitch landing and the next one (the Pace switch).
+export const PACES = { fast: 1.2, real: 2.5, slow: 5 };
+export const FACE_VIEW = "batter";
+const FACE_STEP_S = 0.005; // playback sample step of generated paths, same grid as expandPitcher's
+
 export function initialState() {
   return {
     slug: null, data: null, delivery: null, abIndex: 0, pitchIndex: 0,
@@ -21,10 +27,13 @@ export function initialState() {
     wantMode: "real", // what the user picked; kept across pitches that cannot show it
     mode: "real", // what is shown: wantMode, or "real" when modeAllowed is false
     modeAllowed: false,
+    // Face him: kind "face" plays generated at-bats from face = {data, ab, rng, n, opts}; the replay
+    // position (ab, pitch, t, view...) waits in `stash` and comes back on leaveFace.
+    kind: "replay", face: null, stash: null,
   };
 }
 
-export const currentAtBat = (s) => s.data?.at_bats[s.abIndex] ?? null;
+export const currentAtBat = (s) => (s.kind === "face" ? s.face.ab : s.data?.at_bats[s.abIndex] ?? null);
 export const currentPitch = (s) => currentAtBat(s)?.pitches[s.pitchIndex] ?? null;
 
 /**
@@ -34,12 +43,22 @@ export const currentPitch = (s) => currentAtBat(s)?.pitches[s.pitchIndex] ?? nul
 export const preroll = (s) => s.delivery?.pre_s ?? 0;
 // (callers use 0 - preroll, not -preroll: -0 would fail strict equality with 0)
 
-/** Paths the current mode flies: [] for no_tracking; real only unless the pitch is modelled. */
+/**
+ * Paths the current mode flies: [] for no_tracking; real only unless the pitch is modelled.
+ * A generated pitch has no real path: it always flies its simulated one, whatever the mode.
+ */
 export function shownPaths(s) {
   const p = currentPitch(s);
+  if (p?.generated) return [p.sim];
   if (!p?.real) return [];
   return { real: [p.real], sim: [p.sim], ghost: [p.real, p.sim] }[s.mode];
 }
+
+/** The path the ball and its trail follow for pitch p (ghost mode adds the sim ghost separately). */
+export const ballPath = (s, p) => (p.generated || s.mode === "sim" ? p.sim : p.real);
+
+/** Face him: may the next pitch be thrown? The at-bat is live and the last pitch has landed. */
+export const canThrow = (s) => s.kind === "face" && s.face.ab.event === null && (currentPitch(s) === null || landed(s));
 
 /** End of the current flight in s: the longest shown path (ghost: real or sim), 0 if none. */
 export function flightEnd(s) {
@@ -68,7 +87,11 @@ export function reduce(s, a) {
   return seen > next.seen ? { ...next, seen } : next;
 }
 
+// Replay-only actions: ignored in Face him (there is no real path, and at-bats are generated).
+const REPLAY_ONLY = new Set(["setMode", "pickAtBat", "goPitch", "nextPitch", "prevPitch"]);
+
 function step(s, a) {
+  if (s.kind === "face" && REPLAY_ONLY.has(a.type)) return s;
   switch (a.type) {
     case "pickPitcher":
       return derive({
@@ -103,6 +126,28 @@ function step(s, a) {
       return VIEWS.includes(a.view) ? { ...s, view: a.view } : s;
     case "setSpeed":
       return SPEEDS.includes(a.speed) ? { ...s, speed: a.speed } : s;
+    case "enterFace": return enterFace(s, a);
+    case "leaveFace":
+      return s.kind === "face" ? derive({ ...s, ...s.stash, kind: "replay", face: null, stash: null }) : s;
+    case "faceOpts": { // {type, stand?, batter?, call?, startCount?, paceS?}
+      if (s.kind !== "face") return s;
+      const opts = { ...s.face.opts };
+      for (const k of Object.keys(opts)) if (k in a) opts[k] = a[k];
+      // stand, batter and start count define the at-bat: changing one starts a fresh at-bat
+      const fresh = ["stand", "batter", "startCount"].some((k) => opts[k] !== s.face.opts[k]);
+      const next = { ...s, face: { ...s.face, opts } };
+      return fresh ? newFaceAtBat(next) : next;
+    }
+    case "faceNewAtBat": return s.kind === "face" ? newFaceAtBat(s) : s;
+    case "facePitch": {
+      if (!canThrow(s)) return s;
+      const { ab, pitch } = throwPitch(s.face.data, s.face.ab, s.face.rng);
+      // the engine's sim is RK4 knots; the viewer plays {t, p} samples
+      const sim = expandKnots(pitch.sim, s.face.data.meta.knot_s, FACE_STEP_S);
+      ab.pitches[ab.pitches.length - 1] = { ...pitch, sim };
+      const i = ab.pitches.length - 1;
+      return derive({ ...s, face: { ...s.face, ab }, pitchIndex: i, t: 0 - preroll(s), playing: true, seen: i });
+    }
     case "tick": {
       if (!s.playing) return s;
       // Slow motion scales flight time only; the samples themselves are untouched.
@@ -115,7 +160,25 @@ function step(s, a) {
   }
 }
 
+/** Face him from here: the replay position is stashed, the view goes to the batter's eye. */
+function enterFace(s, { face, seed = 0, opts = {} }) {
+  if (s.kind === "face") return s;
+  const o = { stand: "R", batter: "avg", call: false, startCount: "0-0", paceS: PACES.real, ...opts };
+  const stash = { abIndex: s.abIndex, pitchIndex: s.pitchIndex, t: s.t, playing: s.playing, seen: s.seen,
+    wantMode: s.wantMode, view: s.view };
+  const f = { data: face, ab: null, rng: rng(seed), n: 0, opts: o };
+  return newFaceAtBat({ ...s, kind: "face", stash, view: FACE_VIEW, face: f });
+}
+
+/** A fresh at-bat from the options (unique id per at-bat), nothing thrown yet. */
+function newFaceAtBat(s) {
+  const f = s.face, n = f.n + 1, o = f.opts;
+  const ab = newAtBat(f.data, { stand: o.stand, batter: o.batter, count: o.startCount, id: `face-ab-${n}` });
+  return derive({ ...s, face: { ...f, ab, n }, pitchIndex: -1, t: 0 - preroll(s), playing: false, seen: 0 });
+}
+
 function derive(s) {
+  if (s.kind === "face") return { ...s, modeAllowed: false, mode: "real" }; // Real/Sim/Ghost are off in Face him
   const modeAllowed = currentPitch(s)?.status === "ok";
   return { ...s, modeAllowed, mode: modeAllowed ? s.wantMode : "real" };
 }

@@ -45,3 +45,17 @@ export function cardModels(index, deliverySlugs) {
     fullDelivery: deliverySlugs.has(p.slug),
   }));
 }
+
+/**
+ * Deep link into Face him: ?face=1&stand=L|R&batter=none|avg&call=0|1 -> the options it names
+ * (the rest left to the defaults), or null when ?face=1 is absent. Unknown values are ignored.
+ */
+export function faceFromUrl(search) {
+  const q = new URLSearchParams(search);
+  if (q.get("face") !== "1") return null;
+  const opts = {};
+  if (["L", "R"].includes(q.get("stand"))) opts.stand = q.get("stand");
+  if (["none", "avg"].includes(q.get("batter"))) opts.batter = q.get("batter");
+  if (["0", "1"].includes(q.get("call"))) opts.call = q.get("call") === "1";
+  return opts;
+}

@@ -1,5 +1,6 @@
 import { currentAtBat, shownPaths, landed, spinFactor, revealed, MODES, SPEEDS, VIEWS } from "./state.js";
 import { inDirt, seamStyle } from "./ball.js";
+import { MODE_LABEL as FACE_LABEL } from "./face/labels.js";
 
 // The broadcast interface's text: scorebug, status line, pitch strip, "the look" card, and which
 // buttons are lit. Spoiler rule: results (result text, at-bat event, "in the dirt", strip colours,
@@ -61,17 +62,34 @@ function breakLabel(tn) {
 
 const $ = (id) => document.getElementById(id);
 
+/**
+ * Face him scorebug: the count before the pitch (as in Replay), who and what, and the SIMULATED tag.
+ * No inning or outs: simulated at-bats have no game state, and showing one would be made up.
+ * The pitch strip and "the look" are hidden in this mode (ui.css); the reveal card is Task 10's.
+ */
+function renderFaceHud(state, pitch) {
+  const ab = currentAtBat(state);
+  $("bases").style.display = "none";
+  $("bug-count").textContent = `${pitch?.balls ?? ab.balls}-${pitch?.strikes ?? ab.strikes}`;
+  $("bug-pitch").textContent = `${state.data.pitcher.name.split(",")[0]} · ${FACE_LABEL}`;
+  $("bug-inning").textContent = `vs ${ab.stand}HB`;
+  $("bug-status").innerHTML = `<span class="simtag">Simulated</span>${VIEW_LABEL[state.view]}`;
+}
+
 /** Refresh the whole interface for `state` (cheap: called on every action, not every frame). */
 export function renderHud(state, pitch) {
+  const face = state.kind === "face";
   for (const m of MODES) {
     const b = $(`mode-${m}`);
-    b.disabled = m !== "real" && !state.modeAllowed;
+    b.disabled = face || (m !== "real" && !state.modeAllowed); // Face him has no real path to compare
     b.classList.toggle("on", state.mode === m);
   }
   for (const v of VIEWS) $(`view-${v}`).classList.toggle("on", state.view === v);
   for (const v of SPEEDS) $(`speed-${v}`).classList.toggle("on", state.speed === v);
   $("nospin").classList.toggle("on", state.showNoSpin);
   $("nospin").disabled = !pitch?.nospin;
+  $("bases").style.display = "";
+  if (face) return renderFaceHud(state, pitch);
   if (!pitch) return;
 
   const ab = currentAtBat(state);
