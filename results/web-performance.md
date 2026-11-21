@@ -80,3 +80,24 @@ format; `web/test/data.test.js`: one download per file, failures not cached, old
   download-bound, not CPU-bound.
 - Real-GPU first-frame time before/after the warm-up was not measured.
 - `web/public/data/` is gitignored; the deployment needs the re-exported files as well.
+
+## Frame time: Sim vs Replay (M7, 2026-11-20)
+
+Method as in `results/M4.md` "Frame rate": the `?fps=1` burst (100 frames back to back, then a GPU sync),
+production build (`vite build`, `vite preview`), headless Edge at 1600x900, umpire view, day, Chris Sale,
+frozen mid-flight (`t=0.4`). Replay: `?pitcher=sale-chris&view=umpire&ab=0&pitch=2`. Sim:
+`?face=1&stand=R&batter=avg&pitcher=sale-chris&view=umpire&pitch=2`. Three runs each, alternating.
+
+| Mode | ms/frame (3 runs) | with shadow redraw | draws | triangles |
+|---|---|---|---|---|
+| Replay, umpire | 5.69, 5.36, 5.46 | 6.3-8.5 | 365 | 3.72 M |
+| Sim, umpire | 5.46, 5.21, 5.14 | 8.3-8.4 | 365 | 3.72 M |
+
+Sim costs the same as Replay (it is the same scene and the same ball path; both are GPU-bound and the
+difference is inside the +-0.4 ms run-to-run noise). Both are far under 16.7 ms. These are higher than the
+M4 figures (2.5 ms) because the park has grown since (crowd, art passes). The shadow-redraw frame is the one
+after a pitch change; Sim's is a little higher in these three runs (8.3-8.4 vs 6.3-8.5), which is within burst noise.
+
+Hardware caveat: this machine's GPU through headless Edge (M4 recorded an RTX 5060 Ti here; the GPU was not queried again). A software renderer
+(SwiftShader) gives about 1,200 ms/frame, so it says nothing about a laptop or a phone. Burst timing says
+nothing about live rAF pacing; open either mode with `?fps=1` on the target device to see live fps.

@@ -37,5 +37,70 @@
    "transformer": 1.003
   },
   "logistic_max_calibration_gap": 0.022
+ },
+ "Cease": {
+  "n_pitches": 6083,
+  "folds": 5,
+  "held_out_log_loss": {
+   "mix": 1.386,
+   "count": 1.35,
+   "logistic": 1.291,
+   "logistic_plus_tto": 1.29,
+   "boosted": 1.283,
+   "transformer": null
+  },
+  "logistic_max_calibration_gap": 0.046
+ },
+ "Yamamoto": {
+  "n_pitches": 5523,
+  "folds": 5,
+  "held_out_log_loss": {
+   "mix": 1.643,
+   "count": 1.589,
+   "logistic": 1.525,
+   "logistic_plus_tto": 1.521,
+   "boosted": 1.514,
+   "transformer": null
+  },
+  "logistic_max_calibration_gap": 0.045
+ },
+ "King": {
+  "n_pitches": 2981,
+  "folds": 5,
+  "held_out_log_loss": {
+   "mix": 1.53,
+   "count": 1.509,
+   "logistic": 1.471,
+   "logistic_plus_tto": 1.468,
+   "boosted": 1.45,
+   "transformer": null
+  },
+  "logistic_max_calibration_gap": 0.028
+ },
+ "Sanchez": {
+  "n_pitches": 3158,
+  "folds": 5,
+  "held_out_log_loss": {
+   "mix": 1.042,
+   "count": 1.013,
+   "logistic": 0.973,
+   "logistic_plus_tto": 0.973,
+   "boosted": 0.968,
+   "transformer": null
+  },
+  "logistic_max_calibration_gap": 0.034
+ },
+ "Schlittler": {
+  "n_pitches": 4294,
+  "folds": 5,
+  "held_out_log_loss": {
+   "mix": 1.317,
+   "count": 1.303,
+   "logistic": 1.254,
+   "logistic_plus_tto": 1.25,
+   "boosted": 1.244,
+   "transformer": null
+  },
+  "logistic_max_calibration_gap": 0.067
  }
 }

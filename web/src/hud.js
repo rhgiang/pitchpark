@@ -1,5 +1,6 @@
 import { currentAtBat, shownPaths, landed, spinFactor, revealed, MODES, SPEEDS, VIEWS } from "./state.js";
 import { inDirt, seamStyle } from "./ball.js";
+import { MODE_LABEL as FACE_LABEL } from "./face/labels.js";
 
 // The broadcast interface's text: scorebug, status line, pitch strip, "the look" card, and which
 // buttons are lit. Spoiler rule: results (result text, at-bat event, "in the dirt", strip colours,
@@ -12,8 +13,8 @@ const VIEW_LABEL = {
 };
 
 const fmt = (v, digits, unit = "") => (v == null ? "–" : `${v.toFixed(digits)}${unit}`);
-const words = (s) => (s ?? "").replaceAll("_", " ");
-const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+export const words = (s) => (s ?? "").replaceAll("_", " ");
+export const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /**
  * Result class of a Statcast `description` for the pitch strip: "b" ball, "s" strike, "f" foul,
@@ -52,7 +53,7 @@ function spinNote(state, pitch) {
 }
 
 /** Break vs no spin as "12.3 in ↓ · 4.1 in ←" (from the catcher's side: + x is right, + z up). */
-function breakLabel(tn) {
+export function breakLabel(tn) {
   if (tn.break_x_in == null) return "–";
   const z = `${Math.abs(tn.break_z_in).toFixed(1)} in ${tn.break_z_in >= 0 ? "↑" : "↓"}`;
   const x = `${Math.abs(tn.break_x_in).toFixed(1)} in ${tn.break_x_in >= 0 ? "→" : "←"}`;
@@ -61,17 +62,34 @@ function breakLabel(tn) {
 
 const $ = (id) => document.getElementById(id);
 
+/**
+ * Sim scorebug: the count before the pitch (as in Replay), who and what, and the SIMULATED tag.
+ * No inning or outs: simulated at-bats have no game state, and showing one would be made up.
+ * The pitch strip and "the look" are hidden in this mode (ui.css); the reveal card is face/ui.js.
+ */
+function renderFaceHud(state, pitch) {
+  const ab = currentAtBat(state);
+  $("bases").style.display = "none";
+  $("bug-count").textContent = `${pitch?.balls ?? ab.balls}-${pitch?.strikes ?? ab.strikes}`;
+  $("bug-pitch").textContent = `${state.data.pitcher.name.split(",")[0]} · ${FACE_LABEL}`;
+  $("bug-inning").textContent = `vs ${ab.stand}HB`;
+  $("bug-status").innerHTML = `<span class="simtag">Simulated</span>${VIEW_LABEL[state.view]}`;
+}
+
 /** Refresh the whole interface for `state` (cheap: called on every action, not every frame). */
 export function renderHud(state, pitch) {
+  const face = state.kind === "face";
   for (const m of MODES) {
     const b = $(`mode-${m}`);
-    b.disabled = m !== "real" && !state.modeAllowed;
+    b.disabled = face || (m !== "real" && !state.modeAllowed); // Sim has no real path to compare
     b.classList.toggle("on", state.mode === m);
   }
   for (const v of VIEWS) $(`view-${v}`).classList.toggle("on", state.view === v);
   for (const v of SPEEDS) $(`speed-${v}`).classList.toggle("on", state.speed === v);
   $("nospin").classList.toggle("on", state.showNoSpin);
   $("nospin").disabled = !pitch?.nospin;
+  $("bases").style.display = "";
+  if (face) return renderFaceHud(state, pitch);
   if (!pitch) return;
 
   const ab = currentAtBat(state);

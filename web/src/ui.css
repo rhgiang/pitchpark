@@ -192,3 +192,149 @@ body.menu .glass { opacity: 0; pointer-events: none; }
   .card, .card:active, #play-ball:hover:not(:disabled) { transform: none; }
 }
 #fps { z-index: 6; } body.menu #fps { opacity: 1; }
+
+/* ---- Sim (M7): simulated at-bats. Start-screen switch and options row, the slim in-game bar,
+   and what Replay's own panels do while it is on (body.face, set by main.js). */
+.fl { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.fl > em { font-style: normal; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.6; }
+.btn.sw-btn { padding: 3px 6px; display: inline-flex; align-items: center; gap: 4px; }
+.sw { display: inline-block; width: 26px; height: 15px; border-radius: 9px; background: rgba(255, 255, 255, 0.25);
+  position: relative; transition: background 0.15s; }
+.sw::after { content: ""; position: absolute; left: 2px; top: 2px; width: 11px; height: 11px; border-radius: 50%;
+  background: #fff; transition: transform 0.15s; }
+.sw-btn.on { background: var(--soft); color: inherit; font-weight: inherit; }
+.sw-btn.on .sw { background: var(--gold); }
+.sw-btn.on .sw::after { transform: translateX(11px); }
+.simtag { display: inline-block; margin-right: 7px; padding: 1px 7px; border: 1px solid rgba(242, 193, 78, 0.5);
+  border-radius: 999px; font-size: 9.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--gold); white-space: nowrap; }
+
+#mode-seg { padding: 3px; margin: -12px 0 18px; border: 1px solid var(--edge); background: var(--glass); border-radius: 10px; }
+#mode-seg button { padding: 7px 22px; text-align: center; border-radius: 8px; opacity: 0.75; }
+#mode-seg button.on { background: #fff; color: #111; opacity: 1; }
+#mode-seg b { display: block; font-weight: 700; }
+#mode-seg small { font-size: 10.5px; opacity: 0.7; }
+#face-opts { position: static; margin-top: 20px; padding: 9px 14px; display: flex; gap: 14px; align-items: center;
+  justify-content: center; flex-wrap: wrap; max-width: 100%; box-sizing: border-box; }
+#face-opts[hidden] { display: none; }
+#face-opts .seg { flex: none; }
+
+#facebar { bottom: var(--gap); left: 50%; transform: translateX(-50%); display: flex; gap: 9px; align-items: center;
+  padding: 7px 10px; white-space: nowrap; }
+#facebar[hidden] { display: none; }
+body.face #play, body.face #strip, body.face #look, body.face #picker { display: none; }
+
+/* Phone: the options row is a docked bottom sheet (2-column grid); the play button sits in its last cell. */
+@media (max-width: 700px) {
+  body.face-menu #menu { align-items: flex-start; overflow-y: auto; padding: 14px 0 310px; box-sizing: border-box; }
+  body.face-menu #menu h1 { font-size: 34px; }
+  body.face-menu #menu .tag { margin: 6px 0 14px; }
+  body.face-menu #menu .hint { display: none; }
+  body.face-menu #face-opts { position: fixed; left: 8px; right: 8px; bottom: 8px; z-index: 9; margin: 0; padding: 10px 12px 60px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 9px 10px; }
+  /* DOM order is Side, Batter, Call, Count, Pace; the sheet reads Side | Pace, Batter, Count, Call. */
+  body.face-menu #face-opts .fl:nth-child(1) { grid-column: 1; order: 0; }
+  body.face-menu #face-opts .fl:nth-child(5) { grid-column: 2; order: 1; justify-content: flex-end; }
+  body.face-menu #face-opts .fl:nth-child(2) { grid-column: 1 / 3; order: 2; }
+  body.face-menu #face-opts .fl:nth-child(4) { grid-column: 1 / 3; order: 3; }
+  body.face-menu #face-opts .fl:nth-child(3) { grid-column: 1 / 3; order: 4; }
+  body.face-menu #face-opts .fl:nth-child(2) > em, body.face-menu #face-opts .fl:nth-child(4) > em { width: 48px; }
+  body.face-menu #face-opts > .btn { position: absolute; left: 12px; bottom: 12px; width: calc(50% - 16px); padding: 9px; }
+  body.face-menu #face-opts > .btn kbd { display: none; }
+  body.face-menu #play-ball { position: fixed; right: 20px; bottom: 20px; z-index: 10; width: calc(50% - 24px); margin: 0; padding: 9px; font-size: 14px; }
+  body.face-menu #play-ball kbd { display: none; }
+  #facebar { left: 58px; right: 8px; transform: none; flex-wrap: wrap; justify-content: center; white-space: normal; padding: 6px 8px; gap: 6px; }
+  #facebar .sep { display: none; }
+  body.face #change { display: none; } /* the facebar carries a Menu button instead (main.js) */
+  body.face #tabs { display: none; }
+}
+#facebar .menu-btn { display: none; }
+@media (max-width: 700px) { #facebar .menu-btn { display: inline-block; } }
+
+/* ---- Sim (M7): reveal card, at-bat strip and the Call (guessing) bar. HARD RULE: nothing here may cover the strike
+   zone or the pitcher. Desktop: the card takes The Look's slot (bottom-right, hidden in Sim) and the bar takes the
+   in-game bar's slot (bottom-centre); both are far from the zone in the batter's and umpire's views. Phone: one docked
+   bottom panel (#facedock) holds the pill and the bar. Checked with faceControl.screenRects() (see the task report). */
+#facedock { display: contents; }
+.rv[hidden], .gb[hidden] { display: none; }
+.rv { right: var(--gap); bottom: var(--gap); width: 272px; box-sizing: border-box; padding: 11px 13px; z-index: 3;
+  animation: pp-fade 0.3s ease-out; }
+.rv .mut { opacity: 0.65; font-size: 11.5px; }
+.rv-head { display: flex; align-items: center; gap: 8px; }
+.rv-meta { font-size: 11px; opacity: 0.65; margin-left: auto; }
+.rv-score { font-size: 12px; margin-left: auto; white-space: nowrap; }
+.rv-main { display: flex; gap: 12px; align-items: flex-start; margin-top: 9px; }
+.rv-info { flex: 1; min-width: 0; }
+.rv-name { font-size: 15px; }
+.rv-speed { font-size: 24px; font-weight: 800; color: var(--gold); line-height: 1.1; }
+.rv-speed small { font-size: 12px; font-weight: 600; }
+.rv-code { display: none; }
+.rv-break { margin-top: 6px; font-size: 12px; }
+.rv-zone { flex: none; background: rgba(255, 255, 255, 0.05); border-radius: 6px; }
+.rv-result { display: flex; align-items: center; gap: 7px; margin-top: 9px; }
+.rv-call, .rv-why { margin-top: 5px; font-size: 12px; }
+.rv-hint { color: var(--gold); }
+.dot.sm { width: 12px; height: 12px; }
+.rv-strip { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--edge); }
+.rv.flight .rv-strip { margin-top: 8px; padding-top: 0; border-top: 0; }
+.rv-cnt { background: var(--gold); color: var(--ink); font-weight: 800; font-size: 13px; border-radius: 6px; padding: 2px 7px; }
+.rv-strip .dot { width: 24px; height: 24px; font-size: 9.5px; }
+.dot.q { background: transparent; border: 1.5px dashed rgba(255, 255, 255, 0.55); box-sizing: border-box; font-size: 12px; }
+
+.gb { left: 50%; transform: translateX(-50%); bottom: var(--gap); z-index: 3; padding: 8px 12px; display: flex; gap: 9px;
+  align-items: center; white-space: nowrap; animation: pp-fade 0.2s ease-out; }
+body.guessing #facebar { display: none; }
+.gbtn, .gb .gbtn:hover:not(:disabled) { color: #fff; }
+.gbtn { border-radius: 9px; font-weight: 800; font-size: 15px; padding: 10px 26px; display: flex; gap: 8px; align-items: center; justify-content: center; }
+.gb .gbtn.bl, .gb .gbtn.bl:hover:not(:disabled) { background: var(--ball); }
+.gb .gbtn.st, .gb .gbtn.st:hover:not(:disabled) { background: var(--strike); }
+.gb .gbtn:hover:not(:disabled) { filter: brightness(1.1); }
+.gbtn kbd { background: rgba(0, 0, 0, 0.22); border-color: rgba(255, 255, 255, 0.3); color: #fff; font-weight: 600; }
+.gb .pill { padding: 4px 11px; border-radius: 999px; font-size: 12px; display: inline-flex; gap: 5px; align-items: center; }
+.gb .pill.on { background: #fff; color: #111; font-weight: 700; }
+.gb .pill kbd[hidden] { display: none; }
+.gb .on.gbtn { outline: 2px solid #fff; outline-offset: 2px; }
+.gb button.locked:not(.on) { opacity: 0.4; cursor: default; }
+body.menu #facedock .gp, body.intro #facedock .gp { opacity: 0; pointer-events: none; }
+
+/* Narrow desktop: the centred bars (about 600 px) would reach the card, so the card sits above their row. */
+@media (min-width: 701px) and (max-width: 1180px) { .rv { bottom: 72px; } }
+/* Phone and narrow desktop: the card is a compact pill (tap for the full card); it is short enough to stay below the zone. */
+@media (max-width: 1180px) {
+  .rv { padding: 6px 10px; cursor: pointer; }
+  .rv-main .rv-break, .rv-name { display: none; }
+  /* The pill: tag + "FF 97.1 mph", result, call, why, a thumbnail zone on the right, then the strip. Tap: the full card. */
+  .rv.landed:not(.open) { display: grid; grid-template-columns: auto 1fr auto; column-gap: 8px; align-items: center; }
+  .rv.landed:not(.open) .rv-head, .rv.landed:not(.open) .rv-main, .rv.landed:not(.open) .rv-info { display: contents; }
+  .rv.landed:not(.open) .rv-meta, .rv.landed:not(.open) .rv-score { display: none; }
+  .rv.landed:not(.open) .rv-speed { font-size: 13px; color: #fff; font-weight: 700; }
+  .rv.landed:not(.open) .rv-speed small { font-size: 13px; font-weight: 700; }
+  .rv.landed:not(.open) .rv-code { display: inline; margin-right: 5px; }
+  .rv.landed:not(.open) .rv-zone { grid-column: 3; grid-row: 1 / 4; width: 44px; height: 56px; align-self: start; }
+  .rv.landed:not(.open) .rv-result { grid-column: 1 / 3; margin-top: 3px; }
+  .rv.landed:not(.open) .rv-call { grid-column: 1 / 3; margin-top: 2px; }
+  .rv.landed:not(.open) .rv-why { grid-column: 1 / 3; margin-top: 2px; font-size: 11px; white-space: nowrap; }
+  .rv.landed:not(.open) .rv-why .mut { display: none; }
+  .rv.landed:not(.open) .rv-strip { grid-column: 1 / 4; margin-top: 4px; padding-top: 0; border-top: 0; flex-wrap: nowrap; overflow: hidden; }
+  .rv.open .rv-name { display: block; }
+  .rv.open .rv-main .rv-break { display: block; }
+  .rv.open .rv-score { display: block; }
+}
+
+@media (max-width: 700px) {
+  #facedock { display: none; }
+  body.face #facedock { display: flex; flex-direction: column; position: fixed; left: 58px; right: 8px; bottom: 8px; z-index: 3;
+    background: var(--glass); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid var(--edge);
+    border-radius: 10px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25); transition: opacity 0.6s; }
+  body.menu #facedock, body.intro #facedock { opacity: 0; pointer-events: none; }
+  body.face #facedock > * { position: static; transform: none; width: auto; margin: 0; background: none; border: 0; border-radius: 0;
+    box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; animation: none; }
+  #facedock > * + * { border-top: 1px solid var(--edge); }
+  .gb { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 10px; white-space: normal; justify-content: stretch; }
+  .gb .fl { grid-column: 1 / 3; order: -1; justify-content: space-between; }
+  .gb .fl > em { display: none; }
+  .gb .sep, .gb kbd { display: none; }
+  .gb .gbtn { padding: 13px 0; }
+}
+/* Touch: no key hints; the phone bar then fits in two rows so the docked panel stays below the zone. */
+@media (pointer: coarse) { #facebar kbd, .gb kbd { display: none; } }
