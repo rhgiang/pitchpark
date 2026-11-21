@@ -90,5 +90,23 @@ def sample_pitches(slug: str, pitch_type: str, n: int = 100, seed: int = 0) -> d
     return T.sample_pitches(slug, pitch_type, n, seed)
 
 
+@mcp.tool()
+def fly_pitch(slug: str, pitch_type: str, release_speed: float | None = None,
+              release_spin_rate: float | None = None, spin_axis: float | None = None,
+              release_extension: float | None = None, release_pos_x: float | None = None,
+              release_pos_z: float | None = None, release_angle_v_deg: float | None = None,
+              release_angle_h_deg: float | None = None) -> dict:
+    """WHAT-IF flight, not a real pitch: this pitcher's M1+M3 physics for one pitch type. Omitted
+    release parameters default to his typical pitch of that type (M2 arm mean), so pass only what you
+    want to change, e.g. release_speed=+2 mph faster. Units: mph, rpm, degrees (spin_axis 0-360),
+    ft (extension, release x/z). Returns plate position (in), flight time, break vs a no-spin ball
+    (in), approach angles and perceived speed."""
+    given = dict(release_speed=release_speed, release_spin_rate=release_spin_rate, spin_axis=spin_axis,
+                 release_extension=release_extension, release_pos_x=release_pos_x,
+                 release_pos_z=release_pos_z, release_angle_v_deg=release_angle_v_deg,
+                 release_angle_h_deg=release_angle_h_deg)
+    return T.fly_pitch(slug, pitch_type, **{k: v for k, v in given.items() if v is not None})
+
+
 if __name__ == "__main__":
     mcp.run()
