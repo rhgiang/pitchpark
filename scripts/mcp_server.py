@@ -108,5 +108,16 @@ def fly_pitch(slug: str, pitch_type: str, release_speed: float | None = None,
     return T.fly_pitch(slug, pitch_type, **{k: v for k, v in given.items() if v is not None})
 
 
+def _register_doc(name: str) -> None:
+    @mcp.resource(f"pitchsim://results/{name}", name=name, mime_type="text/markdown",
+                  description=f"results/{name}.md: the milestone write-up (what was measured, the numbers, what is still wrong)")
+    def doc() -> str:
+        return T.results_doc(name)
+
+
+for _name in T.results_docs():   # one resource per write-up, so clients can list them
+    _register_doc(_name)
+
+
 if __name__ == "__main__":
     mcp.run()

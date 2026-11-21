@@ -342,3 +342,18 @@ def fly_pitch(slug: str, pitch_type: str, **overrides: float) -> dict:
             "break_x_in": r((plate[:, 0] - plate0[:, 0]) * 12), "break_z_in": r((plate[:, 2] - plate0[:, 2]) * 12),
             "vaa_deg": r(vaa), "haa_deg": r(haa),
             "perceived_mph": r(perceived_velocity_mph(row["release_speed"], row["release_extension"]))}
+
+
+RESULTS_DIR = Path(__file__).resolve().parents[2] / "results"
+
+
+def results_docs(results_dir: Path = RESULTS_DIR) -> list[str]:
+    """Names of the tracked write-ups (results/<name>.md): M1..M6, data-refresh, web-performance."""
+    return sorted(p.stem for p in results_dir.glob("*.md"))
+
+
+def results_doc(name: str, results_dir: Path = RESULTS_DIR) -> str:
+    """Text of results/<name>.md. The name is a filename, so only names results_docs lists work."""
+    if name not in results_docs(results_dir):
+        raise ValueError(f"unknown write-up {name!r}; available: {results_docs(results_dir)}")
+    return (results_dir / f"{name}.md").read_text(encoding="utf-8")
