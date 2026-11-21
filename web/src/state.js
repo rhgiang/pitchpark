@@ -14,7 +14,7 @@ export const SLOWED_SPIN_FACTOR = 1 / 20;
 export const spinFactor = (speed) => (speed >= 1 ? SLOWED_SPIN_FACTOR : 1);
 
 // Sim (M7): seconds between a pitch landing and the next one (the Pace switch).
-export const PACES = { fast: 2, real: 4, slow: 7 }; // seconds from landing to the next pitch
+export const PACES = { fast: 2, real: 5, slow: 10 }; // seconds from landing to the next pitch
 export const FACE_VIEW = "batter";
 const FACE_STEP_S = 0.005; // playback sample step of generated paths, same grid as expandPitcher's
 
