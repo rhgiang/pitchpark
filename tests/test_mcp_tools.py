@@ -148,3 +148,15 @@ def test_fly_pitch_faster_drops_less_and_no_spin_has_no_break():
     assert base["far_from_typical"] == []
     dead = T.fly_pitch("sale-chris", "FF", release_spin_rate=0)
     assert "release_spin_rate" in dead["far_from_typical"]       # the push extrapolates here: flagged, not trusted
+
+
+def test_results_doc_reads_listed_names_only(tmp_path):
+    (tmp_path / "M9.md").write_text("# nine", encoding="utf-8")
+    assert T.results_docs(tmp_path) == ["M9"] and T.results_doc("M9", tmp_path) == "# nine"
+    for bad in ("../secrets", "nope", "M9.md"):
+        with pytest.raises(ValueError):
+            T.results_doc(bad, tmp_path)
+
+
+def test_repo_writeups_are_listed():
+    assert {"M1", "M2", "M6"} <= set(T.results_docs())
