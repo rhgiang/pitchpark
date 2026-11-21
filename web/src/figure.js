@@ -29,6 +29,7 @@ const HAIR = 0x2b1d14; // dark brown, showing under the cap at the back and side
 const COLORS = {
   jersey: PALETTE.jersey, navy: PALETTE.navy, pants: PALETTE.pants, skin: PALETTE.skin, hair: HAIR,
   glove: PALETTE.glove, gloveDark: GLOVE_DARK, gloveLight: GLOVE_LIGHT, shoe: PALETTE.shoe,
+  capDark: 0x1b3049, rope: PALETTE.coral, // the sculpted cap's seams/stitching and front rope (make_pitcher.py)
 };
 
 /**
@@ -175,6 +176,22 @@ function atWrist(g, side) {
 function bodyParts(throws) {
   const G = throws === "L" ? "right" : "left";
   const parts = [];
+  // A sculpted body (pitcher.glb, already skinned: handModels.js) replaces the shapes below when loaded.
+  const model = handModel("pitcher");
+  if (model) parts.push(...model.map(([m, g]) => [m in COLORS ? m : "jersey", g]));
+  else proceduralBody(parts);
+  for (const sd of ["left", "right"]) {
+    // Hand: the mitt on the glove side, the ball grip on the throwing side.
+    const wrist = (g) => skin(atWrist(g, sd), () => J[`${sd}_wrist`]);
+    // A sculpted model (handModels.js) replaces the procedural hand when it has loaded.
+    const hand = sd === G ? handModel("mitt") ?? mitt() : handModel("grip") ?? gripHand().map((g) => ["skin", g]);
+    for (const [m, g] of hand) parts.push([m in COLORS ? m : "glove", wrist(g)]);
+  }
+  return parts;
+}
+
+/** The body built from simple shapes (no hands), pushed onto `parts` as [material key, skinned geometry]. */
+function proceduralBody(parts) {
   const add = (mat, g, boneOf) => parts.push([mat, skin(g, boneOf)]);
 
   // Torso: jersey from the belt to the shoulders, widest across the chest/shoulders.
@@ -215,11 +232,6 @@ function bodyParts(throws) {
     add("jersey", taper(P("shoulder"), P("shoulder").lerp(P("elbow"), 0.42), 0.215, 0.185), () => J[`${sd}_shoulder`]);
     // Forearm: thicker below the elbow, slim at the wrist.
     add("skin", taper(P("elbow"), P("wrist"), 0.13, 0.095), () => J[`${sd}_elbow`]);
-    // Hand: the mitt on the glove side, the ball grip on the throwing side.
-    const wrist = (g) => skin(atWrist(g, sd), () => J[`${sd}_wrist`]);
-    // A sculpted model (handModels.js) replaces the procedural hand when it has loaded.
-    const hand = sd === G ? handModel("mitt") ?? mitt() : handModel("grip") ?? gripHand().map((g) => ["skin", g]);
-    for (const [m, g] of hand) parts.push([m in COLORS ? m : "glove", wrist(g)]);
 
     // Thigh: thick at the hip, a sphere at the knee shared with the shin.
     add("pants", taper(P("hip"), P("knee"), 0.28, 0.19, 14), () => J[`${sd}_hip`]);
@@ -235,7 +247,6 @@ function bodyParts(throws) {
     add("shoe", taper(a, V(a.x, 0.12, -0.12), 0.115, 0.12, 10), () => J[`${sd}_ankle`]);
     add("jersey", blob(V(a.x + x * 0.01, 0.04, 0.15), 0.16, 0.04, 0.42, 14, 6), () => J[`${sd}_ankle`]);
   }
-  return parts;
 }
 
 // The bone a part's mesh stretches toward when its bone is longer or shorter (first child, except

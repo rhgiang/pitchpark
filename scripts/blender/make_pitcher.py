@@ -1,23 +1,28 @@
-"""Build the viewer's pitcher body (pitcher.glb) in Blender, headless.
+"""Build the viewer's pitcher body (pitcher.glb) in Blender, headless, from a reference model.
 
     blender --background --factory-startup --python scripts/blender/make_pitcher.py -- <preview_dir> [out_dir]
 
-How it works (plain terms): the body is ONE continuous surface grown round a stick figure. The stick
-figure's points sit on the viewer's skeleton joints (read from web/src/skeleton.js, so model and
-animation share one source of truth) plus a few extra points that shape it (chest, mid-thigh, calf).
-Each point gets a thickness (two radii: across and front-to-back), and Blender's Skin modifier wraps
-one closed skin over the whole stick figure, joints and branches included. A Subdivision Surface
-modifier then rounds it off. That is the classic "base mesh" way to block out a character: real
-shoulders, elbows and knees instead of separate shapes stuck together.
+Source: ref/pitcher.glb (gitignored), an image-to-3D model (TRELLIS, MIT licence) of a T-posed
+ballplayer generated from a concept image. It gives the SHAPE (head, build, uniform); its texture
+is thrown away (the back of it is black: the generator only saw the front) and every region is
+repainted in the viewer's toon colours, so it matches the rest of Pitch Park.
 
-The uniform is part of that same body (its thickness is the clothed silhouette: baggy knicker
-pants, a jersey over a broad chest) and is coloured by region; a few separate pieces sit on top
-where cloth really is a separate layer: sleeves, belt, socks' tops, shoes. Head, cap and hair are
-modelled separately and overlap the neck.
-
-Frame: written in the viewer's axes (three.js, Y up), feet, rest T-pose for a 75 in pitcher: x = the
-figure's left, y up, z = the way he faces. bl() converts to Blender's Z-up axes; the glTF exporter
-converts back. Each mesh's material name picks the viewer colour (figure.js COLORS).
+Steps (plain terms):
+  1. Import, turn into the viewer's axes (x = the figure's left, y up, z = the way he faces), scale
+     to the rig's height.
+  2. Rebuild the surface on a voxel grid (closes holes, evens out the triangles), smooth it (the
+     generator's faceting would read as noise under toon shading), thin it to the budget.
+  3. Paint each face by region (belt, socks, sleeve trim, skin, hair, shoes), from the heights the
+     reference's own texture shows on its front.
+  4. Fit it to the viewer's skeleton (web/src/skeleton.js rest T-pose). The model's joints are a
+     little off ours (arms 0.26 ft lower, feet wider apart), so every vertex is moved by the joint
+     displacements of its nearest bones, blended along each bone: the same "linear blend" idea as
+     skinning (Magnenat-Thalmann et al. 1988; three.js SkinnedMesh), with translations only. The
+     animation then rotates the limbs about the right pivots.
+  5. Cut the arms at the wrist joints and close the ends: the glove (mitt.glb) and the throwing
+     hand (grip.glb) are separate models the viewer puts on the wrists.
+  6. Rig: the viewer's 24 bones at its rest pose, the body weighted to them automatically (bone
+     heat), the cap rigid on the head; export web/public/models/pitcher.glb.
 """
 import math
 import os
@@ -32,132 +37,56 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 PREVIEW_DIR = argv[0] if argv else None
 OUT_DIR = argv[1] if len(argv) > 1 else os.path.join(ROOT, "web", "public", "models")
+REF = os.path.join(ROOT, "ref", "pitcher.glb")
 
 # Viewer colours (web/src/look.js PALETTE, figure.js) for the previews only; the viewer picks its
 # own colour from each material's name.
 PREVIEW_RGB = {"jersey": 0xF3F0E8, "pants": 0xE6E1D4, "navy": 0x2A4A6B, "skin": 0xC98D66,
                "hair": 0x2B1D14, "shoe": 0x1C1C1C}
+MATS = list(PREVIEW_RGB)
 
 
 def read_joints():
-    """{smpl name: rest position (viewer axes, ft)} from web/src/skeleton.js's JOINTS table."""
+    """{smpl name: (rest position, parent name)} from web/src/skeleton.js's JOINTS table."""
     src = open(os.path.join(ROOT, "web", "src", "skeleton.js"), encoding="utf-8").read()
-    rows = re.findall(r'smpl: "(\w+)".*?rest: \[([^\]]+)\]', src)
+    rows = re.findall(r'smpl: "(\w+)".*?parent: (-?\d+), rest: \[([^\]]+)\]', src)
     assert len(rows) == 24, f"expected 24 joints in skeleton.js, found {len(rows)}"
-    return {n: Vector([float(v) for v in r.split(",")]) for n, r in rows}
+    names = [r[0] for r in rows]
+    return {n: (Vector([float(v) for v in r.split(",")]), names[int(p)] if int(p) >= 0 else None) for n, p, r in rows}
 
 
 JT = read_joints()
 V = lambda x, y, z: Vector((x, y, z))
+bl = lambda p: Vector((p[0], -p[2], p[1]))  # viewer (Y-up) -> Blender (Z-up)
+vw = lambda p: Vector((p[0], p[2], -p[1]))  # Blender -> viewer
 
-
-def bl(p):
-    """Viewer (Y-up) -> Blender (Z-up): (x, y, z) -> (x, -z, y)."""
-    return Vector((p[0], -p[2], p[1]))
-
-
-# ---------- tuning knobs (ft): feedback rounds should only touch these ----------
-# The stick figure: (name, position, (radius across, radius front-to-back)). Positions use the
-# skeleton's joints where one exists; the rest are shaping points between them. The radii are the
-# CLOTHED silhouette (jersey over the chest, baggy knicker pants).
-def stick_points():
-    j = JT
-    pts = [
-        ("pelvis", j["pelvis"] + V(0, -0.05, 0), (0.42, 0.29)),
-        ("waist", j["spine1"] + V(0, 0, 0.02), (0.34, 0.24)),
-        ("belly", j["spine2"], (0.37, 0.25)),
-        ("chest", j["spine3"] + V(0, 0.3, 0.0), (0.56, 0.36)),
-        ("upchest", V(0, 4.98, -0.02), (0.5, 0.33)),
-        ("neck0", V(0, 5.2, -0.04), (0.21, 0.19)),
-        ("neck", j["head"] + V(0, 0.05, -0.02), (0.165, 0.165)),  # up into the head: no gap
-    ]
-    for s, x in (("left", 1), ("right", -1)):
-        P = lambda n: j[f"{s}_{n}"]
-        pts += [
-            (f"{s}_collar", P("collar") + V(0, -0.02, 0), (0.22, 0.2)),
-            (f"{s}_shoulder", P("shoulder"), (0.2, 0.19)),
-            (f"{s}_bicep", P("shoulder").lerp(P("elbow"), 0.45), (0.17, 0.16)),
-            (f"{s}_elbow", P("elbow"), (0.125, 0.125)),
-            (f"{s}_forearm", P("elbow").lerp(P("wrist"), 0.3), (0.14, 0.13)),
-            (f"{s}_wrist", P("wrist"), (0.085, 0.07)),
-            (f"{s}_hand", P("wrist").lerp(P("hand"), 0.55), (0.115, 0.055)),
-            (f"{s}_hip", P("hip") + V(0, -0.08, 0), (0.28, 0.3)),
-            (f"{s}_thigh", P("hip").lerp(P("knee"), 0.5) + V(0, 0, 0.02), (0.27, 0.29)),
-            (f"{s}_knee", P("knee"), (0.22, 0.23)),
-            (f"{s}_calf", P("knee").lerp(P("ankle"), 0.33) + V(0, 0, -0.02), (0.2, 0.22)),
-            (f"{s}_shin", P("knee").lerp(P("ankle"), 0.7), (0.13, 0.14)),
-            (f"{s}_ankle", P("ankle") + V(0, -0.06, 0.02), (0.1, 0.11)),  # down into the shoe
-        ]
-    return pts
-
-
-STICK_EDGES = [("pelvis", "waist"), ("waist", "belly"), ("belly", "chest"), ("chest", "upchest"),
-               ("upchest", "neck0"), ("neck0", "neck")]
-for _s in ("left", "right"):
-    STICK_EDGES += [("upchest", f"{_s}_collar"), (f"{_s}_collar", f"{_s}_shoulder"),
-                    (f"{_s}_shoulder", f"{_s}_bicep"), (f"{_s}_bicep", f"{_s}_elbow"),
-                    (f"{_s}_elbow", f"{_s}_forearm"), (f"{_s}_forearm", f"{_s}_wrist"),
-                    (f"{_s}_wrist", f"{_s}_hand"),
-                    ("pelvis", f"{_s}_hip"), (f"{_s}_hip", f"{_s}_thigh"), (f"{_s}_thigh", f"{_s}_knee"),
-                    (f"{_s}_knee", f"{_s}_calf"), (f"{_s}_calf", f"{_s}_shin"), (f"{_s}_shin", f"{_s}_ankle")]
-SUBDIV = 2                    # subdivision levels on the body (each level x4 faces)
-SKIN_GROW = 1.42              # Skin + Subdivision shrink the surface to ~70% of the radii: compensate
-
-BODY_VOXEL = 0.022            # remesh grid, ft (smaller = crisper shapes, more triangles)
-BODY_SMOOTH = 6               # smoothing passes after the remesh
-BODY_TRIS = 9000              # body triangle budget after thinning
-
-
-def shapes(x):
-    """Muscle and cloth volumes melted into the body, for the side x = +1 (left) / -1 (right):
-    (centre, semi-axes (across, up, front-to-back)), viewer axes."""
-    return [
-        (V(x * 0.27, 5.2, -0.08), (0.32, 0.2, 0.22)),     # trapezius: shoulders up into the neck
-        (V(x * 0.64, 5.08, -0.04), (0.27, 0.26, 0.26)),   # deltoid (under the sleeve)
-        (V(x * 0.03, 4.62, 0.0), (0.6, 0.52, 0.39)),      # ribcage: the broad chest (both halves overlap)
-        (V(x * 0.2, 4.72, 0.15), (0.3, 0.26, 0.24)),      # chest
-        (V(x * 0.25, 4.45, -0.15), (0.27, 0.42, 0.18)),   # back / lats
-        (V(x * 0.15, 3.68, 0.0), (0.33, 0.2, 0.27)),      # jersey bloused over the belt
-        (V(x * 0.17, 3.12, -0.15), (0.23, 0.27, 0.22)),    # seat
-        (V(x * 0.29, 2.55, 0.06), (0.24, 0.44, 0.24)),    # thigh (quads, baggy pants)
-        (V(x * 0.3, 1.4, -0.02), (0.25, 0.2, 0.26)),      # knicker pants ballooning over the sock top
-        (V(x * 1.92, 5.1, -0.05), (0.3, 0.15, 0.145)),    # forearm muscle below the elbow
-        (V(x * 2.62, 5.08, 0.06), (0.1, 0.045, 0.055)),    # thumb (T-pose: palm down, thumb forward)
-    ]
-
-
-# Colour regions on the body (viewer axes): the jersey ends at the belt and at the sleeve; the
-# pants run from the belt to just below the calf (knicker length); navy socks below; skin from the
-# sleeve to the hand and on the neck.
-BELT_Y = 3.47                 # belt line height
-SLEEVE_X = 1.0                # |x| where the body's jersey colour ends (the sleeve covers past it)
-PANTS_END_Y = 1.27            # knicker pants end (below the calf), socks below
-NECK_Y = 5.19                 # skin above this (under the collar)
-
-# Cloth layers: sleeve end |x| and radii (at the shoulder, at the end), belt height, collar height.
-CLOTH = dict(sleeve_end=1.18, sleeve_r=(0.3, 0.215), belt_h=0.1, collar_y=5.2)
-
-# Head: an egg (taller than wide) with a fuller jaw; centre and semi-axes.
-HEAD_C, HEAD_R = V(0, 5.86, 0.04), (0.33, 0.37, 0.35)
-JAW = dict(c=V(0, 5.66, 0.12), r=(0.25, 0.17, 0.23))
-# Cap (fitted ball cap): crown of six panels over the head, taller at the front; a curved brim.
-CAP = dict(c=V(0, 5.9, 0.03), r=(0.375, 0.33, 0.39), front_lift=0.1, brim_len=0.3, brim_w=0.29,
-           brim_drop=0.035, brim_t=0.025, button_r=0.035)
+# ---------- tuning knobs (viewer ft, after scaling; feedback rounds should only touch these) ----------
+HEIGHT = 6.15        # top of the head (hair); the cap goes on top, to the pitcher's height (6.25)
+Z_SHIFT = 0.15       # the reference stands this far behind the skeleton's centre line
+VOXEL = 0.022        # remesh grid (smaller = crisper, more triangles)
+SMOOTH = 12          # smoothing passes after the remesh (fewer: bumps that toon shading turns into blotches)
+BODY_TRIS = 9000     # triangle budget
+# Region boundaries read off the reference's texture (front centre line, leg, arm, side of head).
+SHOE_Y = 0.42        # cleats below
+SOCK_Y = 1.38        # navy socks below, knicker pants above
+BELT = (3.44, 3.58)  # navy belt
+TRIM_X = (1.21, 1.29)  # sleeve trim |x|; skin (forearm) beyond
+NECK_Y = 5.02        # skin above (front of the collar; the back sits a little higher)
+HAIR_Y = 5.76        # hairline height at the sides (just behind the face)
+NAPE = (-0.3, 5.45)  # hairline at the back: (z relative to the head's centre, y); it slopes between
+FACE_Z = 0.12        # face: in front of this (relative to the head's centre) stays skin
+HEAD_Y = 5.35       # all skin above this (ears), outside the hair
+NECK_HALF = 0.3      # |x| of the neck opening (the shoulders either side stay jersey)
+ARM_CUT = 2.52       # |x| of the wrist joints (skeleton.js): the hand models (grip.glb, mitt.glb) start here
 
 
 def material(name):
     """A material named for the viewer colour; preview colour from PREVIEW_RGB (sRGB -> linear)."""
     m = bpy.data.materials.get(name) or bpy.data.materials.new(name)
-    h = PREVIEW_RGB.get(name, 0xFF00FF)
+    h = PREVIEW_RGB[name]
     lin = lambda c: (c / 255) / 12.92 if c / 255 <= 0.04045 else (((c / 255) + 0.055) / 1.055) ** 2.4
     m.diffuse_color = (lin(h >> 16 & 255), lin(h >> 8 & 255), lin(h & 255), 1)
     return m
-
-
-def link(name, me):
-    ob = bpy.data.objects.new(name, me)
-    bpy.context.scene.collection.objects.link(ob)
-    return ob
 
 
 def apply_modifiers(ob):
@@ -168,248 +97,317 @@ def apply_modifiers(ob):
     ob.data = me
 
 
-def build_body():
-    """The clothed body: Skin modifier round the stick figure, subdivided, coloured by region."""
-    pts = stick_points()
-    names = [p[0] for p in pts]
-    me = bpy.data.meshes.new("body")
-    me.from_pydata([bl(p[1]) for p in pts], [(names.index(a), names.index(b)) for a, b in STICK_EDGES], [])
-    ob = link("pitcher_body", me)
-    ob.modifiers.new("skin", "SKIN")
-    sk = me.skin_vertices[0].data
-    for i, (_, _, (rx, rz)) in enumerate(pts):
-        sk[i].radius = (rx * SKIN_GROW, rz * SKIN_GROW)
-    sk[names.index("pelvis")].use_root = True
-    m = ob.modifiers.new("subsurf", "SUBSURF")
-    m.levels = m.render_levels = SUBDIV
-    apply_modifiers(ob)
-    # Melt the muscle and cloth shapes into it: join, rebuild as one surface on a grid (voxel
-    # remesh), smooth the joins, thin to the budget.
-    parts = [ob] + [ellipsoid("shape", c, r, "jersey", 24, 16) for side in (1, -1) for c, r in shapes(side)]
+def tris(ob):
+    return sum(len(p.vertices) - 2 for p in ob.data.polygons)
+
+
+def import_ref():
+    """The reference as one mesh object in Blender axes, scaled to HEIGHT, feet on the ground,
+    centred on the skeleton (x, and z by Z_SHIFT)."""
+    bpy.ops.import_scene.gltf(filepath=REF)
+    obs = [o for o in bpy.context.scene.objects if o.type == "MESH"]
+    bpy.context.view_layer.update()
+    for o in obs:
+        o.data.transform(o.matrix_world)
+        o.parent = None
+        o.matrix_world = Matrix.Identity(4)
+    for o in [o for o in bpy.context.scene.objects if o.type != "MESH"]:
+        bpy.data.objects.remove(o)
     bpy.ops.object.select_all(action="DESELECT")
-    for o in parts:
+    for o in obs:
         o.select_set(True)
-    bpy.context.view_layer.objects.active = ob
-    bpy.ops.object.join()
-    m = ob.modifiers.new("remesh", "REMESH")
-    m.mode, m.voxel_size = "VOXEL", BODY_VOXEL
-    m = ob.modifiers.new("smooth", "SMOOTH")
-    m.factor, m.iterations = 0.6, BODY_SMOOTH
-    apply_modifiers(ob)
-    have = sum(len(p.vertices) - 2 for p in ob.data.polygons)
-    if have > BODY_TRIS:
-        m = ob.modifiers.new("decimate", "DECIMATE")
-        m.ratio = BODY_TRIS / have
-        apply_modifiers(ob)
-    ob.data.materials.clear()
-    for name in ("jersey", "pants", "navy", "skin"):
-        ob.data.materials.append(material(name))
-    for f in ob.data.polygons:
-        c = Vector((f.center.x, f.center.z, -f.center.y))  # viewer axes
-        if c.y > NECK_Y or abs(c.x) > SLEEVE_X:
-            k = "skin"
-        elif c.y > BELT_Y:
-            k = "jersey"
-        elif c.y > PANTS_END_Y:
-            k = "pants"
-        else:
-            k = "navy"
-        f.material_index = ["jersey", "pants", "navy", "skin"].index(k)
-    ob.data.shade_smooth()
+    bpy.context.view_layer.objects.active = obs[0]
+    if len(obs) > 1:
+        bpy.ops.object.join()
+    ob = bpy.context.view_layer.objects.active
+    ob.name = "pitcher_body"
+    zs = [v.co.z for v in ob.data.vertices]
+    xs = [v.co.x for v in ob.data.vertices]
+    s = HEIGHT / (max(zs) - min(zs))
+    cx = (max(xs) + min(xs)) / 2
+    ob.data.transform(Matrix.Translation(bl(V(0, 0, Z_SHIFT))) @ Matrix.Diagonal((s, s, s, 1))
+                      @ Matrix.Translation(Vector((-cx, 0, -min(zs)))))
     return ob
 
 
-def ellipsoid(name, c, r, mat, seg=32, rings=20):
-    """A UV-sphere ellipsoid (viewer centre c, semi-axes r = (x, y, z))."""
-    me = bpy.data.meshes.new(name)
+def clean(ob):
+    """Voxel remesh (watertight, even triangles), smooth, thin to BODY_TRIS."""
+    m = ob.modifiers.new("remesh", "REMESH")
+    m.mode, m.voxel_size = "VOXEL", VOXEL
+    m = ob.modifiers.new("smooth", "SMOOTH")
+    m.factor, m.iterations = 0.5, SMOOTH
+    apply_modifiers(ob)
+    for _ in range(4):  # decimating lands a little high: repeat
+        if tris(ob) <= BODY_TRIS:
+            break
+        m = ob.modifiers.new("decimate", "DECIMATE")
+        m.ratio = BODY_TRIS / tris(ob) * 0.98
+        apply_modifiers(ob)
+
+
+def region(c, head):
+    """Material for a face at viewer position c (before the fit to the skeleton)."""
+    ax = abs(c.x)
+    if c.y < SHOE_Y:
+        return "shoe"
+    if c.y < SOCK_Y:
+        return "navy"
+    if ax > TRIM_X[1]:
+        return "skin"
+    if ax > TRIM_X[0] and c.y > 4.4:
+        return "navy"
+    if c.y > HEAD_Y and (hair_side(c, head) > 0 and c.z - head.z < FACE_Z or c.y > HAIR_Y + 0.2):
+        return "hair"  # above the sloped hairline (sides and back), or above the forehead
+    if c.y > NECK_Y + (0.12 if c.z < head.z else 0) and (ax < NECK_HALF or c.y > HEAD_Y):
+        return "skin"
+    if BELT[0] < c.y < BELT[1]:
+        return "navy"
+    return "pants" if c.y < BELT[0] else "jersey"
+
+
+def hairline(head):
+    """The hairline as a plane (point, normal; viewer axes): through HAIR_Y just behind the face
+    and NAPE at the back, so the hair reaches down the back of the head to the neck."""
+    a, b = V(0, HAIR_Y, head.z + FACE_Z), V(0, NAPE[1], head.z + NAPE[0])
+    t = (a - b).normalized()
+    return a, V(0, t.z, -t.y) * (1 if t.z > 0 else -1)  # perpendicular to the slope, pointing up
+
+
+def hair_side(c, head):
+    """> 0 above the hairline."""
+    a, n = hairline(head)
+    return (c - a).dot(n)
+
+
+def split_at_boundaries(ob, head):
+    """Cut the surface along each colour boundary (bisect), so the paint has straight edges
+    instead of following the triangles' zigzag."""
     bm = bmesh.new()
-    bmesh.ops.create_uvsphere(bm, u_segments=seg, v_segments=rings, radius=1.0)
-    bmesh.ops.scale(bm, vec=Vector((r[0], r[2], r[1])), verts=bm.verts)  # Blender (x, y=-z, z=y)
-    bmesh.ops.translate(bm, vec=bl(c), verts=bm.verts)
-    bm.to_mesh(me)
+    bm.from_mesh(ob.data)
+    cuts = [(V(0, y, 0), V(0, 1, 0)) for y in (SHOE_Y, SOCK_Y, *BELT, NECK_Y, NECK_Y + 0.12, HAIR_Y, HAIR_Y + 0.2)]
+    cuts += [hairline(head), (V(0, 0, head.z + FACE_Z), V(0, 0, 1))]
+    cuts += [(V(s * x, 0, 0), V(1, 0, 0)) for x in (*TRIM_X, NECK_HALF) for s in (1, -1)]
+    for co, no in cuts:
+        geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
+        bmesh.ops.bisect_plane(bm, geom=geom, plane_co=bl(co), plane_no=bl(no))
+    bmesh.ops.triangulate(bm, faces=bm.faces)
+    bm.to_mesh(ob.data)
     bm.free()
-    me.materials.append(material(mat))
-    me.shade_smooth()
-    return link(name, me)
 
 
-def vw(p):
-    """Blender (Z-up) -> viewer (Y-up); inverse of bl()."""
-    return Vector((p[0], p[2], -p[1]))
+def paint(ob):
+    ob.data.materials.clear()
+    for name in MATS:
+        ob.data.materials.append(material(name))
+    head_pts = [vw(v.co) for v in ob.data.vertices if vw(v.co).y > 5.5]
+    head = sum(head_pts, Vector()) / len(head_pts)
+    split_at_boundaries(ob, head)
+    for f in ob.data.polygons:
+        f.material_index = MATS.index(region(vw(f.center), head))
+    ob.data.shade_smooth()
 
 
-def sweep(name, rings, mat, closed_ends=False):
-    """A surface through `rings` (lists of viewer points, same length, each a closed loop)."""
+def source_joints(ob):
+    """Where the reference's joints are, measured from its shape: the skeleton's joints, with the
+    arm chain moved to the arm's centre line and the knees/ankles to each leg's centre."""
+    P = [vw(v.co) for v in ob.data.vertices]
+
+    def centre(sel, axis):
+        q = [getattr(p, axis) for p in P if sel(p)]
+        return (min(q) + max(q)) / 2
+    src = {n: p.copy() for n, (p, _) in JT.items()}
+    for s, x in (("left", 1), ("right", -1)):
+        dy = centre(lambda p: abs(p.x - x * 1.67) < 0.04, "y") - JT[f"{s}_elbow"][0].y
+        for j in ("shoulder", "elbow", "wrist", "hand"):
+            src[f"{s}_{j}"].y += dy
+        src[f"{s}_collar"].y += dy / 2
+        for j, y in (("knee", JT[f"{s}_knee"][0].y), ("ankle", 0.6), ("foot", 0.15)):
+            src[f"{s}_{j}"].x = centre(lambda p: abs(p.y - y) < 0.04 and p.x * x > 0.05, "x")
+        print(f"[make_pitcher] {s}: arm dy {dy:.3f}, knee x {src[f'{s}_knee'].x:.2f}, ankle x {src[f'{s}_ankle'].x:.2f}")
+    return src
+
+
+def fit(ob, src):
+    """Move each vertex by the joint displacements (src -> skeleton rest) of its two nearest bones,
+    blended along each bone and between the bones by inverse distance (d^-4)."""
+    bones = [(c, p) for c, (_, p) in JT.items() if p]
+    delta = {n: JT[n][0] - src[n] for n in JT}
+    for v in ob.data.vertices:
+        p = vw(v.co)
+        near = []
+        for c, par in bones:
+            a, b = src[par], src[c]
+            ab = b - a
+            t = min(max((p - a).dot(ab) / max(ab.length_squared, 1e-9), 0), 1)
+            near.append(((p - (a + ab * t)).length, delta[par].lerp(delta[c], t)))
+        near.sort(key=lambda e: e[0])
+        w = [1 / (d ** 4 + 1e-6) for d, _ in near[:2]]
+        move = sum((d * wi for (_, d), wi in zip(near[:2], w)), Vector()) / sum(w)
+        v.co = bl(p + move)
+
+
+def cut(ob, keep_inner, name=None, weld=False, sides=(1, -1)):
+    """Slice the arms at |x| = ARM_CUT (bisect: a clean edge loop), keeping the body side
+    (keep_inner) or the hands. With `name`, work on a copy (returned). `weld` merges the duplicate
+    vertices the glTF import makes at texture seams (a subdivision would tear them apart)."""
+    if name:
+        ob = bpy.data.objects.new(name, ob.data.copy())
+        bpy.context.scene.collection.objects.link(ob)
+    bm = bmesh.new()
+    bm.from_mesh(ob.data)
+    if weld:
+        bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.002)
+    for sx in sides:
+        geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
+        bmesh.ops.bisect_plane(bm, geom=geom, plane_co=V(sx * ARM_CUT, 0, 0), plane_no=V(sx, 0, 0),
+                               clear_outer=keep_inner, clear_inner=not keep_inner)
+    bm.to_mesh(ob.data)
+    bm.free()
+    return ob
+
+
+# ---------- the cap ----------
+# A structured six-panel ball cap (after Ryan's reference photos; no logos): crown of six panels
+# meeting at a top button (centre seam at the front), an eyelet in each panel, a pre-curved brim
+# with rows of stitching, and a twisted rope across the front. Viewer axes; phi = angle round the
+# head from the front (+z), theta = 0 at the cap's rim up to 90 deg at the button.
+CAP = dict(
+    centre=V(0.01, 0, 0.045),  # x/z of the head's centre (measured: head x +-0.31, z -0.35..0.44)
+    rim_y=(5.80, 5.70),        # rim height at the front and back (the hair shows below at the back)
+    top_y=6.22,                # crown top; the button reaches the pitcher's height (6.25)
+    r=(0.335, 0.44, 0.40),     # crown radii at the rim: across, to the front, to the back
+    front_flat=0.8,            # front panels: < 1 keeps them upright longer (a structured front)
+    clear=0.008,               # gap left between the hair (pressed down where needed) and the crown's inside
+    thick=0.015,
+    seam_r=0.007, eyelet=(0.018, 0.62), button=(0.035, 0.018),
+    brim=dict(arc=70, length=0.26, side_drop=0.17, front_drop=0.05, t=0.022, rows=6),
+    rope=dict(arc=72, r=0.011, twists=26, lift=0.025),
+)
+PREVIEW_RGB.update(capDark=0x1B3049, rope=0xE5604B)  # seams/stitching/eyelets; PALETTE.coral
+MATS = list(PREVIEW_RGB)
+
+
+def grid_mesh(name, rows, mat, closed=False):
+    """A surface through rows of viewer points (same length each); closed: rows are loops."""
     me = bpy.data.meshes.new(name)
     bm = bmesh.new()
-    vs = [[bm.verts.new(bl(p)) for p in r] for r in rings]
-    n = len(rings[0])
-    for a_, b_ in zip(vs, vs[1:]):
-        for k in range(n):
-            bm.faces.new((a_[k], a_[(k + 1) % n], b_[(k + 1) % n], b_[k]))
-    if closed_ends:
-        bm.faces.new(vs[0][::-1])
-        bm.faces.new(vs[-1])
+    vs = [[bm.verts.new(bl(p)) for p in r] for r in rows]
+    n = len(rows[0])
+    for a, b in zip(vs, vs[1:]):
+        for k in range(n if closed else n - 1):
+            bm.faces.new((a[k], a[(k + 1) % n], b[(k + 1) % n], b[k]))
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
     bm.to_mesh(me)
     bm.free()
     me.materials.append(material(mat))
     me.shade_smooth()
-    return link(name, me)
-
-
-def contour(body, y, off, n=48, axis_c=V(0, 0, 0)):
-    """The body's outline round a horizontal slice at height y, `off` ft outside its surface:
-    rays cast inwards from all round (viewer axes), centred on axis_c's x/z."""
-    out = []
-    for k in range(n):
-        a = 2 * math.pi * k / n
-        d = V(math.sin(a), 0, math.cos(a))
-        o = V(axis_c.x, y, axis_c.z) + d * 2.0
-        ok, hit, _, _ = body.ray_cast(bl(o), bl(-d), distance=2.0)
-        out.append((vw(hit) if ok else o - d * 1.5) + d * off)
-    return out
-
-
-def band(body, name, y, h, off, mat, axis_c=V(0, 0, 0)):
-    """A cloth band (belt, collar) wrapped round the body at height y, h tall, off proud of it."""
-    ob = sweep(name, [contour(body, y - h / 2, off, axis_c=axis_c), contour(body, y + h / 2, off, axis_c=axis_c)], mat)
-    m = ob.modifiers.new("thick", "SOLIDIFY")
-    m.thickness, m.offset = 0.012, -1.0
-    apply_modifiers(ob)
+    ob = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(ob)
     return ob
 
 
-def piping(body, name, pts, along_dir, r=0.013, mat="navy"):
-    """A thin cord pressed onto the body: each point of `pts` is moved onto the surface by a ray
-    cast along -along_dir, then swept as a small round tube."""
-    hits = []
-    for p in pts:
-        ok, hit, _, _ = body.ray_cast(bl(p + along_dir * 1.5), bl(-along_dir), distance=3.0)
-        if ok:
-            hits.append(vw(hit) + along_dir * (r * 0.6))
+def tube(name, pts, r, mat, sides=6):
+    """A thin round tube along a polyline (viewer points): seams, stitch rows, rope strands."""
     rings = []
-    for i, p in enumerate(hits):
-        t = (hits[min(i + 1, len(hits) - 1)] - hits[max(i - 1, 0)]).normalized()
-        u = along_dir.normalized()
-        w = t.cross(u).normalized()
-        u = w.cross(t).normalized()
-        rings.append([p + (u * math.cos(q) + w * math.sin(q)) * r for q in (2 * math.pi * k / 8 for k in range(8))])
-    return sweep(name, rings, mat, closed_ends=True)
+    for i, p in enumerate(pts):
+        t = (pts[min(i + 1, len(pts) - 1)] - pts[max(i - 1, 0)]).normalized()
+        u = t.orthogonal().normalized()
+        w = t.cross(u)
+        rings.append([p + (u * math.cos(a) + w * math.sin(a)) * r for a in (2 * math.pi * k / sides for k in range(sides))])
+    return grid_mesh(name, rings, mat, closed=True)
 
 
-def build_cloth(body):
-    """Cloth layered over the body: short jersey sleeves (open, with navy trim), belt, collar,
-    piping down the placket and the pants' outside seams."""
-    bpy.context.view_layer.update()
-    obs = []
-    C = CLOTH
-    for x in (1, -1):
-        # sleeve: a flared tube from inside the shoulder out past the deltoid, open at its end
-        sh = JT["left_shoulder" if x > 0 else "right_shoulder"]
-        rings = []
-        for k in range(7):
-            t = k / 6
-            cx = x * (0.5 + (C["sleeve_end"] - 0.5) * t)
-            r = C["sleeve_r"][0] + (C["sleeve_r"][1] - C["sleeve_r"][0]) * t
-            rings.append([V(cx, sh.y + math.sin(q) * r * 1.02, sh.z + math.cos(q) * r) for q in (2 * math.pi * j / 28 for j in range(28))])
-        sl = sweep("sleeve", rings, "jersey")
-        m = sl.modifiers.new("thick", "SOLIDIFY")
-        m.thickness, m.offset = 0.02, -1.0
-        apply_modifiers(sl)
-        obs.append(sl)
-        end = rings[-1]
-        trim = sweep("sleeve_trim", [[p + (p - V(p.x, sh.y, sh.z)).normalized() * 0.006 + V(-x * 0.035, 0, 0) for p in end],
-                                     [p + (p - V(p.x, sh.y, sh.z)).normalized() * 0.006 for p in end]], "navy")
-        m = trim.modifiers.new("thick", "SOLIDIFY")
-        m.thickness, m.offset = 0.012, -1.0
-        apply_modifiers(trim)
-        obs.append(trim)
-        # pants: piping down the outside seam, hip to the knicker cuff
-        obs.append(piping(body, "pants_piping", [V(x * 0.3, y, 0.0) for y in [3.42 - 0.2 * k for k in range(11)]], V(x, 0, 0)))
-    obs.append(band(body, "belt", BELT_Y, C["belt_h"], 0.006, "navy"))
-    for x in (1, -1):  # the knicker pants' cuff, over where pants meet sock
-        obs.append(band(body, "pants_cuff", PANTS_END_Y + 0.02, 0.07, 0.008, "pants", axis_c=V(x * 0.3, 0, 0)))
-    obs.append(band(body, "collar", C["collar_y"], 0.07, 0.004, "navy", axis_c=V(0, 0, -0.04)))
-    obs.append(piping(body, "placket", [V(0.04, y, 0) for y in [3.52 + 0.16 * k for k in range(11)]], V(0, 0, 1)))
-    return obs
-
-
-def build_head():
-    """Head (egg + jaw), ears, nose, and hair at the back and sides under the cap."""
-    obs = [ellipsoid("head", HEAD_C, HEAD_R, "skin"), ellipsoid("jaw", JAW["c"], JAW["r"], "skin")]
-    for x in (-0.32, 0.32):
-        obs.append(ellipsoid("ear", V(x, 5.83, 0.02), (0.05, 0.09, 0.07), "skin", 12, 8))
-    obs.append(ellipsoid("nose", V(0, 5.8, 0.39), (0.05, 0.065, 0.055), "skin", 12, 8))
-    obs.append(ellipsoid("hair", V(0, 5.9, -0.09), (0.34, 0.2, 0.31), "hair"))
-    return obs
-
-
-def build_cap():
-    """Fitted ball cap: six-panel crown (taller at the front), button on top, curved brim."""
+def cap_point(phi, theta, out=0.0):
+    """A point on the ideal crown (degrees), `out` ft further from the head's centre."""
     k = CAP
-    me = bpy.data.meshes.new("cap")
-    bm = bmesh.new()
-    bmesh.ops.create_uvsphere(bm, u_segments=36, v_segments=24, radius=1.0)
-    bmesh.ops.delete(bm, geom=[v for v in bm.verts if v.co.z < -0.02], context="VERTS")  # top half
-    for v in bm.verts:  # shape: oval crown, the front panels standing taller
-        x, y, z = v.co  # Blender: y = -forward
-        front = max(-y, 0.0)
-        v.co = Vector((x * k["r"][0], y * k["r"][2], z * k["r"][1] * (1 + k["front_lift"] * front)))
-        v.co += bl(k["c"])
-    bm.to_mesh(me)
-    bm.free()
-    crown = link("cap_crown", me)
+    p, th = math.radians(phi), math.radians(theta)
+    front = math.cos(p) > 0
+    rz = k["r"][1] if front else k["r"][2]
+    rim = k["rim_y"][0] + (k["rim_y"][1] - k["rim_y"][0]) * (1 - math.cos(p)) / 2
+    # A structured front stays upright longer: its horizontal reach falls off as cos^front_flat.
+    reach = math.cos(th) ** (k["front_flat"] if front else 1.0)
+    c = V(k["centre"].x + (k["r"][0] + out) * reach * math.sin(p), rim + (k["top_y"] + out - rim) * math.sin(th),
+          k["centre"].z + (rz + out) * reach * math.cos(p))
+    return c
+
+
+def press_hair(body, crown, o):
+    """Like a real cap, flatten whatever is under the crown: each head vertex further out (from o,
+    inside the head) than the crown's inside surface less CAP['clear'] is pulled back to it."""
+    bpy.context.view_layer.update()
+    lim = CAP["thick"] + CAP["clear"]
+    for v in body.data.vertices:
+        p = vw(v.co)
+        if p.y < CAP["rim_y"][1] - 0.05 or abs(p.x) > 0.6:
+            continue
+        d = (p - o).normalized()
+        ok, hit, _, _ = crown.ray_cast(bl(o), bl(d), distance=2.0)
+        if ok and (p - o).length > (vw(hit) - o).length - lim:
+            v.co = bl(o + d * ((vw(hit) - o).length - lim))
+
+
+def build_cap(body):
+    """Crown (the hair pressed down under it), panel seams, eyelets, button, brim with stitch rows, rope."""
+    k = CAP
+    o = V(k["centre"].x, 5.75, k["centre"].z)  # rays from inside the head
+    bpy.context.view_layer.update()
+
+    phis = [i * 7.5 for i in range(48)]
+    thetas = [i * 6 for i in range(16)]  # 0..90
+    crown = grid_mesh("cap_crown", [[cap_point(f, t) for f in phis] for t in thetas], "navy", closed=True)
+    press_hair(body, crown, o)
     m = crown.modifiers.new("thick", "SOLIDIFY")
-    m.thickness, m.offset = 0.02, 1.0
+    m.thickness, m.offset = k["thick"], -1.0
     apply_modifiers(crown)
-    crown.data.materials.append(material("navy"))
-    crown.data.shade_smooth()
-    # Brim: a curved plate in front of the crown's rim: half-oval outline, bent down at its sides
-    # and front edge (pre-curved, like a worn cap), with thickness.
-    me = bpy.data.meshes.new("brim")
-    bm = bmesh.new()
-    nu, nv = 24, 8
-    grid = []
-    for i in range(nu + 1):
-        a = math.pi * i / nu  # 0..pi round the half-oval
-        row = []
-        for jj in range(nv + 1):
-            t = jj / nv  # 0 at the rim, 1 at the brim's edge
-            ex, ez = math.cos(a) * k["brim_w"] * (0.92 + 0.08 * t), math.sin(a) * k["brim_len"] * t
-            x = ex
-            z = k["r"][2] * 0.92 * math.sin(a) + ez  # forward
-            y = k["c"].y + 0.01 - k["brim_drop"] * (t ** 1.6) - 0.04 * abs(math.cos(a)) * t  # bends down
-            row.append(bm.verts.new(bl(V(x, y, z + k["c"].z))))
-        grid.append(row)
-    for i in range(nu):
-        for jj in range(nv):
-            bm.faces.new((grid[i][jj], grid[i][jj + 1], grid[i + 1][jj + 1], grid[i + 1][jj]))
-    bm.to_mesh(me)
-    bm.free()
-    brim = link("cap_brim", me)
+    surf = lambda f, t, out=0.0: cap_point(f, t) + (cap_point(f, t) - o).normalized() * out
+    obs = [crown]
+    for f in range(0, 360, 60):  # six panels: seams at 0 (front centre), 60, ... 300
+        obs.append(tube("cap_seam", [surf(f, t, 0.003) for t in range(0, 91, 5)], k["seam_r"], "capDark"))
+    for f in range(30, 360, 60):  # an eyelet in each panel
+        e = surf(f, math.degrees(math.asin(k["eyelet"][1])), 0.002)
+        n = (e - o).normalized()
+        obs.append(tube("cap_eyelet", [e - n * 0.004, e + n * 0.004], k["eyelet"][0], "capDark", sides=10))
+    top = surf(0, 90)
+    obs.append(tube("cap_button", [top, top + V(0, k["button"][1], 0)], k["button"][0], "navy", sides=12))
+    # Brim: from the crown's rim across the front, out along the rim's outward normal. Its length
+    # tapers to the sides (a rounded "D"), its sides curve down (the pre-curve) and its front dips.
+    b = k["brim"]
+    us = [-b["arc"] + 2 * b["arc"] * i / 24 for i in range(25)]
+    vs = [i / 8 for i in range(9)]
+
+    def brim_pt(u, v):
+        rim = surf(u, 0, -0.01)
+        out = V(math.sin(math.radians(u)) * 0.4, 0, math.cos(math.radians(u))).normalized()
+        reach = b["length"] * math.cos(math.radians(u * 90 / b["arc"])) ** 0.6  # to nothing at its ends
+        s = (u / b["arc"]) ** 2
+        f = reach * v / b["length"]  # how far out, 0..1: the drop grows with it
+        return rim + out * reach * v - V(0, b["side_drop"] * s * f + b["front_drop"] * f ** 1.5, 0)
+    brim = grid_mesh("cap_brim", [[brim_pt(u, v) for u in us] for v in vs], "navy")
     m = brim.modifiers.new("thick", "SOLIDIFY")
-    m.thickness, m.offset = k["brim_t"], 0.0
+    m.thickness, m.offset = b["t"], 0.0
     apply_modifiers(brim)
-    brim.data.materials.append(material("navy"))
-    brim.data.shade_smooth()
-    button = ellipsoid("cap_button", k["c"] + V(0, k["r"][1] + 0.005, 0), (k["button_r"], 0.016, k["button_r"]), "navy", 12, 6)
-    return [crown, brim, button]
-
-
-def build_shoes():
-    """Cleats: a rounded upper over the ankle and foot, on a flat sole."""
-    obs = []
-    for s in ("left", "right"):
-        a, f = JT[f"{s}_ankle"], JT[f"{s}_foot"]
-        c = V(f.x, 0.16, (a.z + f.z) / 2 + 0.02)
-        obs.append(ellipsoid("shoe", c, (0.15, 0.13, 0.36), "shoe", 24, 14))
-        obs.append(ellipsoid("sole", V(f.x, 0.04, c.z), (0.155, 0.04, 0.38), "jersey", 24, 8))
+    obs.append(brim)
+    for j in range(b["rows"]):  # stitch rows following the brim's outline
+        v = 0.25 + 0.7 * j / (b["rows"] - 1)
+        obs.append(tube("cap_stitch", [brim_pt(u, v) + V(0, b["t"] / 2 + 0.002, 0) for u in us[1:-1]], 0.004, "capDark", sides=4))
+    # Rope: two strands twisted round a line just above where the brim meets the crown.
+    rp = k["rope"]
+    line = [surf(-rp["arc"] + 2 * rp["arc"] * i / 120, 0, 0.012) + V(0, rp["lift"], 0) for i in range(121)]
+    for strand in (0, math.pi):
+        pts = []
+        for i, c in enumerate(line):
+            t = (line[min(i + 1, 120)] - line[max(i - 1, 0)]).normalized()
+            n1 = (c - o).normalized()
+            n1 = (n1 - t * n1.dot(t)).normalized()
+            n2 = t.cross(n1)
+            a = rp["twists"] * 2 * math.pi * i / 120 + strand
+            pts.append(c + (n1 * math.cos(a) + n2 * math.sin(a)) * rp["r"] * 0.8)
+        obs.append(tube("cap_rope", pts, rp["r"], "rope"))
     return obs
 
 
-def render(obs, name):
-    """Workbench (flat studio-lit) previews: front, side, back, three-quarter; for review only."""
+def render(name):
+    """Workbench (flat studio-lit) previews: front, side, back, head, three-quarter; review only."""
     sc = bpy.context.scene
     sc.render.engine = "BLENDER_WORKBENCH"
     sc.display.shading.light, sc.display.shading.color_type = "STUDIO", "MATERIAL"
@@ -427,30 +425,99 @@ def render(obs, name):
                                   ("three_q", V(0.7, 0.2, 1), V(0, 4.4, 0), 8)):
         dd = bl(d).normalized()
         cam.location = bl(target) + dd * dist
-        up = Vector((0, 0, 1))
-        xc = up.cross(dd).normalized()
+        xc = Vector((0, 0, 1)).cross(dd).normalized()
         cam.rotation_euler = Matrix((xc, dd.cross(xc), dd)).transposed().to_euler()
         sc.render.filepath = os.path.join(PREVIEW_DIR, f"{name}_{view}.png")
         bpy.ops.render.render(write_still=True)
 
 
+def close_wrists(ob):
+    """Fill each wrist's open edge loop (left by cut) with a flat cap, so the arm is a closed
+    surface: bone heat weighting needs one, and no hole shows if a hand model sits off-centre."""
+    bm = bmesh.new()
+    bm.from_mesh(ob.data)
+    for sx in (1, -1):
+        rim = [e for e in bm.edges if e.is_boundary and all(abs(v.co.x - sx * ARM_CUT) < 1e-3 for v in e.verts)]
+        out = bmesh.ops.holes_fill(bm, edges=rim, sides=0)
+        bmesh.ops.triangulate(bm, faces=out["faces"])
+        for f in out["faces"]:
+            f.material_index = MATS.index("skin")
+    bm.to_mesh(ob.data)
+    bm.free()
+
+
+# Each bone runs from its joint to this child (skeleton.js parents); a leaf runs this way (viewer ft).
+BONE_TO = {"pelvis": "spine1", "spine3": "neck", "left_collar": "left_shoulder", "right_collar": "right_shoulder"}
+LEAF = {"head": V(0, 0.45, 0), "left_hand": V(0.15, 0, 0), "right_hand": V(-0.15, 0, 0),
+        "left_foot": V(0, 0, 0.15), "right_foot": V(0, 0, 0.15)}
+
+
+def rig_and_bind(body, cap):
+    """The viewer's 24-bone skeleton (skeleton.js rest T-pose), with the body skinned to it by
+    Blender's automatic weights and the cap rigid on the head.
+
+    Automatic weights = "bone heat" (Baran & Popovic 2007, "Automatic rigging and animation of 3D
+    characters"): each bone heats the surface, heat diffuses along it, and a vertex's weight for a
+    bone is its share of the heat. Unlike nearest-bone weights it follows the surface, so the armpit
+    blends arm and torso smoothly and the inner thighs do not grab the other leg.
+    Only the weights reach the viewer: it binds the mesh to its own bones at the same rest pose."""
+    kids = {}
+    for n, (_, par) in JT.items():
+        kids.setdefault(par, []).append(n)
+    arm = bpy.data.objects.new("rig", bpy.data.armatures.new("rig"))
+    bpy.context.scene.collection.objects.link(arm)
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode="EDIT")
+    for n, (p, _) in JT.items():
+        eb = arm.data.edit_bones.new(n)
+        to = BONE_TO.get(n) or (kids[n][0] if len(kids.get(n, [])) == 1 else None)
+        eb.head, eb.tail = bl(p), bl(JT[to][0] if to else p + LEAF[n])
+    for n, (_, par) in JT.items():
+        if par:
+            arm.data.edit_bones[n].parent = arm.data.edit_bones[par]
+    bpy.ops.object.mode_set(mode="OBJECT")
+    bpy.ops.object.select_all(action="DESELECT")
+    body.select_set(True)
+    arm.select_set(True)
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.parent_set(type="ARMATURE_AUTO")
+    unweighted = sum(1 for v in body.data.vertices if not any(g.weight > 0 for g in v.groups))
+    assert unweighted == 0, f"bone heat left {unweighted} vertices unweighted"
+    for o in cap:
+        o.vertex_groups.new(name="head").add(list(range(len(o.data.vertices))), 1.0, "REPLACE")
+        o.parent = arm
+        o.modifiers.new("rig", "ARMATURE").object = arm
+    return arm
+
+
+def export(body, cap, rig):
+    """pitcher.glb: the body and cap in the rest pose (viewer axes, ft), skinned to the 24 bones by
+    name, material names = viewer colours."""
+    bpy.ops.object.select_all(action="DESELECT")
+    for o in [body, rig, *cap]:
+        o.select_set(True)
+    path = os.path.join(OUT_DIR, "pitcher.glb")
+    bpy.ops.export_scene.gltf(filepath=path, export_format="GLB", use_selection=True, export_yup=True,
+                              export_skins=True, export_animations=False, export_texcoords=False,
+                              export_materials="EXPORT")
+    print(f"[make_pitcher] wrote {path} ({os.path.getsize(path) // 1024} KB)")
+
+
 def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    body = build_body()
-    obs = [body] + build_cloth(body) + build_head() + build_cap() + build_shoes()
-    tris = sum(sum(len(p.vertices) - 2 for p in o.data.polygons) for o in obs)
-    print(f"[make_pitcher] {len(obs)} parts, {tris} triangles")
-    if os.environ.get("PITCHER_MEASURE"):  # half-widths / depths of the body at a few heights
-        for y in (5.1, 4.75, 4.4, 4.0, 3.6, 3.1, 2.5, 1.75, 1.4, 0.8):
-            c = contour(body, y, 0.0, n=16)
-            print(f"[measure] y {y}: x {min(p.x for p in c):.2f}..{max(p.x for p in c):.2f}  z {min(p.z for p in c):.2f}..{max(p.z for p in c):.2f}")
-        for x in (0.64, 0.9, 1.3, 1.67, 1.92, 2.3):
-            ok, hit, _, _ = body.ray_cast(bl(V(x, 6.5, -0.05)), bl(V(0, -1, 0)), distance=3)
-            ok2, hit2, _, _ = body.ray_cast(bl(V(x, 3.5, -0.05)), bl(V(0, 1, 0)), distance=3)
-            print(f"[measure] arm x {x}: y {vw(hit2).y if ok2 else 0:.2f}..{vw(hit).y if ok else 0:.2f}")
+    body = import_ref()
+    clean(body)
+    paint(body)
+    fit(body, source_joints(body))
+    cut(body, True)
+    close_wrists(body)
+    cap = build_cap(body)
+    rig = rig_and_bind(body, cap)
+    print(f"[make_pitcher] body {tris(body)}, cap {sum(tris(o) for o in cap)} triangles")
     if PREVIEW_DIR:
         os.makedirs(PREVIEW_DIR, exist_ok=True)
-        render(obs, "pitcher")
+        render("pitcher")
+    export(body, cap, rig)
 
 
 main()

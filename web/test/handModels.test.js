@@ -64,3 +64,30 @@ test("grip.glb holds the ball at the hand joint, within budget", { skip: !exists
   assert.ok(hi[1] > R, "fingers over the top of the ball (+y)");
   assert.ok(hi[2] > 0.1, "thumb side is +z");
 });
+
+// The sculpted body (scripts/blender/make_pitcher.py): skinned to the skeleton's bones by name, every
+// vertex fully weighted, the viewer's colours, the rig's height, and arms ending at the wrist joints
+// (|x| = 2.52 ft) where grip.glb / mitt.glb take over.
+const BODY = new URL("../public/models/pitcher.glb", import.meta.url);
+
+test("pitcher.glb is a skinned rest-pose body that stops at the wrists", { skip: !existsSync(BODY) }, async () => {
+  const parts = toParts((await parse(readFileSync(BODY))).scene);
+  assert.ok(parts?.length, "no meshes");
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  let tris = 0;
+  for (const [key, g] of parts) {
+    assert.ok(["jersey", "pants", "navy", "skin", "hair", "shoe", "capDark", "rope"].includes(key), `unexpected material ${key}`);
+    const p = g.attributes.position.array, si = g.attributes.skinIndex?.array, sw = g.attributes.skinWeight?.array;
+    assert.ok(si && sw, `${key}: not skinned`);
+    for (let i = 0; i < p.length / 3; i++) {
+      for (let c = 0; c < 3; c++) { lo[c] = Math.min(lo[c], p[3 * i + c]); hi[c] = Math.max(hi[c], p[3 * i + c]); }
+      const w = sw[4 * i] + sw[4 * i + 1] + sw[4 * i + 2] + sw[4 * i + 3];
+      assert.ok(Math.abs(w - 1) < 0.01, `${key}: weights sum to ${w}`);
+      for (let k = 0; k < 4; k++) assert.ok(si[4 * i + k] < 24, "bone index out of range");
+    }
+    tris += g.index.count / 3;
+  }
+  assert.ok(tris < 25000, `${tris} triangles`);
+  assert.ok(Math.abs(hi[1] - 6.25) < 0.15 && Math.abs(lo[1]) < 0.05, `feet ${lo[1]} to cap ${hi[1]} ft`);
+  assert.ok(hi[0] < 2.53 && lo[0] > -2.53 && hi[0] > 2.45, `arms end at the wrists: x ${lo[0]}..${hi[0]}`);
+});
