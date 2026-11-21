@@ -29,6 +29,8 @@ const GLOVE_LIGHT = 0xb27a43;
 const COLORS = {
   jersey: PALETTE.jersey, navy: PALETTE.navy, pants: PALETTE.pants, skin: PALETTE.skin,
   glove: PALETTE.glove, gloveDark: GLOVE_DARK, gloveLight: GLOVE_LIGHT, shoe: PALETTE.shoe,
+  // Looks only (the sculpted body, cap and hands; no pose change): see ../figure.js.
+  hair: 0x2b1d14, capDark: 0x1b3049, rope: PALETTE.coral, grip: PALETTE.skin, open: PALETTE.skin,
 };
 
 /**
@@ -175,6 +177,25 @@ function atWrist(g, side) {
 function bodyParts(throws) {
   const G = throws === "L" ? "right" : "left";
   const parts = [];
+  // Looks only (no pose change): the sculpted body (pitcher.glb, skinned to the same bones) when loaded.
+  const model = handModel("pitcher");
+  if (model) parts.push(...model.map(([m, g]) => [m in COLORS ? m : "jersey", g]));
+  else proceduralBody(parts);
+  for (const sd of ["left", "right"]) {
+    // Hand: the mitt on the glove side, the ball grip on the throwing side.
+    const wrist = (g) => skin(atWrist(g, sd), () => J[`${sd}_wrist`]);
+    // A sculpted model (handModels.js) replaces the procedural hand when it has loaded (looks only: no pose change).
+    // The throwing hand comes twice, as "grip" and (if open.glb loaded) "open": ../figure.js showOpenHand swaps them.
+    const hand = sd === G ? handModel("mitt") ?? mitt()
+      : [...(handModel("grip") ?? gripHand().map((g) => ["skin", g])).map(([, g]) => ["grip", g]),
+        ...(handModel("open") ?? []).map(([, g]) => ["open", g])];
+    for (const [m, g] of hand) parts.push([m in COLORS ? m : "glove", wrist(g)]);
+  }
+  return parts;
+}
+
+/** The body built from simple shapes (no hands), pushed onto `parts`. */
+function proceduralBody(parts) {
   const add = (mat, g, boneOf) => parts.push([mat, skin(g, boneOf)]);
 
   // Torso: jersey from the belt to the shoulders, widest across the chest/shoulders.
@@ -214,11 +235,6 @@ function bodyParts(throws) {
     add("jersey", taper(P("shoulder"), P("shoulder").lerp(P("elbow"), 0.42), 0.215, 0.185), () => J[`${sd}_shoulder`]);
     // Forearm: thicker below the elbow, slim at the wrist.
     add("skin", taper(P("elbow"), P("wrist"), 0.13, 0.095), () => J[`${sd}_elbow`]);
-    // Hand: the mitt on the glove side, the ball grip on the throwing side.
-    const wrist = (g) => skin(atWrist(g, sd), () => J[`${sd}_wrist`]);
-    // A sculpted model (handModels.js) replaces the procedural hand when it has loaded (looks only: no pose change).
-    const hand = sd === G ? handModel("mitt") ?? mitt() : handModel("grip") ?? gripHand().map((g) => ["skin", g]);
-    for (const [m, g] of hand) parts.push([m in COLORS ? m : "glove", wrist(g)]);
 
     // Thigh: thick at the hip, a sphere at the knee shared with the shin.
     add("pants", taper(P("hip"), P("knee"), 0.28, 0.19, 14), () => J[`${sd}_hip`]);
@@ -234,7 +250,6 @@ function bodyParts(throws) {
     add("shoe", taper(a, V(a.x, 0.12, -0.12), 0.115, 0.12, 10), () => J[`${sd}_ankle`]);
     add("jersey", blob(V(a.x + x * 0.01, 0.04, 0.15), 0.16, 0.04, 0.42, 14, 6), () => J[`${sd}_ankle`]);
   }
-  return parts;
 }
 
 /**
@@ -245,6 +260,6 @@ export function figureGeometry(throws) {
   const parts = bodyParts(throws);
   const keys = [...new Set(parts.map((p) => p[0]))];
   const byMat = keys.map((k) => mergeGeometries(parts.filter((p) => p[0] === k).map((p) => p[1])));
-  const materials = keys.map((k) => Object.assign(makeToonMaterial(COLORS[k]), { name: k }));
+  const materials = keys.map((k) => Object.assign(makeToonMaterial(COLORS[k]), { name: k, visible: k !== "open" }));
   return { geometry: mergeGeometries(byMat, true), materials };
 }

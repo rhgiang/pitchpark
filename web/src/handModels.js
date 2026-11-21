@@ -5,14 +5,14 @@ import { J } from "./skeleton.js";
 /**
  * Optional sculpted models (scripts/blender/ builds them): public/models/pitcher.glb (body and cap,
  * rest T-pose, skinned to the skeleton.js bones by name; make_pitcher.py), mitt.glb (glove hand)
- * and grip.glb (throwing hand round the ball). The hands: Same local frame as figure.js's procedural
+ * grip.glb (throwing hand round the ball) and open.glb (the same hand relaxed, after release). The hands: Same local frame as figure.js's procedural
  * hands: built for the LEFT side, scene ft, origin at the wrist, +x along the hand, +y the back of
  * the hand, +z the thumb side; the ball's centre at (0.28, 0, 0). Each mesh's material name picks
  * the figure colour (glove, gloveDark, gloveLight, skin, ...). A missing file, a load error, or
  * ?models=0 keeps the procedural shapes.
  */
 const cache = {};
-const NAMES = ["pitcher", "mitt", "grip"];
+const NAMES = ["pitcher", "mitt", "grip", "open"];
 
 /** Load the models once (resolves even on failure). Call before makePitcher. */
 export function loadHandModels(base = "/models/") {

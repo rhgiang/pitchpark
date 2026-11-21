@@ -1,6 +1,7 @@
 """Build the viewer's throwing hand (grip.glb): a two-seam fastball grip, headless.
 
     blender --background --python scripts/blender/make_grip.py -- [preview_dir] [out_dir]
+    blender --background --python scripts/blender/make_grip.py -- --open [preview_dir] [out_dir]   (open.glb)
 
 (No --factory-startup: needs the MPFB extension, `blender -c extension install -s -e mpfb`.)
 
@@ -11,6 +12,9 @@ modelled hand bends cleanly. Units below are MPFB's metres until the export step
 Every joint is posed by rotating the bone in its own frame (X = flexion, probed; Z = spread across the
 palm), so fingers bend only the way real fingers bend. No IK: IK solved the thumb tip's position but
 twisted its metacarpal, which bulged the base of the thumb.
+
+--open builds open.glb instead: the same hand relaxed (fingers loosely flexed, nothing in it), which the
+viewer shows once the ball has left the hand, in place of the grip (an empty grip read as a claw).
 
 Output frame (web/src/handModels.js): LEFT hand, feet, origin at the wrist joint, +x along the forearm
 into the hand, +y the back of the hand, +z the thumb side, the ball's centre at (0.28, 0, 0).
@@ -27,6 +31,8 @@ from bl_ext.blender_org.mpfb.services.targetservice import TargetService
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
+OPEN = "--open" in argv            # build open.glb (the relaxed hand after release) instead of grip.glb
+argv = [a for a in argv if a != "--open"]
 PREVIEW_DIR = argv[0] if argv else None
 OUT_DIR = argv[1] if len(argv) > 1 else os.path.join(ROOT, "web", "public", "models")  # review builds: pass a scratch folder
 
@@ -173,6 +179,87 @@ def set_top(mcp, pip, a):
 
 def padsep(): return (pad("finger2-3.R", G["rf"])[0] - pad("finger3-3.R", G["rf"])[0]).length
 
+R_FT = R_BALL / 0.3048
+def bl(s): return Vector((s.x, -s.z, s.y))                # viewer (Y up) -> Blender (Z up)
+
+
+def export_hand(name, C, fa, W, n, l, ball):
+    """Step 7: cut the hand (plus a forearm stub that tucks inside the figure's own forearm), scale it
+    to our pitcher, move it into the slot frame (C -> (0.28, 0, 0) ft, fa -> +x), export <name>.glb.
+    With `ball`, skin near the ball is first drawn onto it (contact) and the checks measure it.
+    Returns (object, to_slot, FT) for the previews."""
+    STUB_M = 0.03                 # forearm kept behind the wrist joint, m (MPFB)
+    TRI_BUDGET = 6000             # whole hand: five real fingers need more than the old 3-finger blob
+    FT = SCALE / 0.3048           # MPFB m -> our pitcher's ft
+    X = fa
+    Y = -n + n.dot(X) * X; Y.normalize()                     # back of the hand
+    Z = l - l.dot(X) * X - l.dot(Y) * Y; Z.normalize()       # thumb side (right hand -> left: a mirror)
+    def to_slot(p):
+        q = p - C
+        return Vector((0.28 + FT * X.dot(q), FT * Y.dot(q), FT * Z.dot(q)))
+
+    print(f"[make_grip] {name}: wrist joint at slot x {to_slot(W).x:.3f} ft")
+    me = bpy.data.meshes.new_from_object(body.evaluated_get(bpy.context.evaluated_depsgraph_get()))  # posed, base-mesh indices
+    gbody = body.vertex_groups["body"].index                  # MPFB: skin (not proxy helpers)
+    HAND = {"wrist.R", "lowerarm02.R"} | {b.name for b in P if b.name.endswith(".R") and b.name.startswith(("finger", "metacarpal"))}
+    keep = [any(e.group == gbody for e in v.groups) and OWNER[i] in HAND and (me.vertices[i].co - W).dot(X) > -STUB_M
+            for i, v in enumerate(body.data.vertices)]
+    bm = bmesh.new(); bm.from_mesh(me); bm.verts.ensure_lookup_table()
+    bmesh.ops.delete(bm, geom=[v for v in bm.verts if not keep[v.index]], context="VERTS")
+    # Contact: skin that faces the ball and lies within `squish` outside it (or anywhere inside it) moves
+    # onto the surface, blended so the patch edge stays smooth: pads flatten on the leather like real
+    # soft tissue. Then report the contact area (faces with every corner within 1 mm of the surface).
+    bm.normal_update()
+    for v in (bm.verts if ball else []):
+        r_ = v.co - C; dist = r_.length - R
+        if dist < G["squish"] and v.normal.dot(r_) < 0:          # facing the ball (not a finger's far side)
+            w = 1.0 if dist <= 0 else (1 - dist / G["squish"]) ** 2
+            v.co = v.co - r_.normalized() * dist * w
+    CONTACT_CM2 = 0 if not ball else sum(f.calc_area() for f in bm.faces if all(abs((v.co - C).length - R) < 0.001 for v in f.verts)) * SCALE ** 2 * 1e4
+    print("CONTACT area cm2", round(CONTACT_CM2, 1))
+    for v in bm.verts: v.co = bl(to_slot(v.co))
+    if Matrix((X, Y, Z)).determinant() < 0:                   # mirrored: keep faces pointing outward
+        bmesh.ops.reverse_faces(bm, faces=bm.faces)
+    bm.to_mesh(me); bm.free()
+    for o in list(bpy.data.objects): bpy.data.objects.remove(o)
+    grip = bpy.data.objects.new(name, me); bpy.context.scene.collection.objects.link(grip)
+    mat = bpy.data.materials.new("skin"); mat.diffuse_color = (0.58, 0.27, 0.13, 1)  # figure picks colour by name
+    me.materials.clear(); me.materials.append(mat)
+    tris = sum(len(p.vertices) - 2 for p in me.polygons)
+    if tris > TRI_BUDGET:
+        dec = grip.modifiers.new("dec", "DECIMATE"); dec.ratio = TRI_BUDGET / tris * 0.98
+        bpy.context.view_layer.objects.active = grip; bpy.ops.object.modifier_apply(modifier="dec")
+    for p in me.polygons: p.use_smooth = True
+
+    # measured checks (viewer ft): triangles, extent, skin inside the ball
+    pts = [Vector((v.co.x, v.co.z, -v.co.y)) for v in me.vertices]
+    tris = sum(len(p.vertices) - 2 for p in me.polygons)
+    inside = max(R_FT - (p - Vector((0.28, 0, 0))).length for p in pts)
+    lo = [min(p[i] for p in pts) for i in range(3)]; hi = [max(p[i] for p in pts) for i in range(3)]
+    print(f"[make_grip] {name}.glb: {tris} tris, x {lo[0]:.3f}..{hi[0]:.3f} y {lo[1]:.3f}..{hi[1]:.3f} "
+          f"z {lo[2]:.3f}..{hi[2]:.3f} ft, deepest skin inside the ball {inside * 304.8:.1f} mm")
+    assert tris <= TRI_BUDGET
+
+    os.makedirs(OUT_DIR, exist_ok=True)
+    bpy.ops.object.select_all(action="DESELECT"); grip.select_set(True)
+    bpy.ops.export_scene.gltf(filepath=os.path.join(OUT_DIR, f"{name}.glb"), export_format="GLB", use_selection=True,
+                              export_yup=True, export_apply=True, export_texcoords=False, export_materials="EXPORT")
+    return grip, to_slot, FT
+
+
+if OPEN:
+    # Relaxed hand after release (Ryan: the empty grip read as a claw): every finger loosely flexed
+    # (anatomical MCP/PIP/DIP, the natural rest of a hand that has just let go), thumb at MPFB's rest.
+    for f, (m_, p_, d_) in zip("2345", ((15, 20, 10), (18, 24, 12), (22, 28, 14), (26, 32, 16))):
+        anat(f"finger{f}-1.R", m_); anat(f"finger{f}-2.R", p_); anat(f"finger{f}-3.R", d_)
+    upd()
+    W, d, l, n = frame()
+    # The wrist joint where grip.glb's lands (it prints it: the grip's wrist is turned to seat the ball, so
+    # its joint sits 0.088 ft behind the slot origin); at 0 the open hand stood ~1 in off the forearm.
+    GRIP_WRIST_X = -0.088
+    export_hand("open", W + fa * ((0.28 - GRIP_WRIST_X) * 0.3048 / SCALE), fa, W, n, l, ball=False)
+    raise SystemExit
+
 # 2. Index + middle: the photo bend, spread (bisection) to the seam spacing; the ball settles into them.
 mcp, pip = G["top"][:2]
 lo_, hi_ = -10.0, 35.0
@@ -288,65 +375,8 @@ C = W + qw @ (C - W); M = qw.to_matrix() @ M
 W, d, l, n = frame()
 print("WRIST turned to seat the ball, deg", round(math.degrees(qw.angle), 1))
 
-# 7. Cut the hand (plus a forearm stub that tucks inside the figure's own forearm), scale it to our
-#    pitcher, and move it into the grip slot's frame.
-STUB_M = 0.03                 # forearm kept behind the wrist joint, m (MPFB)
-TRI_BUDGET = 6000             # whole hand: five real fingers need more than the old 3-finger blob
-FT = SCALE / 0.3048           # MPFB m -> our pitcher's ft
-X = fa
-Y = -n + n.dot(X) * X; Y.normalize()                     # back of the hand
-Z = l - l.dot(X) * X - l.dot(Y) * Y; Z.normalize()       # thumb side (right hand -> left: a mirror)
-def to_slot(p):
-    q = p - C
-    return Vector((0.28 + FT * X.dot(q), FT * Y.dot(q), FT * Z.dot(q)))
-def bl(s): return Vector((s.x, -s.z, s.y))                # viewer (Y up) -> Blender (Z up)
-
-me = bpy.data.meshes.new_from_object(body.evaluated_get(bpy.context.evaluated_depsgraph_get()))  # posed, base-mesh indices
-gbody = body.vertex_groups["body"].index                  # MPFB: skin (not proxy helpers)
-HAND = {"wrist.R", "lowerarm02.R"} | {b.name for b in P if b.name.endswith(".R") and b.name.startswith(("finger", "metacarpal"))}
-keep = [any(e.group == gbody for e in v.groups) and OWNER[i] in HAND and (me.vertices[i].co - W).dot(X) > -STUB_M
-        for i, v in enumerate(body.data.vertices)]
-bm = bmesh.new(); bm.from_mesh(me); bm.verts.ensure_lookup_table()
-bmesh.ops.delete(bm, geom=[v for v in bm.verts if not keep[v.index]], context="VERTS")
-# Contact: skin that faces the ball and lies within `squish` outside it (or anywhere inside it) moves
-# onto the surface, blended so the patch edge stays smooth: pads flatten on the leather like real
-# soft tissue. Then report the contact area (faces with every corner within 1 mm of the surface).
-bm.normal_update()
-for v in bm.verts:
-    r_ = v.co - C; dist = r_.length - R
-    if dist < G["squish"] and v.normal.dot(r_) < 0:          # facing the ball (not a finger's far side)
-        w = 1.0 if dist <= 0 else (1 - dist / G["squish"]) ** 2
-        v.co = v.co - r_.normalized() * dist * w
-CONTACT_CM2 = sum(f.calc_area() for f in bm.faces if all(abs((v.co - C).length - R) < 0.001 for v in f.verts)) * SCALE ** 2 * 1e4
-print("CONTACT area cm2", round(CONTACT_CM2, 1))
-for v in bm.verts: v.co = bl(to_slot(v.co))
-if Matrix((X, Y, Z)).determinant() < 0:                   # mirrored: keep faces pointing outward
-    bmesh.ops.reverse_faces(bm, faces=bm.faces)
-bm.to_mesh(me); bm.free()
-for o in list(bpy.data.objects): bpy.data.objects.remove(o)
-grip = bpy.data.objects.new("grip", me); bpy.context.scene.collection.objects.link(grip)
-mat = bpy.data.materials.new("skin"); mat.diffuse_color = (0.58, 0.27, 0.13, 1)  # figure picks colour by name
-me.materials.clear(); me.materials.append(mat)
-tris = sum(len(p.vertices) - 2 for p in me.polygons)
-if tris > TRI_BUDGET:
-    dec = grip.modifiers.new("dec", "DECIMATE"); dec.ratio = TRI_BUDGET / tris * 0.98
-    bpy.context.view_layer.objects.active = grip; bpy.ops.object.modifier_apply(modifier="dec")
-for p in me.polygons: p.use_smooth = True
-
-# measured checks (viewer ft): triangles, extent, skin inside the ball
-pts = [Vector((v.co.x, v.co.z, -v.co.y)) for v in me.vertices]
-tris = sum(len(p.vertices) - 2 for p in me.polygons)
-R_FT = R_BALL / 0.3048
-inside = max(R_FT - (p - Vector((0.28, 0, 0))).length for p in pts)
-lo = [min(p[i] for p in pts) for i in range(3)]; hi = [max(p[i] for p in pts) for i in range(3)]
-print(f"[make_grip] grip.glb: {tris} tris, x {lo[0]:.3f}..{hi[0]:.3f} y {lo[1]:.3f}..{hi[1]:.3f} "
-      f"z {lo[2]:.3f}..{hi[2]:.3f} ft, deepest skin inside the ball {inside * 304.8:.1f} mm")
-assert tris <= TRI_BUDGET
-
-os.makedirs(OUT_DIR, exist_ok=True)
-bpy.ops.object.select_all(action="DESELECT"); grip.select_set(True)
-bpy.ops.export_scene.gltf(filepath=os.path.join(OUT_DIR, "grip.glb"), export_format="GLB", use_selection=True,
-                          export_yup=True, export_apply=True, export_texcoords=False, export_materials="EXPORT")
+# 7. Cut the hand, scale it, export it in the slot frame.
+grip, to_slot, FT = export_hand("grip", C, fa, W, n, l, ball=True)
 
 # ---- preview (review only): the hand in the slot frame with the ball (two-seam seams) and the
 #      figure's forearm (figure.js: taper elbow -> wrist, radius 0.13 -> 0.095 ft) ----

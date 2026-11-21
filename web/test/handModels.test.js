@@ -91,3 +91,36 @@ test("pitcher.glb is a skinned rest-pose body that stops at the wrists", { skip:
   assert.ok(Math.abs(hi[1] - 6.25) < 0.15 && Math.abs(lo[1]) < 0.05, `feet ${lo[1]} to cap ${hi[1]} ft`);
   assert.ok(hi[0] < 2.53 && lo[0] > -2.53 && hi[0] > 2.45, `arms end at the wrists: x ${lo[0]}..${hi[0]}`);
 });
+
+// The relaxed throwing hand shown after release (make_grip.py --open): skin only, within budget, in the
+// same wrist frame as grip.glb (from just behind the wrist out along +x, a hand's length).
+const OPEN = new URL("../public/models/open.glb", import.meta.url);
+
+test("open.glb is a relaxed hand in the grip slot's wrist frame", { skip: !existsSync(OPEN) }, async () => {
+  const parts = toParts((await parse(readFileSync(OPEN))).scene);
+  assert.ok(parts?.length, "no meshes");
+  let tris = 0, lo = Infinity, hi = -Infinity;
+  for (const [key, g] of parts) {
+    assert.equal(key, "skin");
+    const p = g.attributes.position.array;
+    for (let i = 0; i < p.length; i += 3) { lo = Math.min(lo, p[i]); hi = Math.max(hi, p[i]); }
+    tris += g.index.count / 3;
+  }
+  assert.ok(tris <= 6000, `${tris} triangles`);
+  assert.ok(lo < 0 && lo > -0.25, `forearm stub from x = ${lo}`);
+  assert.ok(hi > 0.5 && hi < 0.8, `fingertips at x = ${hi} ft (a hand is ~0.6-0.7 ft from the wrist)`);
+});
+
+test("showOpenHand swaps the grip for the open hand, and leaves a figure without one alone", async () => {
+  const THREE = await import("three");
+  const { showOpenHand } = await import("../src/figure.js");
+  const mats = ["jersey", "grip", "open"].map((name) => new THREE.MeshBasicMaterial({ name, visible: name !== "open" }));
+  const fig = new THREE.Group().add(new THREE.Mesh(new THREE.BufferGeometry(), mats));
+  showOpenHand(fig, true);
+  assert.deepEqual(mats.map((m) => m.visible), [true, false, true]);
+  showOpenHand(fig, false);
+  assert.deepEqual(mats.map((m) => m.visible), [true, true, false]);
+  const lone = [new THREE.MeshBasicMaterial({ name: "grip" })];
+  showOpenHand(new THREE.Group().add(new THREE.Mesh(new THREE.BufferGeometry(), lone)), true);
+  assert.equal(lone[0].visible, true, "no open hand loaded: keep the grip");
+});

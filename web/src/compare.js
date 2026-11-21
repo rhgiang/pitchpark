@@ -17,6 +17,7 @@ import { buildField } from "./field.js";
 import { tvView } from "./cameras.js";
 import { loadDelivery } from "./data.js";
 import { loadHandModels } from "./handModels.js";
+import { showOpenHand } from "./figure.js";
 import { boneLengths } from "./pitcher.js";
 import { showNoWebGL, showNoCompare } from "./notices.js";
 import { pitcherApi } from "./signed_off/index.js"; // Ohtani keeps his signed-off pose code
@@ -206,6 +207,7 @@ async function run(slug) {
     shown = state;
     const t = (frame - clip.release_pose_frame) / clip.fps; // = replicaTime at that frame's start
     api.poseAtTime(figure, delivery, t, clip.release_ft, clip.arm_angle_deg ?? 35);
+    showOpenHand(figure, t >= 0); // hand opens once the ball has left it
     renderer.render(scene, camera);
     drawOverlay(frame, t);
     const phase = phaseAt(cmp.phases, t);
