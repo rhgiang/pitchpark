@@ -13,8 +13,8 @@ const VIEW_LABEL = {
 };
 
 const fmt = (v, digits, unit = "") => (v == null ? "–" : `${v.toFixed(digits)}${unit}`);
-const words = (s) => (s ?? "").replaceAll("_", " ");
-const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+export const words = (s) => (s ?? "").replaceAll("_", " ");
+export const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /**
  * Result class of a Statcast `description` for the pitch strip: "b" ball, "s" strike, "f" foul,

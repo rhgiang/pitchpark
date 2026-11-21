@@ -295,16 +295,10 @@ body.guessing #facebar { display: none; }
 .gb button.locked:not(.on) { opacity: 0.4; cursor: default; }
 body.menu #facedock .gp, body.intro #facedock .gp { opacity: 0; pointer-events: none; }
 
-@media (max-width: 700px) {
-  #facedock { display: none; }
-  body.face #facedock { display: flex; flex-direction: column; position: fixed; left: 58px; right: 8px; bottom: 8px; z-index: 3;
-    background: var(--glass); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid var(--edge);
-    border-radius: 10px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25); transition: opacity 0.6s; }
-  body.menu #facedock, body.intro #facedock { opacity: 0; pointer-events: none; }
-  body.face #facedock > * { position: static; transform: none; width: auto; margin: 0; background: none; border: 0; border-radius: 0;
-    box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; animation: none; }
-  #facedock > * + * { border-top: 1px solid var(--edge); }
-  #facebar kbd { display: none; } /* touch: no key hints, and the bar fits in two rows so the docked panel stays below the zone */
+/* Narrow desktop: the centred bars (about 600 px) would reach the card, so the card sits above their row. */
+@media (min-width: 701px) and (max-width: 1180px) { .rv { bottom: 72px; } }
+/* Phone and narrow desktop: the card is a compact pill (tap for the full card); it is short enough to stay below the zone. */
+@media (max-width: 1180px) {
   .rv { padding: 6px 10px; cursor: pointer; }
   .rv-main .rv-break, .rv-name { display: none; }
   /* The pill: tag + "FF 97.1 mph", result, call, why, a thumbnail zone on the right, then the strip. Tap: the full card. */
@@ -323,9 +317,22 @@ body.menu #facedock .gp, body.intro #facedock .gp { opacity: 0; pointer-events: 
   .rv.open .rv-name { display: block; }
   .rv.open .rv-main .rv-break { display: block; }
   .rv.open .rv-score { display: block; }
+}
+
+@media (max-width: 700px) {
+  #facedock { display: none; }
+  body.face #facedock { display: flex; flex-direction: column; position: fixed; left: 58px; right: 8px; bottom: 8px; z-index: 3;
+    background: var(--glass); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border: 1px solid var(--edge);
+    border-radius: 10px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25); transition: opacity 0.6s; }
+  body.menu #facedock, body.intro #facedock { opacity: 0; pointer-events: none; }
+  body.face #facedock > * { position: static; transform: none; width: auto; margin: 0; background: none; border: 0; border-radius: 0;
+    box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; animation: none; }
+  #facedock > * + * { border-top: 1px solid var(--edge); }
   .gb { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 8px 10px; white-space: normal; justify-content: stretch; }
   .gb .fl { grid-column: 1 / 3; order: -1; justify-content: space-between; }
   .gb .fl > em { display: none; }
   .gb .sep, .gb kbd { display: none; }
   .gb .gbtn { padding: 13px 0; }
 }
+/* Touch: no key hints; the phone bar then fits in two rows so the docked panel stays below the zone. */
+@media (pointer: coarse) { #facebar kbd, .gb kbd { display: none; } }

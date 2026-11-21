@@ -351,7 +351,7 @@ function screenRects() {
   };
   return { zone: zone && rectOf(zone), pitcher: figure && rectOf(figure) };
 }
-window.faceControl = { next: throwNext, newAtBat, screenRects, get state() { return state; } };
+window.faceControl = { next: throwNext, newAtBat, ...(debugHas("rects") ? { screenRects } : {}), get state() { return state; } }; // ?debug=rects: screenshot checks
 
 const faceBarUpdate = buildFaceBar($("facebar"), {
   onNew: newAtBat, onNext: throwNext,

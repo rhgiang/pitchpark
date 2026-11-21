@@ -1,5 +1,6 @@
 // "Call the pitches" scoring and the reveal card's text. Pure (no DOM): ui.js draws it.
 import { isStrike } from "./engine.js";
+import { cap, words } from "../hud.js";
 
 /**
  * Score a ball/strike call against the zone call at the plate (engine.isStrike, the same rule the
@@ -32,13 +33,12 @@ export function tally(scores) {
 /** "1-2 vs RHB: 41% SL": how likely the model was to pick this type in this count. */
 export const whyText = (p) => `${p.why.count} vs ${p.why.stand}HB: ${Math.round(p.why.p * 100)}% ${p.pitch_type}`;
 
-const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
-const words = (s) => cap(s.replaceAll("_", " "));
+const sentence = (s) => cap(words(s));
 
 /** "Called strike · Strikeout looking": Statcast words, then how the at-bat ended (if it did). */
 export function resultLine(p) {
-  if (!p.events) return words(p.description);
+  if (!p.events) return sentence(p.description);
   const looking = p.description === "called_strike";
-  const ev = p.events === "strikeout" ? `Strikeout ${looking ? "looking" : "swinging"}` : words(p.events);
-  return `${words(p.description)} · ${ev}`;
+  const ev = p.events === "strikeout" ? `Strikeout ${looking ? "looking" : "swinging"}` : sentence(p.events);
+  return `${sentence(p.description)} · ${ev}`;
 }
