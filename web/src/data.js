@@ -20,7 +20,7 @@ export function loadPitcher(slug) {
   return once(`/data/${slug}.json`, async () => expandPitcher(await getJson(`/data/${slug}.json`)));
 }
 
-/** One pitcher's Face him model (face-1: scripts/m7_export.py). Rejects on a missing file (Vite's SPA fallback included) or another schema. */
+/** One pitcher's Sim model (face-1: scripts/m7_export.py). Rejects on a missing file (Vite's SPA fallback included) or another schema. */
 export function loadFace(slug) {
   return once(`/data/face/${slug}.json`, async () => {
     const f = await getJson(`/data/face/${slug}.json`);

@@ -47,7 +47,7 @@ export function cardModels(index, deliverySlugs) {
 }
 
 /**
- * Deep link into Face him: ?face=1&stand=L|R&batter=none|avg&call=0|1 -> the options it names
+ * Deep link into Sim: ?face=1&stand=L|R&batter=none|avg&call=0|1 -> the options it names
  * (the rest left to the defaults), or null when ?face=1 is absent. Unknown values are ignored.
  */
 export function faceFromUrl(search) {

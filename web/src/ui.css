@@ -191,7 +191,7 @@ body.menu .glass { opacity: 0; pointer-events: none; }
 }
 #fps { z-index: 6; } body.menu #fps { opacity: 1; }
 
-/* ---- Face him (M7): simulated at-bats. Start-screen switch and options row, the slim in-game bar,
+/* ---- Sim (M7): simulated at-bats. Start-screen switch and options row, the slim in-game bar,
    and what Replay's own panels do while it is on (body.face, set by main.js). */
 .fl { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
 .fl > em { font-style: normal; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.6; }

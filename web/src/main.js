@@ -150,7 +150,7 @@ function endIntro() {
   look.setFocus(null);
   appliedView = null; // re-apply the view's FOV and controls
   document.body.classList.remove("intro");
-  if (state.kind === "face") { dispatch({ type: "setView", view: FACE_VIEW }); armFace(); } // the sweep ends at the umpire; Face him plays from the batter's eye
+  if (state.kind === "face") { dispatch({ type: "setView", view: FACE_VIEW }); armFace(); } // the sweep ends at the umpire; Sim plays from the batter's eye
   maybeTour();
 }
 /** Advance the intro by dt s and pose the camera; ends it after INTRO_S. */
@@ -268,7 +268,7 @@ function dispatch(action) {
   const ab = currentAtBat(state);
   const pitch = currentPitch(state);
   if (ab !== shown.ab && state.kind === "replay") buildStrip(state, (i) => dispatch({ type: "goPitch", index: i }));
-  // Zone height is per pitch (Statcast sz_top / sz_bot); in Face him, before the first pitch, it is the stand's zone.
+  // Zone height is per pitch (Statcast sz_top / sz_bot); in Sim, before the first pitch, it is the stand's zone.
   if (pitch !== shown.pitch || (state.kind === "face" && ab !== shown.ab)) {
     const zp = pitch ?? { sz_top_ft: state.face.data.zone[ab.stand].top_ft, sz_bot_ft: state.face.data.zone[ab.stand].bot_ft };
     if (zone) { scene.remove(zone); zone.geometry.dispose(); zone.material.dispose(); }
@@ -291,7 +291,7 @@ function dispatch(action) {
 }
 
 /*
- * Face him (M7): simulated at-bats from face/engine.js, played in the batter's eye. The state is in
+ * Sim (M7): simulated at-bats from face/engine.js, played in the batter's eye. The state is in
  * state.js; this is the timing and the DOM. Auto-advance: a pitch landing schedules the next after
  * face.opts.paceS; a finished at-bat waits for New at-bat (N), or starts one after 4 s if nothing
  * was touched.
@@ -318,6 +318,7 @@ function armFace(ms = 1000) {
 }
 function throwNext() {
   clearFaceTimer();
+  if (menuOpen || intro) return; // nothing is thrown behind the start menu or the intro
   if (!canThrow(state)) return;
   dispatch({ type: "facePitch" });
   faceEvent("face:thrown");
@@ -330,10 +331,10 @@ function newAtBat() {
 function faceLanded() {
   if (!faceEvent("face:landed") || !faceAuto) return; // held by a listener, or frozen
   clearFaceTimer();
-  if (currentAtBat(state).event === null) faceTimer = setTimeout(throwNext, state.face.opts.paceS * 1000);
+  if (currentAtBat(state).event === null) armFace(state.face.opts.paceS * 1000);
   else {
     faceTouched = false;
-    faceTimer = setTimeout(() => { if (!faceTouched) newAtBat(); }, 4000);
+    faceTimer = setTimeout(() => { if (!faceTouched && !menuOpen && !intro) newAtBat(); }, 4000);
   }
 }
 /** Screen rectangles (px) of the strike zone and of the pitcher: the check that no panel covers them (screenshots / tests). */
@@ -483,7 +484,7 @@ window.addEventListener("keydown", (e) => {
   if (["SELECT", "BUTTON", "SUMMARY"].includes(e.target.tagName)) return;
   if (e.code === "KeyF") return void (state.kind === "face" ? leaveFaceMode() : enterFaceMode({ ...FACE_DEFAULTS, ...facePrefs() }));
   if (state.kind === "face" && faceUi.key(e)) return void e.preventDefault(); // B / S call, Q W E D H type, while a guess is open
-  if (state.kind === "face") { // Face him: Space throws the next pitch, N starts an at-bat; the Replay pickers are off
+  if (state.kind === "face") { // Sim: Space throws the next pitch, N starts an at-bat; the Replay pickers are off
     if (e.code === "Space") { e.preventDefault(); return throwNext(); }
     if (e.code === "KeyN") return newAtBat();
     if (e.code === "KeyA" || e.code === "KeyP") return;
@@ -545,7 +546,7 @@ async function start() {
   }));
   pitcherIndex = index;
   tourPending = shouldAutoTour(location.search, tourSeen());
-  const faceUrl = faceFromUrl(location.search); // ?face=1&stand=&batter=&call=: Face him
+  const faceUrl = faceFromUrl(location.search); // ?face=1&stand=&batter=&call=: Sim
   if (showMenu(location.search)) await chooseFromMenu(index, index[0].slug, faceUrl && { face: true, opts: faceUrl });
   else if (!slugInIndex(index, q.get("pitcher"))) { // a link to someone who is not in the park
     await askNotInPark();
@@ -585,7 +586,7 @@ async function start() {
   // Freeze at t (no playback) so a headless screenshot catches the ball mid-flight.
   dispatch({ type: "seek", t: q.has("t") ? Number(q.get("t")) : 0 - preroll(state) }); // no ?t=: from the start of the delivery
   maybeTour(); // no intro ran (e.g. ?view=): the tour can open now
-  armFace(); // Face him: the first pitch comes 1 s after the view is up (the intro's end arms it otherwise)
+  armFace(); // Sim: the first pitch comes 1 s after the view is up (the intro's end arms it otherwise)
   if (fpsBox) benchmark();
 }
 start();
@@ -641,8 +642,8 @@ function benchmark() {
 function boardInfo() {
   const ab = currentAtBat(state), p = currentPitch(state);
   if (!p) return null;
-  return { // Face him has no inning or outs: undefined here, so the board shows the count only
-    balls: p.balls, strikes: p.strikes, outs: ab.outs, inning: ab.inning, top: ab.top,
+  return { // Sim has no inning or outs: undefined here, so the board shows the count only (and "SIM")
+    sim: state.kind === "face", balls: p.balls, strikes: p.strikes, outs: ab.outs, inning: ab.inning, top: ab.top,
     pitcher: state.data.pitcher.name.split(",")[0], pitch: p.pitch_name ?? p.pitch_type, mph: p.speed_mph ?? null,
   };
 }
@@ -704,7 +705,7 @@ renderer.setAnimationLoop((now) => {
   if (state.data) {
     dispatch({ type: "tick", dt });
     const p = currentPitch(state);
-    if (!p) { // Face him, before the first pitch of an at-bat: no ball yet
+    if (!p) { // Sim, before the first pitch of an at-bat: no ball yet
       for (const b of [ball, ghost]) updateBall(b, null, 0);
       for (const tb of [trail, ghostTrail, noSpinLine]) updateTube(tb, null, 0);
     }

@@ -54,7 +54,7 @@ export function boardLines(info) {
   return [
     `${info.top ? "TOP" : "BOT"} ${info.inning}`,
     `${info.balls}-${info.strikes}-${info.outs}`,
-    `${(info.pitcher ?? "").toUpperCase()} · ${(info.pitch ?? "").toUpperCase()}${info.mph == null ? "" : ` · ${info.mph.toFixed(1)} MPH`}`,
+    `${(info.pitcher ?? "").toUpperCase()} · ${(info.pitch ?? "").toUpperCase()}${info.mph == null ? "" : ` · ${info.mph.toFixed(1)} MPH`}${info.sim ? " · SIM" : ""}`,
   ];
 }
 
@@ -79,6 +79,7 @@ function drawBoard(x, info) {
   const lit = info ? [info.balls, info.strikes, info.outs] : [0, 0, 0];
   const on = ["#3fbf7f", "#e5604b", "#f2c14e"];
   ["BALL", "STRIKE", "OUT"].forEach((t, i) => {
+    if (i === 2 && info && info.outs == null) return; // Sim has no outs: no lamps (they would read as a real 0)
     x.fillStyle = "#f4ead2";
     x.fillText(t, 40 + i * 330, 380);
     for (let k = 0; k < [3, 2, 2][i]; k++) { // lamps: 3 balls, 2 strikes, 2 outs (as on real boards)

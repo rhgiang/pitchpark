@@ -63,9 +63,9 @@ export function breakLabel(tn) {
 const $ = (id) => document.getElementById(id);
 
 /**
- * Face him scorebug: the count before the pitch (as in Replay), who and what, and the SIMULATED tag.
+ * Sim scorebug: the count before the pitch (as in Replay), who and what, and the SIMULATED tag.
  * No inning or outs: simulated at-bats have no game state, and showing one would be made up.
- * The pitch strip and "the look" are hidden in this mode (ui.css); the reveal card is Task 10's.
+ * The pitch strip and "the look" are hidden in this mode (ui.css); the reveal card is face/ui.js.
  */
 function renderFaceHud(state, pitch) {
   const ab = currentAtBat(state);
@@ -81,7 +81,7 @@ export function renderHud(state, pitch) {
   const face = state.kind === "face";
   for (const m of MODES) {
     const b = $(`mode-${m}`);
-    b.disabled = face || (m !== "real" && !state.modeAllowed); // Face him has no real path to compare
+    b.disabled = face || (m !== "real" && !state.modeAllowed); // Sim has no real path to compare
     b.classList.toggle("on", state.mode === m);
   }
   for (const v of VIEWS) $(`view-${v}`).classList.toggle("on", state.view === v);

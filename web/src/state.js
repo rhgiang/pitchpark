@@ -13,7 +13,7 @@ export const VIEWS = ["umpire", "batter", "side", "ride", "free", "tv"]; // keys
 export const SLOWED_SPIN_FACTOR = 1 / 20;
 export const spinFactor = (speed) => (speed >= 1 ? SLOWED_SPIN_FACTOR : 1);
 
-// Face him (M7): seconds between a pitch landing and the next one (the Pace switch).
+// Sim (M7): seconds between a pitch landing and the next one (the Pace switch).
 export const PACES = { fast: 1.2, real: 2.5, slow: 5 };
 export const FACE_VIEW = "batter";
 const FACE_STEP_S = 0.005; // playback sample step of generated paths, same grid as expandPitcher's
@@ -27,7 +27,7 @@ export function initialState() {
     wantMode: "real", // what the user picked; kept across pitches that cannot show it
     mode: "real", // what is shown: wantMode, or "real" when modeAllowed is false
     modeAllowed: false,
-    // Face him: kind "face" plays generated at-bats from face = {data, ab, rng, n, opts}; the replay
+    // Sim: kind "face" plays generated at-bats from face = {data, ab, rng, n, opts}; the replay
     // position (ab, pitch, t, view...) waits in `stash` and comes back on leaveFace.
     kind: "replay", face: null, stash: null,
   };
@@ -57,7 +57,7 @@ export function shownPaths(s) {
 /** The path the ball and its trail follow for pitch p (ghost mode adds the sim ghost separately). */
 export const ballPath = (s, p) => (p.generated || s.mode === "sim" ? p.sim : p.real);
 
-/** Face him: may the next pitch be thrown? The at-bat is live and the last pitch has landed. */
+/** Sim: may the next pitch be thrown? The at-bat is live and the last pitch has landed. */
 export const canThrow = (s) => s.kind === "face" && s.face.ab.event === null && (currentPitch(s) === null || landed(s));
 
 /** End of the current flight in s: the longest shown path (ghost: real or sim), 0 if none. */
@@ -87,7 +87,7 @@ export function reduce(s, a) {
   return seen > next.seen ? { ...next, seen } : next;
 }
 
-// Replay-only actions: ignored in Face him (there is no real path, and at-bats are generated).
+// Replay-only actions: ignored in Sim (there is no real path, and at-bats are generated).
 const REPLAY_ONLY = new Set(["setMode", "pickAtBat", "goPitch", "nextPitch", "prevPitch"]);
 
 function step(s, a) {
@@ -160,7 +160,7 @@ function step(s, a) {
   }
 }
 
-/** Face him from here: the replay position is stashed, the view goes to the batter's eye. */
+/** Sim from here: the replay position is stashed, the view goes to the batter's eye. */
 function enterFace(s, { face, seed = 0, opts = {} }) {
   if (s.kind === "face") return s;
   const o = { stand: "R", batter: "avg", call: false, startCount: "0-0", paceS: PACES.real, ...opts };
@@ -178,7 +178,7 @@ function newFaceAtBat(s) {
 }
 
 function derive(s) {
-  if (s.kind === "face") return { ...s, modeAllowed: false, mode: "real" }; // Real/Sim/Ghost are off in Face him
+  if (s.kind === "face") return { ...s, modeAllowed: false, mode: "real" }; // Real/Sim/Ghost are off in Sim
   const modeAllowed = currentPitch(s)?.status === "ok";
   return { ...s, modeAllowed, mode: modeAllowed ? s.wantMode : "real" };
 }

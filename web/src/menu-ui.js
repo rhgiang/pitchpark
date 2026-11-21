@@ -9,7 +9,7 @@ const MIX_COLOURS = { FF: "#e05a4f", SI: "#e0a24f", FC: "#c9803f", SL: "#f2c14e"
   CU: "#5b8def", KC: "#4f78c8", CH: "#4caf7a", FS: "#3d9a8a", Other: "#8b95a0" };
 const el = (tag, cls, text) => Object.assign(document.createElement(tag), { className: cls ?? "", textContent: text ?? "" });
 
-// ---- Face him controls (start row and in-game bar share these) --------------------------------------
+// ---- Sim controls (start row and in-game bar share these) --------------------------------------
 export const FACE_DEFAULTS = { stand: "R", batter: "avg", call: false, startCount: "0-0", paceS: PACES.real };
 const STAND = [["L", "L"], ["R", "R"]], BATTER = [["none", "None"], ["avg", "Average hitter"]];
 const COUNTS = ["0-0", "1-1", "0-2", "3-2"].map((c) => [c, c]);
@@ -70,7 +70,7 @@ export function buildFaceBar(host, { onNew, onNext, onPace, onCall }) {
 
 /**
  * The choices made on the start screen survive reopening it ("Change pitcher") and also feed the F key:
- * {face: Face him selected, opts: face options}. A deep link (?face=1...) seeds them via `initial`.
+ * {face: Sim selected, opts: face options}. A deep link (?face=1...) seeds them via `initial`.
  */
 const prefs = { face: false, opts: { ...FACE_DEFAULTS } };
 export const facePrefs = () => ({ ...prefs.opts });
@@ -79,7 +79,7 @@ export const facePrefs = () => ({ ...prefs.opts });
  * Fill the cards and wait for Play ball. Resolves with the chosen slug; the menu stays open (the
  * button reads "Loading…") until the caller closes it. `pick` is called with `select(slug)` first to
  * preselect. Height and pitch mix come from index.json; the delivery badges arrive lazily.
- * Resolves with {slug, face}: face is the Face him options if that mode is selected, else null (Replay).
+ * Resolves with {slug, face}: face is the Sim options if that mode is selected, else null (Replay).
  * `initial` ({face, opts}) preselects the mode and options (a deep link).
  */
 export function menuPick(index, preselect, initial) {
@@ -123,7 +123,7 @@ export function menuPick(index, preselect, initial) {
   play.disabled = false;
   updatePlay();
 
-  // Replay | Face him, and (Face him only) the options row between the cards and the play button.
+  // Replay | Sim, and (Sim only) the options row between the cards and the play button.
   const modeBtns = [...document.querySelectorAll("#mode-seg button")], row = document.getElementById("face-opts");
   const o = prefs.opts;
   const ctl = {
