@@ -30,7 +30,7 @@ test("after facePitch, shownPaths is the generated sim path, in every mode", () 
   assert.equal(shownPaths(s)[0], p.sim);
   assert.equal(ballPath(s, p), p.sim);
   assert.ok(flightEnd(s) > 0.3 && flightEnd(s) < 0.6); // a real flight time, from expanded knots
-  assert.equal(s.t < 0 || s.t === 0, true);
+  assert.equal(s.t, 0); // no delivery in the fixture: the pitch starts at release
   assert.equal(s.playing, true);
   for (const mode of ["real", "sim", "ghost"]) {
     const m = run(s, { type: "setMode", mode });
@@ -44,7 +44,9 @@ test("switching back to replay restores ab, pitch and t exactly", () => {
   const s = run(base, { type: "enterFace", face, seed: 1 }, { type: "facePitch" }, { type: "tick", dt: 0.5 },
     { type: "facePitch" });
   assert.equal(s.kind, "face");
-  assert.equal(s.face.ab.pitches.length >= 2 || s.face.ab.event !== null, true);
+  // seed 1: the first pitch is put in play, which ends the at-bat, so the second throw is ignored
+  assert.equal(s.face.ab.pitches.length, 1);
+  assert.equal(s.face.ab.event, "in_play");
   const back = run(s, { type: "leaveFace" });
   assert.equal(back.kind, "replay");
   assert.equal(back.face, null);

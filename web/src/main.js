@@ -342,6 +342,10 @@ const faceBarUpdate = buildFaceBar($("facebar"), {
   onPace: (paceS) => dispatch({ type: "faceOpts", paceS }),
   onCall: (call) => dispatch({ type: "faceOpts", call }), // stored only: the guessing UI (Task 10) reads it
 });
+// Phone: #change is hidden in Sim (it would sit under the bar), so the bar has its own way back to the menu (Replay | Sim switch).
+const menuBtn = Object.assign(document.createElement("button"), { className: "btn menu-btn", type: "button", textContent: "☰ Menu", title: "Back to the pitcher menu" });
+menuBtn.onclick = () => $("change").click();
+$("facebar").prepend(menuBtn);
 /** Body class, in-game bar and its buttons follow the state (the scene itself is set up in dispatch). */
 function syncFace() {
   const face = state.kind === "face";
@@ -456,6 +460,7 @@ window.addEventListener("keydown", (e) => {
   if (menuOpen || !state.data || e.ctrlKey || e.metaKey || e.altKey) return;
   if (intro && !intro.frozen) { e.preventDefault(); return endIntro(); } // any key skips the intro
   if (e.code === "KeyI") return startIntro();
+  if (e.target.closest?.("#facebar")) e.target.blur(); // its buttons must not swallow F / Space / N (and Space must not also click them)
   if (["SELECT", "BUTTON", "SUMMARY"].includes(e.target.tagName)) return;
   if (e.code === "KeyF") return void (state.kind === "face" ? leaveFaceMode() : enterFaceMode({ ...FACE_DEFAULTS, ...facePrefs() }));
   if (state.kind === "face") { // Face him: Space throws the next pitch, N starts an at-bat; the Replay pickers are off

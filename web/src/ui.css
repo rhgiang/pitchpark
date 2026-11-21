@@ -243,6 +243,8 @@ body.face #play, body.face #strip, body.face #look, body.face #picker { display:
   body.face-menu #play-ball kbd { display: none; }
   #facebar { left: 58px; right: 8px; transform: none; flex-wrap: wrap; justify-content: center; white-space: normal; padding: 6px 8px; gap: 6px; }
   #facebar .sep { display: none; }
-  body.face #change { display: none; }
+  body.face #change { display: none; } /* the facebar carries a Menu button instead (main.js) */
   body.face #tabs { display: none; }
 }
+#facebar .menu-btn { display: none; }
+@media (max-width: 700px) { #facebar .menu-btn { display: inline-block; } }
