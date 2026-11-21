@@ -81,6 +81,26 @@ const RIDE_SHOULDER_OUT_FT = 1; // ...and, at release, this far out to the throw
 // Ride aims at the middle of a typical zone at the front of the plate (Statcast sz_bot/sz_top are
 // ~1.6/3.4 ft), so the zone stays ahead and centred the whole way in.
 const RIDE_AIM = [0, 17 / 12, 2.5];
+/**
+ * The delivery's pelvis (joint 0, Statcast ft) at t s from release: a weighted mean of the frames
+ * within +-0.15 s, so per-frame lifting noise does not shake the windup camera. Hann weights
+ * cos^2(pi/2 * offset / 0.15 s): a frame's weight and its rate of change are 0 as it enters or
+ * leaves the window, so the mean (and the camera) glides. A plain box mean jumped ~0.03 ft each time
+ * a frame entered or left (every 1/60 s of delivery time: a visible hop every 10 frames at 1/10x).
+ */
+export function pelvisAt(d, t) {
+  const c = d.release_index + t * d.fps, r = 0.15 * d.fps;
+  const lo = Math.ceil(c - r), hi = Math.floor(c + r), n = d.joints_ft.length;
+  const m = [0, 0, 0];
+  let sum = 0;
+  for (let i = lo; i <= hi; i++) {
+    const w = Math.cos((Math.PI / 2) * (i - c) / r) ** 2;
+    d.joints_ft[Math.min(n - 1, Math.max(0, i))][0].forEach((v, k) => { m[k] += w * v; }); // ends held
+    sum += w;
+  }
+  return m.map((v) => v / sum);
+}
+
 // Windup follow camera (t < 0 when the pitcher has a delivery), all relative to his pelvis, which
 // moves ~5 ft toward the plate over the stride so the camera follows it. Framing choices: 8 ft back
 // and 5 ft out to the throwing side shows his back and arm with the plate direction readable; 2 ft
@@ -146,8 +166,11 @@ export function rideAlong(path, t_s, release, throws, windup = null) {
   }
   t_s = Math.max(t_s, 0); // the ball does not exist before release
   const h = 0.02;
-  const p0 = stateAt(path, t_s - h).p;
-  const p1 = stateAt(path, t_s + h).p;
+  // Difference window kept inside the flight: clamping its ends at release / the plate shrank it and
+  // kinked the camera's heading in the first and last 0.02 s.
+  const tc = Math.min(Math.max(t_s, h), duration(path) - h);
+  const p0 = stateAt(path, tc - h).p;
+  const p1 = stateAt(path, tc + h).p;
   // The path itself throughout (not Statcast's release_pos, which differs slightly from the fit
   // at release and would make the camera jump as playback starts).
   const ball = stateAt(path, t_s).p;

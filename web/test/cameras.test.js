@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { PerspectiveCamera } from "three";
 import {
-  batterEye, BATTER_EYE_VFOV_DEG, umpireView, sideView, rideAlong, SIDE_VFOV_DEG, RIDE_VFOV_DEG, introSweep, INTRO_S, tvView, nearFor,
+  batterEye, BATTER_EYE_VFOV_DEG, umpireView, sideView, rideAlong, SIDE_VFOV_DEG, RIDE_VFOV_DEG, introSweep, INTRO_S, tvView, nearFor, pelvisAt as deliveryPelvisAt,
 } from "../src/cameras.js";
 import {
   fenceDistFt, FENCE_HEIGHT_FT, BATTERS_EYE_GAP_FT, BATTERS_EYE_THICK_FT, BATTERS_EYE_HEIGHT_FT, BATTERS_EYE_HALF_DEG,
@@ -347,4 +347,15 @@ test("ride without a windup is the same for every t < 0 as at t = 0", () => {
 test("only the TV pose pushes the near plane out; sweep, umpire and no pose use the default", () => {
   assert.equal(nearFor(tvView()), 100);
   for (const p of [introSweep(0), introSweep(4), umpireView(), null]) assert.equal(nearFor(p), 0.05);
+});
+
+// Slow motion (1/10x: 1/600 s of delivery time per 60 fps frame): the windup camera follows pelvisAt,
+// which must glide. A box mean of the frames in +-0.15 s hopped ~0.03 ft whenever a frame entered or left.
+test("the windup camera's pelvis glides frame to frame at 1/10x (no hops as frames enter the window)", (t) => {
+  const u = new URL("../public/data/deliveries/king-michael.json", import.meta.url);
+  if (!existsSync(u)) return t.skip("web/public/data not present");
+  const d = JSON.parse(readFileSync(u)), dt = 1 / 600, P = [];
+  for (let s = -1.2; s < 0; s += dt) P.push(deliveryPelvisAt(d, s));
+  const jolt = Math.max(...P.slice(2).map((q, i) => Math.hypot(...q.map((v, k) => v - 2 * P[i + 1][k] + P[i][k]))));
+  assert.ok(jolt < 2e-3, `pelvis 2nd difference ${jolt.toExponential(1)} ft per frame`); // box mean: ~3e-2
 });

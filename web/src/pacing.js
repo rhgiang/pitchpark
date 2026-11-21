@@ -17,16 +17,23 @@ export const MAX_DPR = 1.5;
 const SLACK_MS = 2;
 
 /**
- * Frame cap. `next` is when the next frame is due (ms, requestAnimationFrame time).
- * Keeps a fixed 1/MAX_FPS schedule, so a 144 Hz display averages 60 fps (not 48, as "skip until
- * 16.7 ms have passed" would give); after a stall it resyncs rather than bursting.
- * @returns {{due: boolean, next: number}}
+ * Frame cap: returns `due(now)` (now = requestAnimationFrame time, ms), true on every n-th display
+ * refresh, n = round(refresh rate / fps) (at least 1): 60 Hz and 120 Hz -> 60 fps, 144 Hz -> 72, 165 -> 55,
+ * 240 -> 60. Why every n-th refresh, not a fixed 1/60 s schedule: a 144 Hz display cannot show frames
+ * 16.7 ms apart, so that schedule held them for 3, 2, 2, 3... refreshes (20.8 / 13.9 ms gaps). Each
+ * frame still showed the right instant, but the uneven hold reads as judder, worst in slow motion
+ * (1/4x, 1/10x) where the eye tracks the pitcher's slow, smooth movement. Even gaps fix it.
+ * The refresh interval is the median of the last 60 rAF gaps (robust to dropped frames and stalls).
  */
-export function frameSlot(now, next, fps = MAX_FPS) {
-  if (now < next - SLACK_MS) return { due: false, next };
-  const step = 1000 / fps;
-  const n = next + step;
-  return { due: true, next: n < now ? now + step : n };
+export function makeFrameCap(fps = MAX_FPS) {
+  const gaps = [];
+  let last = null, k = 0;
+  return (now) => {
+    if (last !== null) { gaps.push(now - last); if (gaps.length > 60) gaps.shift(); }
+    last = now;
+    const refreshMs = gaps.length ? [...gaps].sort((a, b) => a - b)[gaps.length >> 1] : 1000 / fps;
+    return k++ % Math.max(1, Math.round(1000 / fps / refreshMs)) === 0;
+  };
 }
 
 /** Draw this (due) frame? Yes if anything changed, else only at the idle rate. Times in ms. */
