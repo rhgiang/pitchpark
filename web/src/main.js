@@ -5,7 +5,7 @@ import { buildField, buildZone, RUBBER_FRONT_Y_FT } from "./field.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
   batterEye, umpireView, tvView, sideView, rideAlong, BATTER_EYE_VFOV_DEG, UMPIRE_VFOV_DEG, SIDE_VFOV_DEG,
-  RIDE_VFOV_DEG, FREE_VFOV_DEG, TV_VFOV_DEG, FREE_START, FREE_MIN_DIST_FT, FREE_MAX_DIST_FT, introSweep, INTRO_S, nearFor,
+  RIDE_VFOV_DEG, FREE_VFOV_DEG, TV_VFOV_DEG, FREE_START, FREE_MIN_DIST_FT, FREE_MAX_DIST_FT, introSweep, INTRO_S, nearFor, pelvisAt,
 } from "./cameras.js";
 import { loadIndex, loadPitcher, loadDelivery, loadFace } from "./data.js";
 import {
@@ -25,7 +25,7 @@ import { showMenu, displayName, faceFromUrl } from "./menu.js";
 import { loadOrAsk, openHow, startTour, toast, kbd, showCard } from "./guide-ui.js";
 import { shouldAutoTour, tourSeen } from "./guide.js";
 import { menuPick, buildFaceBar, facePrefs, FACE_DEFAULTS } from "./menu-ui.js";
-import { frameSlot, shouldDraw, pixelRatio } from "./pacing.js";
+import { makeFrameCap, shouldDraw, pixelRatio } from "./pacing.js";
 import { makeSlowDetector, makeAutoLite, getFlag, setFlag, LITE_KEY, LITE_CHOICE_KEY, slugInIndex } from "./health.js";
 import { loadIndexOrAsk, askNotInPark, watchContext, offerLite, autoLiteNote, phoneNote } from "./notices.js";
 import { debugHas } from "./debug.js";
@@ -78,18 +78,6 @@ const VFOV = {
   umpire: UMPIRE_VFOV_DEG, batter: BATTER_EYE_VFOV_DEG, side: SIDE_VFOV_DEG, free: FREE_VFOV_DEG,
   ride: RIDE_VFOV_DEG, tv: TV_VFOV_DEG,
 };
-
-/**
- * The delivery's pelvis (joint 0, Statcast ft) at t s from release: mean of the frames within
- * +-0.15 s, so per-frame lifting noise does not shake the windup camera.
- */
-function pelvisAt(d, t) {
-  const c = d.release_index + t * d.fps, r = 0.15 * d.fps;
-  const lo = Math.max(0, Math.ceil(c - r)), hi = Math.min(d.joints_ft.length - 1, Math.floor(c + r));
-  const m = [0, 0, 0];
-  for (let i = lo; i <= hi; i++) d.joints_ft[i][0].forEach((v, k) => { m[k] += v / (hi - lo + 1); });
-  return m;
-}
 
 /** The near plane for a pose (cameras.nearFor), applied for every pose, sweeps included. */
 function setNear(pose) {
@@ -683,14 +671,12 @@ function watchSpeed(now) {
 
 let last = null;
 let spinNow = null; // this pitch's spin, for the park's Spin Tower (park/tower.js)
-let nextSlot = 0; // when the next capped frame is due (ms)
+const frameDue = makeFrameCap(); // ~60 fps, on every n-th display refresh (even frame gaps)
 let lastDraw = -Infinity;
 let drawnKey = null; // t and camera of the last drawn frame
 renderer.info.autoReset = false; // count the whole frame (all passes), reset below
 renderer.setAnimationLoop((now) => {
-  const slot = frameSlot(now, nextSlot); // 60 fps cap, whatever the display's rate
-  nextSlot = slot.next;
-  if (!slot.due || contextLost) return countFrame(now, false); // lost context: nothing can be drawn
+  if (!frameDue(now) || contextLost) return countFrame(now, false); // lost context: nothing can be drawn
   watchSpeed(now);
   if (menuOpen) { // one still frame behind the blur, then nothing until Play ball
     if (menuDrawn) return countFrame(now, false);
