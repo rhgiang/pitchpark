@@ -71,7 +71,7 @@ test("a stand change mid-at-bat starts a fresh at-bat at the start count", () =>
   const same = run(s, { type: "facePitch" });
   assert.equal(run(same, { type: "faceOpts", call: true }).face.ab, same.face.ab);
   assert.equal(run(same, { type: "faceOpts", call: true }).face.opts.call, true);
-  assert.equal(run(same, { type: "faceOpts", paceS: PACES.fast }).face.opts.paceS, 1.2);
+  assert.equal(run(same, { type: "faceOpts", paceS: PACES.fast }).face.opts.paceS, 2);
 });
 
 test("Real/Sim/Ghost, pick at-bat and pitch navigation are ignored while in Face him", () => {
