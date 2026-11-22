@@ -618,7 +618,9 @@ def render(name):
     for view, d, target, dist in (("front", V(0.25, 0.1, 1), V(0, 3.2, 0), 13), ("side", V(1, 0.1, 0), V(0, 3.2, 0), 13),
                                   ("back", V(-0.25, 0.1, -1), V(0, 3.2, 0), 13), ("head", V(0.5, 0.15, 1), V(0, 5.75, 0.05), 4.2),
                                   ("three_q", V(0.7, 0.2, 1), V(0, 4.4, 0), 8),
-                                  ("collar", V(0.15, 0.25, 1), V(0, 5.05, 0.1), 3.4), ("nape", V(-0.15, 0.3, -1), V(0, 5.1, 0), 3.4)):
+                                  ("collar", V(0.15, 0.25, 1), V(0, 5.05, 0.1), 3.4), ("nape", V(-0.15, 0.3, -1), V(0, 5.1, 0), 3.4),
+                                  ("neck_side", V(0.8, 0.45, -0.6), V(0, 5.15, 0), 3.0),
+                                  ("collar_top", V(0.45, 1, -0.35), V(0, 5.15, 0), 2.6)):
         dd = bl(d).normalized()
         cam.location = bl(target) + dd * dist
         xc = Vector((0, 0, 1)).cross(dd).normalized()
@@ -659,6 +661,10 @@ COLLAR = dict(
     out=0.05,               # the collar's edge: where the surface comes within neck_r + out of the column's axis
     scan=(4.85, 5.34, 0.005),
     v=(0.1, 0.6),
+    r_max=0.5,              # a ray at the neckline's height meeting the surface further out than this ran into the gap
+    r_side=0.3,             # ... and there the collar runs over the shoulder's top at this radius instead
+    back_y=5.17,            # the back collar's lowest point (ft)
+    back_from=0.2,          # ... applied where cos(angle from the front) is below this
     under=0.05,             # the undershirt's neckline: this far above the collar edge's front (flat)           # the front V: depth (ft) below the collar edge, and half-width (radians round the neck)
     band=0.035,             # faces this close to the neckline are subdivided (finer paint edge)
     subdiv=2,
@@ -695,6 +701,10 @@ def collar(body):
         while y < k["scan"][1] and hit_r(t, y) > rc:
             y += k["scan"][2]
         hs.append(y)
+    # Behind, the column's base dips to a U between the shoulders (they rise beside the neck in the
+    # T-pose); a jersey's back collar is a nearly straight, shallow arc across the base of the neck
+    # (Ryan's reference photos), so the back half is raised to at least back_y.
+    hs = [max(h, k["back_y"]) if math.cos(t) < k["back_from"] else h for h, t in zip(hs, ts)]
     for _ in range(4):
         hs = [(hs[i - 1] + 2 * hs[i] + hs[(i + 1) % n]) / 4 for i in range(n)]
 
@@ -706,12 +716,48 @@ def collar(body):
     line = lambda t: at(hs, t) - vdip(t)
     print(f"[make_pitcher] collar edge y {hs[0]:.2f} (front) {hs[n // 4]:.2f} (side) {hs[n // 2]:.2f} (back); V to {line(0):.2f}")
 
+    # The collar's path, worked out before painting so paint and piping follow the same line. Its radius
+    # round the neck: where a ray at the neckline's height meets the surface (chest in the V, the
+    # trapezius behind), kept between rc and r_max: beside the neck that ray ran into the gap between
+    # neck and shoulder, so the piping went out of sight and the back and front lines did not meet
+    # (Ryan). Its height: the surface's top there (a ray down), so it lies on the shoulder all the way round.
+    def down_y(t, r, y0):
+        hit = body.ray_cast(bl(V(nx + r * math.sin(t), y0 + 0.15, nz + r * math.cos(t))), bl(V(0, -1, 0)), distance=0.4)
+        return vw(hit[1]).y if hit[0] else y0
+    hr = [hit_r(t, line(t)) for t in ts]
+    gap = [h > k["r_max"] and vdip(t) == 0 for h, t in zip(hr, ts)]   # the ray ran into the gap / arm
+    Rs = [k["r_side"] if g else h for g, h in zip(gap, hr)]
+    gapf = [float(g) for g in gap]
+    for _ in range(6):
+        Rs = [(Rs[i - 1] + 2 * Rs[i] + Rs[(i + 1) % n]) / 4 for i in range(n)]
+    Ys = [down_y(t, r, line(t)) if g else line(t) for t, r, g in zip(ts, Rs, gap)]
+    for _ in range(3):
+        Ys = [Ys[i] if vdip(ts[i]) > 0 else (Ys[i - 1] + 2 * Ys[i] + Ys[(i + 1) % n]) / 4 for i in range(n)]
+    print(f"[make_pitcher] collar path y {Ys[0]:.2f} (V) {Ys[n // 4]:.2f} (side) {Ys[n // 2]:.2f} (back), "
+          f"r {min(Rs):.2f}..{max(Rs):.2f}")
     near = lambda q: rad(q) < 0.5 and 4.75 < q.y < k["top"]
     bm = bmesh.new()
     bm.from_mesh(body.data)
+    # Beside the neck, the fold between neck and shoulder is filled up to the collar (its crumpled walls
+    # broke up the paint and piping there, seen from above): inside the collar's path, below it, the
+    # surface is raised to it, then smoothed.
+    for _ in range(3):
+        gapf = [(gapf[i - 1] + 2 * gapf[i] + gapf[(i + 1) % n]) / 4 for i in range(n)]
+    filled = []
+    for v in bm.verts:
+        q = vw(v.co)
+        t = ang(q)
+        w, y = min(1.0, 2 * at(gapf, t)), at(Ys, t)
+        if w > 0 and rad(q) < at(Rs, t) + 0.03 and y - 0.25 < q.y < y:
+            v.co = bl(V(q.x, q.y + (y - q.y) * w, q.z))
+            filled.append(v)
+    ring = list(set(filled) | {o for v in filled for e in v.link_edges for o in e.verts})
+    for _ in range(3):
+        bmesh.ops.smooth_vert(bm, verts=ring, factor=0.5, use_axis_x=True, use_axis_y=True, use_axis_z=True)
+    print(f"[make_pitcher] collar: {len(filled)} vertices of the neck-shoulder fold filled")
     def edge_face(f):   # near the neckline, or the undershirt's (front)
         q = vw(f.calc_center_median())
-        return near(q) and (abs(q.y - line(ang(q))) < k["band"] or q.z > nz and abs(q.y - hs[0] - k["under"]) < k["band"])
+        return near(q) and (abs(q.y - at(Ys, ang(q))) < k["band"] or q.z > nz and abs(q.y - hs[0] - k["under"]) < k["band"])
     def fine(f):  # the second pass: only the undershirt's edge in the V (the most visible; the triangle budget)
         q = vw(f.calc_center_median())
         return near(q) and abs(ang(q)) < k["v"][1] and abs(q.y - hs[0] - k["under"]) < k["band"]
@@ -726,7 +772,8 @@ def collar(body):
             t = ang(q)
             if math.cos(t) > 0 and line(t) < q.y < hs[0] + k["under"] and rad(q) < rc + 0.2:
                 f.material_index = navy     # the undershirt: fills the V, its own round neck a little above
-            elif rad(q) < rc and q.y > at(hs, t) - 0.02:
+            elif rad(q) < at(Rs, t) and (q.y > at(Ys, t) + 0.01 or at(gapf, t) > 0.2 and q.y > at(Ys, t) - 0.2):
+                # (beside the neck, anything inside the collar's path is neck, even a little below it: the fold's walls)   # the jersey reaches just above the piping: its edge hidden
                 f.material_index = skin
             else:
                 f.material_index = jersey
@@ -735,10 +782,7 @@ def collar(body):
 
     # Piping: on the surface along the neckline (a ray out from the axis at its height), lifted off it.
     lift = k["r"] * 0.7
-    rr = [min(hit_r(t, line(t)), rc + 0.25) + lift for t in ts]
-    for _ in range(3):
-        rr = [(rr[i - 1] + 2 * rr[i] + rr[(i + 1) % n]) / 4 for i in range(n)]
-    loop = [V(nx + r * math.sin(t), line(t), nz + r * math.cos(t)) for t, r in zip(ts, rr)]
+    loop = [V(nx + (r + lift) * math.sin(t), y + lift, nz + (r + lift) * math.cos(t)) for t, r, y in zip(ts, Rs, Ys)]
     tubes = [tube("pipe_collar", loop + loop[:1], k["r"], "navy", sides=6)]
     top = loop[0]   # the V's point
     pts = [top]
