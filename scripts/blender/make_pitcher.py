@@ -87,11 +87,12 @@ SLIM = dict(
     hips=(0.88, 0.86),    # the same for the seat and hips
     hips_y=(2.7, 2.95, 3.35, 3.6),
     torso_y=(3.55, 3.85, 4.85, 5.1),  # ramps in over the first two heights, out over the last two
-    neck=0.72,            # x/z scale of the neck and the trapezius slope round it
+    neck=0.72,            # x/z scale of the neck (Ryan: a longer, slimmer neck looks better)
+                          # was 0.72: x/z scale of the neck and the trapezius slope round it
     neck_y=(4.95, 5.15, 5.3, 5.45),
     neck_r=(0.3, 0.5),    # |x| from the centre: full neck slimming inside, none outside (the shoulders)
     arm_x=(0.45, 0.72),   # |x|: trunk slimming fades out here, so the arms (T-pose) keep their shape
-    trap=0.14,            # ft the ring round the neck (chest top, trapezius, upper back) is lowered: the
+    trap=0.14,            # ft the ring round the neck (chest top, trapezius, upper back) is lowered: more neck shows
                           # reference's chest rose to the chin, hiding the neck in front
     trap_y=(4.75, 4.95, 5.15, 5.25),  # heights it applies to (stops below the jaw)
     trap_x=(0.16, 0.26, 0.42, 0.62),  # distance from the neck's axis: ramps in off the neck, out by the shoulders
@@ -118,7 +119,7 @@ FOREARM = dict(x=(1.72, 1.9),       # |x|: the tube takes over between these (ju
                elbow=(0.12, 0.125),  # half-size (y up, z forward) just below the elbow, ft
                wrist=(0.075, 0.1),   # at the wrist cut: the hand models' wrist (grip/open stubs ~0.14 x 0.19)
                smooth=8)             # smoothing passes where the tube meets the elbow
-NECK = dict(r=(0.2, 0.185), y=(4.88, 5.0, 5.24, 5.32), reach=0.34)  # oval half-axes; band; |dist| from its axis
+NECK = dict(off=False, r=(0.2, 0.185), y=(4.88, 5.0, 5.24, 5.32), reach=0.34)  # oval half-axes; band; |dist| from its axis
 ARM_CUT = 2.52       # |x| of the wrist joints (skeleton.js): the hand models (grip.glb, mitt.glb) start here
 
 
@@ -375,7 +376,7 @@ def reshape(ob):
             r = r0 + (sup(t, *ab(p.y), k["power"]) - r0) * w
             p = V(cx + r * math.sin(t), p.y, cz + r * math.cos(t))
         dn = math.hypot(p.x - nx, p.z - nz)
-        w = band(p.y, *nk["y"]) * (1 - smoothstep((dn - nk["reach"] + 0.08) / 0.08))
+        w = 0.0 if NECK.get("off") else band(p.y, *nk["y"]) * (1 - smoothstep((dn - nk["reach"] + 0.08) / 0.08))
         if w > 0:
             cx, cz = nc(p.y)
             t = math.atan2(p.x - cx, p.z - cz)
@@ -616,7 +617,8 @@ def render(name):
     cam.data.lens = 50
     for view, d, target, dist in (("front", V(0.25, 0.1, 1), V(0, 3.2, 0), 13), ("side", V(1, 0.1, 0), V(0, 3.2, 0), 13),
                                   ("back", V(-0.25, 0.1, -1), V(0, 3.2, 0), 13), ("head", V(0.5, 0.15, 1), V(0, 5.75, 0.05), 4.2),
-                                  ("three_q", V(0.7, 0.2, 1), V(0, 4.4, 0), 8)):
+                                  ("three_q", V(0.7, 0.2, 1), V(0, 4.4, 0), 8),
+                                  ("collar", V(0.15, 0.25, 1), V(0, 5.05, 0.1), 3.4), ("nape", V(-0.15, 0.3, -1), V(0, 5.1, 0), 3.4)):
         dd = bl(d).normalized()
         cam.location = bl(target) + dd * dist
         xc = Vector((0, 0, 1)).cross(dd).normalized()
@@ -646,105 +648,106 @@ LEAF = {"head": V(0, 0.45, 0), "left_hand": V(0.15, 0, 0), "right_hand": V(-0.15
         "left_foot": V(0, 0, 0.15), "right_foot": V(0, 0, 0.15)}
 
 
-# Jersey piping (Ryan: the repaint lost the uniform's details). Read off the reference's textured
-# front (render: 0.0037 ft per pixel): navy piping round a crew neck and down a button placket to the
-# belt (just left of centre). The reference also has a "Y" from the neck to the placket; in toon
-# shading it read as a necklace (Ryan: "weird neckline"), so it is left out. Viewer ft, fitted body.
-PIPING = dict(
-    r=0.016,                  # tube radius
-    neck=(5.07, 5.22),        # crew-neck plane height at the front and at the back (low in front: more neck)
-    neck_reach=0.42,          # horizontal distance from the neck joint searched for the neck loop
-    placket=(-0.04, 4.82, 3.6),  # x, from y, to y
+# Collar (Ryan, with photos of Ohtani's home and road jerseys: "follow the reference photos more
+# closely"). An MLB jersey's neckline sits at the base of the neck, a little higher behind than in front,
+# with the shoulders falling away from it; in front the collar's two sides meet in a shallow V at the
+# placket's top button, the undershirt (navy here) showing inside it. Piping runs along the edge and
+# down the placket.
+COLLAR = dict(
+    centre_dz=0.04,         # the neck column's centre is this far in front of the neck joint (measured: radius 0.21 in front, 0.13 behind)
+    neck_r=0.17,            # the neck column's radius (measured at y 5.3)
+    out=0.05,               # the collar's edge: where the surface comes within neck_r + out of the column's axis
+    scan=(4.85, 5.34, 0.005),
+    v=(0.1, 0.6),
+    under=0.05,             # the undershirt's neckline: this far above the collar edge's front (flat)           # the front V: depth (ft) below the collar edge, and half-width (radians round the neck)
+    band=0.035,             # faces this close to the neckline are subdivided (finer paint edge)
+    subdiv=2,
+    r=0.016,                # piping tube radius
+    placket_x=-0.04,        # the placket's piping (just left of centre, as on the reference)
+    bins=72,
+    top=5.3,                # faces above this keep their paint (jaw, nape, hair)
 )
 
 
-def surface_line(body, pts, d):
-    """Project viewer points onto the body along direction d (a ray from 1 ft back), lifted off the
-    surface a little; points whose ray misses are dropped."""
-    out = []
-    for p in pts:
-        ok, hit, nrm, _ = body.ray_cast(bl(p - d * 1.0), bl(d), distance=3.0)
-        if ok:
-            out.append(vw(hit) + vw(nrm) * PIPING["r"])
-    return out
+def collar(body):
+    """The collar's edge is where the neck column meets the body: a cylinder round the neck (radius
+    neck_r + out) cut through the surface. Inside it is neck (skin), outside is jersey. Painting by
+    distance from the neck rather than by height is what keeps it clean: the reference's shoulders
+    (T-pose) rise above the base of the neck beside it, so any height-based neckline crossed them and
+    left ragged skin patches; by distance they are always outside, i.e. jersey. In front the collar's
+    two sides meet in a shallow V (a fixed dip below the edge, on the chest), with the undershirt (navy)
+    showing inside it, as on an MLB jersey. Piping runs round the edge and down the placket."""
+    k = COLLAR
+    nx, nz = JT["neck"][0].x, JT["neck"][0].z + k["centre_dz"]
+    rc = k["neck_r"] + k["out"]
+    rad = lambda q: math.hypot(q.x - nx, q.z - nz)
+    ang = lambda q: math.atan2(q.x - nx, q.z - nz)    # 0 = front (+z, toward the plate)
+    n = k["bins"]
+    ts = [2 * math.pi * i / n for i in range(n)]
 
+    def hit_r(t, y):
+        hit = body.ray_cast(bl(V(nx, y, nz)), bl(V(math.sin(t), 0, math.cos(t))), distance=1.0)
+        return math.hypot(vw(hit[1]).x - nx, vw(hit[1]).z - nz) if hit[0] else 9
 
-def piping(body):
-    """The jersey's navy piping as thin tubes on the surface, with a clean crew neckline.
+    hs = []   # per angle: the lowest height where the surface is within rc of the axis (the column's base)
+    for t in ts:
+        y = k["scan"][0]
+        while y < k["scan"][1] and hit_r(t, y) > rc:
+            y += k["scan"][2]
+        hs.append(y)
+    for _ in range(4):
+        hs = [(hs[i - 1] + 2 * hs[i] + hs[(i + 1) % n]) / 4 for i in range(n)]
 
-    Neckline: the neck is cut by a plane tilted low in front and higher at the back (like a real crew
-    neck); the cut is an exact closed loop round the neck (the piping goes on it) and a straight paint
-    edge: skin above the plane, jersey below, near the neck. Only faces near the neck are cut.
-    Placket: a vertical line sampled densely and projected onto the chest from
-    the front, so the tube follows the surface instead of cutting under it between points."""
-    k = PIPING
-    nx, nz = JT["neck"][0].x, JT["neck"][0].z
-    yf, yb = k["neck"]
-    rz = 0.25  # the plane's slope runs over the neck's depth
-    slope = (yf - yb) / (2 * rz)  # dy/dz: higher toward the back (-z)
-    co, no = V(nx, (yf + yb) / 2, nz), V(0, 1, -slope).normalized()
-    near = lambda q: math.hypot(q.x - nx, q.z - nz) < k["neck_reach"] and 4.85 < q.y < 5.5
+    def at(vals, t):  # linear between bins
+        u = (t / (2 * math.pi) % 1) * n
+        i = int(u) % n
+        return vals[i] + (vals[(i + 1) % n] - vals[i]) * (u - int(u))
+    vdip = lambda t: k["v"][0] * max(0.0, 1 - abs(math.remainder(t, 2 * math.pi)) / k["v"][1])
+    line = lambda t: at(hs, t) - vdip(t)
+    print(f"[make_pitcher] collar edge y {hs[0]:.2f} (front) {hs[n // 4]:.2f} (side) {hs[n // 2]:.2f} (back); V to {line(0):.2f}")
+
+    near = lambda q: rad(q) < 0.5 and 4.75 < q.y < k["top"]
     bm = bmesh.new()
     bm.from_mesh(body.data)
-    faces = [f for f in bm.faces if near(vw(f.calc_center_median()))]
-    geom = list({e for f in faces for e in f.edges}) + list({v for f in faces for v in f.verts}) + faces
-    cut = bmesh.ops.bisect_plane(bm, geom=geom, plane_co=bl(co), plane_no=bl(no))
-    edges = [e for e in cut["geom_cut"] if isinstance(e, bmesh.types.BMEdge)]
-    # The neck's contour: in each angle bin round the neck joint, the innermost point of the cut
-    # (the cut also crosses the shoulders and the edge of the cut region further out).
-    n = 48
-    ang = lambda q: math.atan2(q.x - nx, q.z - nz)
-    rad = lambda q: math.hypot(q.x - nx, q.z - nz)
-    bins = [None] * n
-    for v in {v for e in edges for v in e.verts}:
-        q = vw(v.co)
-        i = int((ang(q) / (2 * math.pi) % 1) * n) % n
-        if bins[i] is None or rad(q) < rad(bins[i]):
-            bins[i] = q
-    bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 3])
+    def edge_face(f):   # near the neckline, or the undershirt's (front)
+        q = vw(f.calc_center_median())
+        return near(q) and (abs(q.y - line(ang(q))) < k["band"] or q.z > nz and abs(q.y - hs[0] - k["under"]) < k["band"])
+    def fine(f):  # the second pass: only the undershirt's edge in the V (the most visible; the triangle budget)
+        q = vw(f.calc_center_median())
+        return near(q) and abs(ang(q)) < k["v"][1] and abs(q.y - hs[0] - k["under"]) < k["band"]
+    for i in range(k["subdiv"]):
+        edges = list({e for f in bm.faces if (fine(f) if i else edge_face(f)) for e in f.edges})
+        bmesh.ops.subdivide_edges(bm, edges=edges, cuts=1, use_grid_fill=True)
+        bmesh.ops.triangulate(bm, faces=[f for f in bm.faces if len(f.verts) > 3])
+    skin, jersey, navy = MATS.index("skin"), MATS.index("jersey"), MATS.index("navy")
+    for f in bm.faces:
+        q = vw(f.calc_center_median())
+        if near(q) and f.material_index in (skin, jersey):
+            t = ang(q)
+            if math.cos(t) > 0 and line(t) < q.y < hs[0] + k["under"] and rad(q) < rc + 0.2:
+                f.material_index = navy     # the undershirt: fills the V, its own round neck a little above
+            elif rad(q) < rc and q.y > at(hs, t) - 0.02:
+                f.material_index = skin
+            else:
+                f.material_index = jersey
     bm.to_mesh(body.data)
     bm.free()
-    # The loop follows the real neck surface: at each angle a ray goes out from the neck's axis, on the
-    # plane, to the first surface it meets (the neck). An ideal oval sank into the back of the neck,
-    # which sits further out (Ryan: "whatever is happening at the back of the neck"). Smoothed, so a
-    # stray hit does not kink it; a miss falls back to the oval.
-    plane_y = lambda z: co.y + slope * (z - nz)
-    a_, b_ = NECK["r"]
-    oval = lambda t: 1 / math.hypot(math.sin(t) / a_, math.cos(t) / b_)
-    ts = [2 * math.pi * i / n for i in range(n)]
-    rs = []
-    for t in ts:
-        d = V(math.sin(t), slope * math.cos(t), math.cos(t)).normalized()   # outward, along the plane
-        ok, hit, _, _ = body.ray_cast(bl(V(nx, co.y, nz)), bl(d), distance=0.6)
-        r = math.hypot(vw(hit).x - nx, vw(hit).z - nz) if ok else 0
-        rs.append(r if 0.12 < r < 0.4 else oval(t))
-    rs = [sorted(rs[(i + j) % n] for j in range(-2, 3))[2] for i in range(n)]
+
+    # Piping: on the surface along the neckline (a ray out from the axis at its height), lifted off it.
+    lift = k["r"] * 0.7
+    rr = [min(hit_r(t, line(t)), rc + 0.25) + lift for t in ts]
     for _ in range(3):
-        rs = [(rs[i - 1] + 2 * rs[i] + rs[(i + 1) % n]) / 4 for i in range(n)]
-    loop = [V(nx + r * math.sin(t), plane_y(nz + r * math.cos(t)), nz + r * math.cos(t)) for t, r in zip(ts, rs)]
-    print(f"[make_pitcher] neck loop r {min(rs):.2f}..{max(rs):.2f}")
-    r_at = lambda q: rs[round((ang(q) / (2 * math.pi) % 1) * n) % n]
-    skin, jersey = MATS.index("skin"), MATS.index("jersey")
-    for f in body.data.polygons:  # skin above the plane and within the neck, jersey otherwise
-        q = vw(f.center)
-        if near(q) and f.material_index in (skin, jersey):
-            above = (q - co).dot(no)
-            chin = math.cos(ang(q)) > 0.6 and above > 0.1   # the jaw overhangs the neck in front
-            # Above the plane is skin (the nape curves out past the neck's radius toward the hairline),
-            # except the shoulder slope just above it, off the neck.
-            shoulder = rad(q) >= r_at(q) + 0.03 and above < 0.06 and not chin
-            f.material_index = skin if above > 0 and not shoulder else jersey
-    # On the surface, not in it; the back half further out and up a hair, where the shoulder slope
-    # rises round the neck and hid all but a stub of the trim.
-    def lift(p):
-        back = max(0.0, -math.cos(ang(p)))
-        return p + (p - V(nx, p.y, nz)).normalized() * k["r"] * (0.8 + 1.6 * back) + V(0, 0.02 * back, 0)
-    loop = [lift(p) for p in loop]
-    tubes = [tube("pipe_neck", loop + loop[:1], k["r"], "navy", sides=6)]
-    front = V(0, 0, -1)
-    x0, _, y1 = k["placket"]
-    y0 = max(loop, key=lambda p: p.z).y  # the placket runs from the collar's front, straight down
-    tubes.append(tube("pipe_placket", surface_line(body, [V(x0, y0 + (y1 - y0) * i / 30, 0) for i in range(31)], front), k["r"], "navy", sides=6))
+        rr = [(rr[i - 1] + 2 * rr[i] + rr[(i + 1) % n]) / 4 for i in range(n)]
+    loop = [V(nx + r * math.sin(t), line(t), nz + r * math.cos(t)) for t, r in zip(ts, rr)]
+    tubes = [tube("pipe_collar", loop + loop[:1], k["r"], "navy", sides=6)]
+    top = loop[0]   # the V's point
+    pts = [top]
+    for i in range(1, 31):
+        y = top.y + (BELT[1] + 0.03 - top.y) * i / 30
+        hit = body.ray_cast(bl(V(k["placket_x"], y, nz + 2)), bl(V(0, 0, -1)), distance=3.0)
+        if hit[0]:
+            pts.append(vw(hit[1]) + vw(hit[2]) * lift)
+    tubes.append(tube("pipe_placket", pts, k["r"], "navy", sides=6))
     return tubes
 
 
@@ -821,7 +824,7 @@ def main():
     reshape(body)
     cut(body, True)
     close_wrists(body)
-    pipes = piping(body)
+    pipes = collar(body)
     cap = build_cap(body)
     rig = rig_and_bind(body, cap, pipes)
     print(f"[make_pitcher] body {tris(body)}, cap {sum(tris(o) for o in cap)} triangles")
