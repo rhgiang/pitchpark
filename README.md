@@ -1,18 +1,99 @@
-# pitch-sim — step 1: a physics engine validated against Statcast
+# Pitch Park
 
-Goal of the whole project: reproduce a specific MLB pitcher's pitches exactly —
-flight, look, variation, sequencing. Step 1 is the foundation: **a pitch-flight
-simulator, and a number that says how close it gets to real pitches.**
+**Live site: [pitchpark.vercel.app](https://pitchpark.vercel.app)**
 
-## Setup
+![Pitch Park start menu](web/public/og.png)
+
+Pitch Park recreates real MLB pitchers' pitches and lets you watch them from the batter's box, in a
+3D ballpark that runs in your browser. Every pitch comes from real Statcast tracking data, flown by
+a physics engine and pitcher models built and tested in this repo.
+
+The goal of the whole project: a simulated pitch should be statistically indistinguishable from a
+real one thrown by the same pitcher.
+
+## What you can do on the site
+
+- **Pick a pitcher.** Eight are in: Dylan Cease, Michael King, Jacob Misiorowski, Shohei Ohtani,
+  Chris Sale, Cristopher Sánchez, Cam Schlittler and Yoshinobu Yamamoto.
+- **Replay mode.** Watch his real at-bats pitch by pitch from games the models never trained on.
+  Each pitch can fly as Statcast tracked it, as our simulation, or both at once to compare.
+  There are six camera views (umpire, batter, side, ride-along, free, TV), pitch trails and a
+  "no spin" reference line.
+- **Sim mode.** Face new at-bats the models make up: the pitch type is picked the way he picks
+  them in that count, then generated, flown and aimed. Bat as a left- or right-handed hitter, and
+  try to call ball or strike before it lands.
+- **A moving pitcher.** Each pitcher's delivery is rebuilt from broadcast video, and the ball
+  leaves his hand where Statcast says it did.
+
+Press `?` on the site for all the keys.
+
+## How it works
+
+```
+Statcast pitch data (Baseball Savant)
+   │
+   ├─ M1  physics: gravity, drag, Magnus force, per-game air density (RK4)
+   ├─ M3  learned correction for movement spin alone can't explain
+   ├─ M2  per-pitcher model of release point, speed and spin (Gaussian mixtures)
+   ├─ M6  next-pitch model from the game situation (logistic regression)
+   ├─ M5  3D delivery recovered from broadcast video (pose estimation)
+   │
+   └─ export: compact JSON per pitcher
+         │
+         └─ web/: Three.js + Vite static site on Vercel (no backend)
+               └─ Sim mode runs a small JavaScript engine, kept identical to the
+                  Python models by parity tests
+```
+
+All the heavy computation runs once, offline, in Python. The site only downloads the results and
+plays them back, so it needs no server.
+
+## Results at a glance
+
+Every number is measured on games the models never saw. The full write-ups, including what is
+still wrong, are in [`results/`](results/).
+
+| Part | Check | Result |
+|---|---|---|
+| Flight (M1 + M3) | Median distance from where real pitches crossed the plate | 1.5–3.2 in, over 17 graded pitch types ([M3](results/M3.md)) |
+| Pitcher model (M2) | Can a classifier tell real from generated pitches? | 6 of 9 graded pitch types pass against a real-vs-real baseline ([M2](results/M2.md)) |
+| Look (M4) | Perceived velocity vs Statcast's `effective_speed` | Within 0.25 mph pooled ([M4](results/M4.md)) |
+| Next pitch (M6) | Log loss vs count tendencies | 6–12% better on every held-out fold ([M6](results/M6.md)) |
+| Sim at-bats (M7) | 20,000 simulated at-bats per pitcher vs real ones | 81% of 231 checks inside the real range ([M7](results/M7.md)) |
+| Site | Frame time, umpire view | ~5 ms per frame; data cut 81% to 4.4 MB gzipped ([performance](results/web-performance.md)) |
+
+## Run it locally
+
+The exported data is committed, so the site runs without any Python:
+
+```bash
+cd web
+npm install
+npm run dev      # open the printed URL
+npm test
+```
+
+To rebuild the data or rerun the experiments, set up Python 3.11+:
 
 ```bash
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e .[dev]
-pytest -q                                            # physics sanity checks
+pytest -q
 ```
 
-## Run it
+The sections below show how to reproduce each part.
+
+## Tech
+
+Python (NumPy, pandas, SciPy, scikit-learn, PyTorch for the transformer experiment), RTMPose and
+HMR 2.0 for pose, JavaScript, Three.js and Vite for the site, hosted on Vercel. An optional MCP
+server ([`scripts/mcp_server.py`](scripts/mcp_server.py)) lets AI assistants query the models.
+
+---
+
+# Reproducing the pipeline
+
+## M1: the physics engine
 
 ```bash
 # 1. Pull a season of real pitches (Baseball Savant, free)
@@ -27,8 +108,6 @@ python scripts/validate.py data/raw/669373_2025-04-01_2025-09-30.csv
 with known physics so you can run the pipeline anyway (calibration should
 recover Cd = 0.35 and roughly the spin efficiencies listed in `src/pitchsim/synthetic.py`).
 
-## M1 results
-
 Three real pitchers, regular season only. The write-up is in [`results/M1.md`](results/M1.md).
 To reproduce it:
 
@@ -41,7 +120,7 @@ python scripts/validate.py data/raw/519242_2026-03-01_2026-11-30.csv
 python scripts/validate.py data/raw/694819_2026-03-01_2026-11-30.csv
 ```
 
-## M2 results
+## M2: the pitcher model
 
 A per-pitcher generative model of how a pitch leaves the hand (release point, extension,
 velocity, spin rate, spin axis), scored by a classifier that tries to tell real held-out pitches
@@ -62,7 +141,7 @@ python scripts/train_generative.py data/raw/694819_2026-03-01_2026-11-30.csv
 
 This writes `results/m2/<pitcher>/` (summary, KS, context and physical-units CSVs, one PNG per pitch type).
 
-## M3 results
+## M3: movement spin can't explain
 
 A learned constant push added to M1's flight, for the movement spin can't explain, on five
 pitchers (the three above plus Cristopher Sánchez and Michael King, 2026). 14 of 17 graded pitch
@@ -89,11 +168,10 @@ This writes `results/m3/<pitcher>/` (summary and knock-on CSVs, one PNG per pitc
 
 ## M4: the batter's-eye viewer
 
-**Status: done, pending Ryan's live-fps check.** M4 is a Three.js viewer of a stylised, code-built
-ballpark. You pick a pitcher and one of his held-out at-bats, then watch each pitch fly in one of
-three ways: as Statcast's fit, as M1 + M3, or both at once (ghost mode). There are five views
-(umpire, batter, side, ride, free), a trail and a no-spin reference line. A skinned pitcher's hand
-sits on the real release point.
+M4 is a Three.js viewer of a stylised, code-built ballpark. You pick a pitcher and one of his
+held-out at-bats, then watch each pitch fly in one of three ways: as Statcast's fit, as M1 + M3, or
+both at once (ghost mode). There are six views (umpire, batter, side, ride, free, TV), a trail and
+a no-spin reference line. A skinned pitcher's hand sits on the real release point.
 
 Checks, all from [`results/M4.md`](results/M4.md):
 
@@ -113,23 +191,15 @@ npm test                                  # truth and framing tests
 python scripts/m4_checks.py data/raw/<pitcher>.csv [...]   # writes results/m4/checks.csv
 ```
 
-Pass all five CSVs to `export_viewer.py` in one run: it rewrites `web/public/data/index.json`
-each time. The exported JSON is gitignored.
+Pass every pitcher's CSV to `export_viewer.py` in one run: it rewrites `web/public/data/index.json`
+each time. The exported JSON is committed so the site builds on Vercel.
 
 ## M5: the moving pitcher
 
-**Status: three pitchers (Ohtani, Misiorowski, Sale: both hands).** Release x/z and arm slot are stated on
-held-out games for all three; extension is not recoverable from this camera and is constructed. The viewer
-has a 3D pitcher whose delivery is rebuilt from broadcast video and anchored to Statcast's release. Numbers,
-and what is still wrong (extension cannot be seen from a front-on camera), are in
-[`results/M5.md`](results/M5.md).
-Dylan Cease (fourth) is built and in the viewer from 13 train clips (8 games) and 3 held-out clips (2 games): 16 of 63
-usable after a second, venue-picked round of clips (40% yield against 16%). His 2D test score (0.100) is now just above the
-2D noise floor (0.083); the raw build has not yet had its smoothing post-processes re-applied.
-Michael King (fifth) is built and in the viewer from only 2 train clips and 1 held-out clip (3 of 40 usable:
-the screen passed 22 clips and 18 were the wrong view). Spot check only; his 2D score matches the 2D noise floor.
-Cristopher Sanchez (sixth, left-handed) is built and in the viewer from 9 train clips (9 games) and 2 held-out clips: 11 of 40 usable
-(28%; 21 had no pitcher in a centre-field view). His 2D test score (0.101) is ~1.7x the 2D noise floor (0.057); no smoothing applied.
+All eight pitchers in the viewer have a 3D delivery rebuilt from broadcast video and anchored to
+Statcast's release. Release x/z and arm slot are compared with Statcast on held-out clips; extension
+is not recoverable from a front-on camera and is constructed. Numbers per pitcher, and what is still
+wrong, are in [`results/M5.md`](results/M5.md).
 
 **Clips are for personal research only: never commit or redistribute them.** `data/` is gitignored,
 and the viewer's compare page plays a clip from a file picker without serving or uploading it.
@@ -167,6 +237,36 @@ On `compare.html`, choose one of your local clips with the file picker; it plays
 from the TV camera, synced on the release frame. Hand labels are committed (frame numbers only); a
 pitcher with no label files still builds, using the detector.
 
+## M6: what he throws next
+
+Predicts the next pitch type from the count, batter side, previous pitch and times through the
+order, as probabilities to sample from. Games are split into 5 folds, so no game is in both
+training and testing. Logistic regression beats the count baseline on every fold; gradient-boosted
+trees tie it, and a small transformer does slightly worse. Write-up: [`results/M6.md`](results/M6.md).
+
+```bash
+python scripts/m6_evaluate.py      # baselines, logistic, boosted; calibration
+python scripts/m6_transformer.py   # needs the seq extra: pip install -e .[seq]
+```
+
+## M7: Sim mode
+
+Sim mode chains the models: M6 picks the pitch, M2 generates it, M1 + M3 fly it and M4 shows it.
+`m7_export.py` writes the per-pitcher JSON the browser engine reads, and stops if the browser's
+quick re-aim drifts more than 0.5 in from a full re-simulation. Write-up: [`results/M7.md`](results/M7.md).
+
+```bash
+python scripts/m7_export.py --all          # writes web/public/data/face/<slug>.json
+python scripts/m7_real_stats.py --all      # real held-out at-bat stats
+node scripts/m7_check.mjs --all            # simulated at-bats vs real
+```
+
+## MCP server
+
+`scripts/mcp_server.py` exposes 11 read-only tools (arsenal, tunneling, plate error, pitcher
+comparison, next-pitch odds, sampled and "what-if" pitches) to MCP clients such as Claude Code,
+which picks it up from `.mcp.json`. Install with `pip install -e .[mcp]`.
+
 ## Files
 
 | File | What it does |
@@ -175,17 +275,22 @@ pitcher with no label files still builds, using the detector.
 | `src/pitchsim/statcast.py` | Turns Statcast's 9-parameter fit into a starting position/velocity at release (`release_state`) or y = 50 ft (`initial_state`), and gives the fit's own plate crossing. |
 | `scripts/fetch.py` | Downloads a pitcher's pitches with `pybaseball`. |
 | `scripts/validate.py` | The experiment: data check → convention check → default physics → calibrated physics → bias. |
+| `src/pitchsim/generative.py`, `scripts/train_generative.py` | M2: the per-pitcher release model and its real-vs-generated test. |
 | `src/pitchsim/seam.py`, `scripts/train_seam.py` | M3: learn the extra push per pitch type and per pitch, score it on held-out games. |
 | `scripts/seam_controls.py` | M3 controls on synthetic pitches: what the method finds when the truth is known. |
 | `scripts/seam_bound_check.py` | Record of the efficiency bound change: real results at the old 0.20 vs the new 0.01, plus the Spearman figures. |
 | `scripts/seam_split_check.py` | M3: pass counts when a different set of games is held out (split seeds 0-3). |
 | `src/pitchsim/tunneling.py`, `src/pitchsim/export.py`, `scripts/export_viewer.py` | M4: approach angles, perceived velocity, tunnel separation; held-out at-bats as JSON for the viewer. |
 | `scripts/m4_checks.py` | M4 checks: perceived velocity vs `effective_speed`, approach angles per pitch type. |
-| `web/` | M4 viewer (Three.js + Vite): cameras, HUD, pitcher figure, starter park in `web/src/park/`. |
+| `src/pitchsim/pose/` | M5: video to 3D delivery (2D pose, lift, anchoring to Statcast). |
+| `src/pitchsim/sequence/` | M6: pitch-selection models. |
+| `src/pitchsim/face.py`, `scripts/m7_export.py` | M7: the pitch bank and export for Sim mode. |
+| `src/pitchsim/mcp_tools.py`, `scripts/mcp_server.py` | The MCP server and the plain functions behind it. |
+| `web/` | The site (Three.js + Vite): cameras, HUD, pitcher figure, park in `web/src/park/`, Sim engine in `web/src/face/`. |
 | `src/pitchsim/synthetic.py` | Fake pitcher with known physics, for testing without the internet. |
 | `tests/` | Checks against known numbers: ~0.4 s flight, ~8% speed loss, realistic rise, Coors effect. |
 
-## How to read the output
+## How to read the M1 output
 
 - **[0] fit vs plate** should be near 0 inches. If not, either coordinates are being read wrong
   or Statcast reports plate_x/z at a different y. 2026 data reports them mid-plate
@@ -200,7 +305,7 @@ pitcher with no label files still builds, using the detector.
 - **bias_x_in / bias_z_in** — average signed miss. A consistent miss in one
   direction is movement spin can't explain. That's what M3 (`results/M3.md`) adds a push for.
 
-## Honest limitations (= the roadmap)
+## Honest limitations
 
 1. **The release start is anchored on Statcast's fit.** The simulator now starts at the
    release point, but the release position is `release_pos_*` and the velocity is the fit
@@ -225,3 +330,11 @@ pitcher with no label files still builds, using the detector.
 - Alan Nathan's baseball physics site and trajectory calculator (the standard model used here).
 - Baseball Savant's CSV documentation for column definitions.
 - Barton Smith / Driveline research on seam-shifted wake, for M3.
+
+## License and data
+
+The code is released under the [MIT License](LICENSE).
+
+The MLB pitch data comes from Baseball Savant (Statcast) and belongs to MLB Advanced Media; it is
+not covered by the MIT License. This is an independent, non-commercial project, not affiliated with
+or endorsed by MLB or any team. No broadcast video is included in this repository.
